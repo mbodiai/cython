@@ -7,6 +7,7 @@ from __future__ import absolute_import
 from io import open
 from collections import defaultdict
 from itertools import chain
+from typing import Dict, Tuple
 
 import jedi
 from jedi.parser.tree import Module, ImportName
@@ -14,7 +15,7 @@ from jedi.evaluate.representation import Function, Instance, Class
 from jedi.evaluate.iterable import ArrayMixin, GeneratorComprehension
 
 from Cython.Utils import open_source_file
-
+from Cython.Compiler import Code
 
 default_type_map = {
     'float': 'double',
@@ -22,9 +23,9 @@ default_type_map = {
 }
 
 
-def analyse(source_path=None, code=None):
-    """
-    Analyse a Python source code file with Jedi.
+def analyse(source_path: str, code: Code) -> dict[str, dict[str, set[str]]]:
+    """ Analyse a Python source code file with Jedi.
+
     Returns a mapping from (scope-name, (line, column)) pairs to a name-types mapping.
     """
     if not source_path and code is None:
@@ -61,20 +62,19 @@ def analyse(source_path=None, code=None):
             else:
                 try:
                     type_name = type(name_type.obj).__name__
-                except AttributeError as error:
+                except AttributeError:
                     type_name = None
             if type_name is not None:
                 names[str(statement.name)].add(type_name)
     return scoped_names
 
 
-def inject_types(source_path, types, type_map=default_type_map, mode='python'):
-    """
-    Hack type declarations into source code file.
+def inject_types(source_path, types, type_map=default_type_map, mode='python') -> list[str]:
+    """Hack type declarations into source code file.
 
     @param mode is currently 'python', which means that the generated type declarations use pure Python syntax.
     """
-    col_and_types_by_line = dict(
+    col_and_types_by_line: Dict[str, Tuple[int, str | None, Tuple[str,type]]] = dict(
         # {line: (column, scope_name or None, [(name, type)])}
         (k[-1][0], (k[-1][1], k[0], [(n, next(iter(t))) for (n, t) in v.items() if len(t) == 1]))
         for (k, v) in types.items())
@@ -89,6 +89,8 @@ def inject_types(source_path, types, type_map=default_type_map, mode='python'):
                                     for name, type_name in types)
                     if scope is None:
                         type_decl = u'{indent}cython.declare({types})\n'
+                    elif scope.startswith('async '):
+                        type_decl = u'@cython.locals{{types}}\n'
                     else:
                         type_decl = u'{indent}@cython.locals({types})\n'
                     lines.append(type_decl.format(indent=' '*col, types=types))

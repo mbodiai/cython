@@ -10,12 +10,12 @@ except ImportError:
 class MyDataclass:
     # fields can be declared using annotations
     a: cython.int = 0
-    b: double = dataclasses.field(default_factory = lambda: 10, repr=False)
+    b: cython.double = dataclasses.field(default_factory = lambda: 10, repr=False)
 
 
     c: str = 'hello'
 
 
     # typing.InitVar and typing.ClassVar also work
-    d: dataclasses.InitVar[double] = 5
+    d: dataclasses.InitVar[cython.double] = 5
     e: typing.ClassVar[list] = []

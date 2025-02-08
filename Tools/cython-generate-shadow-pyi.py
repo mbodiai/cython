@@ -1,8 +1,9 @@
+# cython-generate-shadow-pyi.py
+
 #!/usr/bin/env python3
 
 import re
 from datetime import datetime
-
 import cython
 
 GEN_START = "##### START: GENERATED LIST OF GENERATED TYPES #####\n"
@@ -14,8 +15,22 @@ map_py_type_to_name = {
     int: 'py_int',
     complex: 'py_complex',
     None: 'Any',
+    cython.Py_ssize_t: 'py_ssize_t',
+    cython.ptrdiff_t: 'py_ptrdiff_t',
+    cython.longdouble: 'py_longdouble',
+    cython.double: 'py_double',
+    cython.float: 'py_float',
+    cython.longdoublecomplex: 'py_longdoublecomplex',
+    cython.doublecomplex: 'py_doublecomplex',
+    cython.floatcomplex: 'py_floatcomplex',
+    cython.complex: 'py_complex',
+    cython.bint: 'py_bint',
+    cython.void: 'py_void',
+    cython.Py_tss_t: 'py_tss_t',
+    cython.CythonDotParallel: 'py_CythonDotParallel',
+    cython.CythonDotImportedFromElsewhere: 'py_CythonDotImportedFromElsewhere',
+    cython.CythonCImports: 'py_CythonCImports',
 }.get
-
 
 def non_generated_lines(lines, start=GEN_START, end=GEN_END):
     lines = iter(lines)
@@ -27,7 +42,6 @@ def non_generated_lines(lines, start=GEN_START, end=GEN_END):
             continue
         yield line
 
-
 def find_known_names(file_path):
     match_name = re.compile(r"(?:(?:class|type)\s+)?(\w+)\s*[=:\[](?:\w|\s)").match
 
@@ -38,10 +52,24 @@ def find_known_names(file_path):
             if match is not None
         }
 
+def ensure_markers(lines, start=GEN_START, end=GEN_END):
+    if start not in lines:
+        # Insert markers at the end if START marker is missing
+        lines.append(start)
+    if end not in lines:
+        # Ensure END marker follows the START marker
+        try:
+            start_index = lines.index(start)
+            lines.insert(start_index + 1, end)
+        except ValueError:
+            lines.append(end)
+    return lines
 
 def replace_type_list(file_path, type_lines):
     with open(file_path) as f:
         lines = f.readlines()
+
+    lines = ensure_markers(lines)
 
     try:
         start_index = lines.index(GEN_START)
@@ -65,7 +93,6 @@ def replace_type_list(file_path, type_lines):
     with open(file_path, 'w') as f:
         f.writelines(new_lines)
 
-
 def map_type(pytype):
     try:
         py_type_name = map_py_type_to_name(pytype)
@@ -88,8 +115,12 @@ def map_type(pytype):
         else:
             return f"pointer[{base_type}]"
 
-    raise ValueError(f"Unmappable type '{pytype}({type(pytype).__mro__})")
+    # Handle PointerInstance types
+    if isinstance(pytype, cython.Shadow.pointer.PointerInstance):
+        base_type = map_type(pytype._basetype)
+        return f"pointer[{base_type}]"
 
+    raise ValueError(f"Unmappable type '{pytype}' ({type(pytype).__mro__})")
 
 def map_types(namespace, ignore=()):
     for type_name, pytype in namespace.items():
@@ -112,7 +143,6 @@ def map_types(namespace, ignore=()):
 
         yield type_name, py_type_name, is_type_alias
 
-
 def generate_type_lines(types):
     # Sort 'pointers_const_type_name' by (type name, const, pointers)
     def sort_key(item):
@@ -121,18 +151,19 @@ def generate_type_lines(types):
     for type_name, py_type_code, is_type_alias in sorted(types, key=sort_key):
         yield f"{type_name}{' : TypeAlias' if is_type_alias else ''} = {py_type_code}\n"
 
-
 def main(file_path):
     namespace = vars(cython)
     declared_names = find_known_names(file_path)
 
     types = map_types(namespace, ignore=declared_names)
+    type_lines = list(generate_type_lines(types))
 
-    type_lines = generate_type_lines(types)
     replace_type_list(file_path, type_lines)
-
 
 if __name__ == "__main__":
     import sys
-    shadow_py = sys.argv[1] if len(sys.argv) > 1 else "Cython/Shadow.pyi"
+    if len(sys.argv) != 2:
+        print("Usage: cython-generate-shadow-pyi.py <file.pyx>")
+        sys.exit(1)
+    shadow_py = sys.argv[1]
     main(shadow_py)

@@ -3,7 +3,8 @@
 #
 
 
-import os
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 from .. import Utils
 
@@ -28,8 +29,7 @@ class ShouldBeFromDirective:
         raise RuntimeError(repr(self))
 
     def __repr__(self):
-        return "Illegal access of '%s' from Options module rather than directive '%s'" % (
-            self.options_name, self.directive_name)
+        return f"Illegal access of '{self.options_name}' from Options module rather than directive '{self.directive_name}'"
 
 
 """
@@ -188,7 +188,7 @@ def copy_for_internal(outer_directives):
 
 
 # Declare compiler directives
-_directive_defaults = {
+_directive_defaults: "CompilationOptions" = {
     'binding': True,  # was False before 3.0
     'boundscheck' : True,
     'nonecheck' : False,
@@ -303,8 +303,7 @@ _normalise_common_encoding_name = {
 
 
 def normalise_encoding_name(option_name, encoding):
-    """
-    >>> normalise_encoding_name('c_string_encoding', 'ascii')
+    """>>> normalise_encoding_name('c_string_encoding', 'ascii')
     'ascii'
     >>> normalise_encoding_name('c_string_encoding', 'AsCIi')
     'ascii'
@@ -319,8 +318,8 @@ def normalise_encoding_name(option_name, encoding):
     >>> normalise_encoding_name('c_string_encoding', 'default')
     'utf8'
     >>> normalise_encoding_name('c_string_encoding', 'SeriousLyNoSuch--Encoding')
-    'SeriousLyNoSuch--Encoding'
-    """
+    'SeriousLyNoSuch--Encoding'.
+    """  # noqa: D205, D402
     if not encoding:
         return ''
     encoding_name = _normalise_common_encoding_name(encoding.lower())
@@ -345,7 +344,7 @@ class DEFER_ANALYSIS_OF_ARGUMENTS:
 DEFER_ANALYSIS_OF_ARGUMENTS = DEFER_ANALYSIS_OF_ARGUMENTS()
 
 # Override types possibilities above, if needed
-directive_types = {
+directive_types: "CompileDirectives" = {
     'language_level': str,  # values can be None/2/3/'3str', where None == 2+warning
     'auto_pickle': bool,
     'locals': dict,
@@ -384,7 +383,7 @@ for key, val in _directive_defaults.items():
     if key not in directive_types:
         directive_types[key] = type(val)
 
-directive_scopes = {  # defaults to available everywhere
+directive_scopes: "DirectiveScopes" = {  # defaults to available everywhere
     # 'module', 'function', 'class', 'with statement'
     'auto_pickle': ('module', 'cclass'),
     'final' : ('cclass', 'function'),
@@ -455,8 +454,7 @@ immediate_decorator_directives = {
 
 
 def parse_directive_value(name, value, relaxed_bool=False):
-    """
-    Parses value as an option value for the given name and returns
+    """Parses value as an option value for the given name and returns
     the interpreted value. None is returned if the option does not exist.
 
     >>> print(parse_directive_value('nonexisting', 'asdf asdfd'))
@@ -481,7 +479,7 @@ def parse_directive_value(name, value, relaxed_bool=False):
     >>> parse_directive_value('c_string_type', 'unnicode')
     Traceback (most recent call last):
     ValueError: c_string_type directive must be one of ('bytes', 'bytearray', 'str', 'unicode'), got 'unnicode'
-    """
+    """  # noqa: D205, D401
     type = directive_types.get(name)
     if not type:
         return None
@@ -516,8 +514,7 @@ def parse_directive_value(name, value, relaxed_bool=False):
 
 def parse_directive_list(s, relaxed_bool=False, ignore_unknown=False,
                          current_settings=None):
-    """
-    Parses a comma-separated list of pragma options. Whitespace
+    """Parses a comma-separated list of pragma options. Whitespace
     is not considered.
 
     >>> parse_directive_list('      ')
@@ -542,7 +539,7 @@ def parse_directive_list(s, relaxed_bool=False, ignore_unknown=False,
     True
     >>> sum(warnings.values()) == len(warnings)  # all true.
     True
-    """
+    """  # noqa: D205, D401
     if current_settings is None:
         result = {}
     else:
@@ -577,8 +574,7 @@ def parse_directive_list(s, relaxed_bool=False, ignore_unknown=False,
 
 
 def parse_variable_value(value):
-    """
-    Parses value as an option value for the given name and returns
+    """Parses value as an option value for the given name and returns
     the interpreted value.
 
     >>> parse_variable_value('True')
@@ -594,7 +590,7 @@ def parse_variable_value(value):
     >>> parse_variable_value('1.23')
     1.23
 
-    """
+    """  # noqa: D205, D401
     if value == "True":
         return True
     elif value == "False":
@@ -645,143 +641,207 @@ def parse_compile_time_env(s, current_settings=None):
         result[name] = parse_variable_value(value)
     return result
 
+@dataclass
+class CompileDirectives:
+    #: Whether or not to include docstring in the Python extension. If False, the binary size
+    #: will be smaller, but the ``__doc__`` attribute of any class or function will be an
+    #: empty string.
+    docstrings = True
+
+    #: Embed the source code position in the docstrings of functions and classes.
+    embed_pos_in_docstring = False
+
+    # undocumented
+    pre_import = None
+
+    #: Decref global variables in each module on exit for garbage collection.
+    #: 0: None, 1+: interned objects, 2+: cdef globals, 3+: types objects
+    #: Mostly for reducing noise in Valgrind as it typically executes at process exit
+    #: (when all memory will be reclaimed anyways).
+    #: Note that directly or indirectly executed cleanup code that makes use of global
+    #: variables or types may no longer be safe when enabling the respective level since
+    #: there is no guaranteed order in which the (reference counted) objects will
+    #: be cleaned up.  The order can change due to live references and reference cycles.
+    generate_cleanup_code = False
+
+    #: Should tp_clear() set object fields to None instead of clearing them to NULL?
+    clear_to_none = True
+
+    #: Generate an annotated HTML version of the input source files for debugging and optimisation purposes.
+    #: This has the same effect as the ``annotate`` argument in :func:`cythonize`.
+    annotate = False
+
+    # When annotating source files in HTML, include coverage information from
+    # this file.
+    annotate_coverage_xml = None
+
+    #: This will abort the compilation on the first error occurred rather than trying
+    #: to keep going and printing further error messages.
+    fast_fail = False
+
+    #: Turn all warnings into errors.
+    warning_errors = False
+
+    #: Make unknown names an error.  Python raises a NameError when
+    #: encountering unknown names at runtime, whereas this option makes
+    #: them a compile time error.  If you want full Python compatibility,
+    #: you should disable this option and also 'cache_builtins'.
+    error_on_unknown_names = True
+
+    #: Make uninitialized local variable reference a compile time error.
+    #: Python raises UnboundLocalError at runtime, whereas this option makes
+    #: them a compile time error. Note that this option affects only variables
+    #: of "python object" type.
+    error_on_uninitialized = True
+
+    #: This will convert statements of the form ``for i in range(...)``
+    #: to ``for i from ...`` when ``i`` is a C integer type, and the direction
+    #: (i.e. sign of step) can be determined.
+    #: WARNING: This may change the semantics if the range causes assignment to
+    #: i to overflow. Specifically, if this option is set, an error will be
+    #: raised before the loop is entered, whereas without this option the loop
+    #: will execute until an overflowing value is encountered.
+    convert_range = True
+
+    #: Perform lookups on builtin names only once, at module initialisation
+    #: time.  This will prevent the module from getting imported if a
+    #: builtin name that it uses cannot be found during initialisation.
+    #: Default is True.
+    #: Note that some legacy builtins are automatically remapped
+    #: from their Python 2 names to their Python 3 names by Cython
+    #: when building in Python 3.x,
+    #: so that they do not get in the way even if this option is enabled.
+    cache_builtins = True
+
+    #: Generate branch prediction hints to speed up error handling etc.
+    gcc_branch_hints = True
+
+    #: Enable this to allow one to write ``your_module.foo = ...`` to overwrite the
+    #: definition if the cpdef function foo, at the cost of an extra dictionary
+    #: lookup on every call.
+    #: If this is false it generates only the Python wrapper and no override check.
+    lookup_module_cpdef = False
+
+    #: Whether or not to embed the Python interpreter, for use in making a
+    #: standalone executable or calling from external libraries.
+    #: This will provide a C function which initialises the interpreter and
+    #: executes the body of this module.
+    #: See `this demo <https://github.com/cython/cython/tree/master/Demos/embed>`_
+    #: for a concrete example.
+    #: If true, the initialisation function is the C main() function, but
+    #: this option can also be set to a non-empty string to provide a function name explicitly.
+    #: Default is False.
+    embed = None
+
+    # In previous iterations of Cython, globals() gave the first non-Cython module
+    # globals in the call stack.  Sage relies on this behavior for variable injection.
+    old_style_globals = ShouldBeFromDirective('old_style_globals')
+
+    #: Allows cimporting from a pyx file without a pxd file.
+    cimport_from_pyx = False
+
+    #: Maximum number of dimensions for buffers -- set lower than number of
+    #: dimensions in numpy, as
+    #: slices are passed by value and involve a lot of copying.
+    buffer_max_dims = 8
+
+    #: Number of function closure instances to keep in a freelist (0: no freelists)
+    closure_freelist_size = 8
 
 # ------------------------------------------------------------------------
 # CompilationOptions are constructed from user input and are the `option`
 #  object passed throughout the compilation pipeline.
 
-class CompilationOptions:
-    r"""
-    See default_options at the end of this module for a list of all possible
-    options and CmdLine.usage and CmdLine.parse_command_line() for their
+@dataclass
+class CompilationOptions(dict):
+    """See default_options at the end of this module for a list of all possible
+    options and CmdLine.usage and CmdLine.parse_command_line() for their 
     meaning.
-    """
-    def __init__(self, defaults=None, **kw):
-        self.include_path = []
-        if defaults:
-            if isinstance(defaults, CompilationOptions):
-                defaults = defaults.__dict__
-        else:
-            defaults = default_options
+    """  # noqa: D205
 
-        options = dict(defaults)
-        options.update(kw)
+    include_path: List[str] = None
+    show_version: int = 0
+    use_listing_file: int = 0
+    errors_to_stderr: int = 1
+    cplus: int = 0
+    output_file: Optional[str] = None
+    depfile: Optional[str] = None
+    annotate: Optional[bool] = None
+    annotate_coverage_xml: Optional[str] = None
+    generate_pxi: int = 0
+    capi_reexport_cincludes: int = 0
+    working_path: str = ""
+    timestamps: Optional[Any] = None
+    verbose: int = 0
+    quiet: int = 0
+    compiler_directives: Dict[str, Any] = None
+    embedded_metadata: Dict[str, Any] = None
+    evaluate_tree_assertions: bool = False
+    emit_linenums: bool = False
+    relative_path_in_code_position_comments: bool = True
+    c_line_in_traceback: Optional[bool] = None
+    language_level: Optional[Any] = None
+    formal_grammar: bool = False
+    gdb_debug: bool = False
+    compile_time_env: Optional[Dict[str, Any]] = None
+    module_name: Optional[str] = None
+    common_utility_include_dir: Optional[str] = None
+    output_dir: Optional[str] = None
+    build_dir: Optional[str] = None
+    cache: Optional[Any] = None
+    create_extension: Optional[Any] = None
+    np_pythran: bool = False
+    legacy_implicit_noexcept: Optional[bool] = None
 
-        # let's assume 'default_options' contains a value for most known compiler options
-        # and validate against them
-        unknown_options = set(options) - set(default_options)
-        # ignore valid options that are not in the defaults
-        unknown_options.difference_update(['include_path'])
-        if unknown_options:
-            message = "got unknown compilation option%s, please remove: %s" % (
-                's' if len(unknown_options) > 1 else '',
-                ', '.join(unknown_options))
-            raise ValueError(message)
 
+    def __post_init__(self):
+        if self.include_path is None:
+            self.include_path = []
+        if self.compiler_directives is None:
+            self.compiler_directives = {}
+        if self.embedded_metadata is None:
+            self.embedded_metadata = {}
+
+        # Validate compiler directives
         directive_defaults = get_directive_defaults()
-        directives = dict(options['compiler_directives'])  # copy mutable field
-        # check for invalid directives
-        unknown_directives = set(directives) - set(directive_defaults)
+        unknown_directives = set(self.compiler_directives) - set(directive_defaults)
         if unknown_directives:
-            message = "got unknown compiler directive%s: %s" % (
-                's' if len(unknown_directives) > 1 else '',
-                ', '.join(unknown_directives))
+            message = f"got unknown compiler directive{'s' if len(unknown_directives) > 1 else ''}: {', '.join(unknown_directives)}"
             raise ValueError(message)
-        options['compiler_directives'] = directives
-        if directives.get('np_pythran', False) and not options['cplus']:
+
+        if self.compiler_directives.get('np_pythran', False) and not self.cplus:
             import warnings
             warnings.warn("C++ mode forced when in Pythran mode!")
-            options['cplus'] = True
-        if 'language_level' not in kw and directives.get('language_level'):
-            options['language_level'] = directives['language_level']
-        elif not options.get('language_level'):
-            options['language_level'] = directive_defaults.get('language_level')
-        if 'formal_grammar' in directives and 'formal_grammar' not in kw:
-            options['formal_grammar'] = directives['formal_grammar']
+            self.cplus = True
 
-        self.__dict__.update(options)
+        if not self.language_level:
+            self.language_level = directive_defaults.get('language_level')
 
     def configure_language_defaults(self, source_extension):
-        if source_extension == 'py':
-            if self.compiler_directives.get('binding') is None:
-                self.compiler_directives['binding'] = True
+        if source_extension == 'py' and self.compiler_directives.get('binding') is None:
+            self.compiler_directives['binding'] = True
 
     def get_fingerprint(self):
-        r"""
-        Return a string that contains all the options that are relevant for cache invalidation.
-        """
-        # Collect only the data that can affect the generated file(s).
-        data = {}
+        """Return a string that contains all the options that are relevant for cache invalidation."""
+        exclude_keys = {
+            'show_version', 'errors_to_stderr', 'verbose', 'quiet',
+            'output_file', 'output_dir', 'depfile', 'timestamps',
+            'cache', 'compiler_directives', 'include_path', 'working_path',
+            'create_extension', 'build_dir'
+        }
 
+        data = {}
         for key, value in self.__dict__.items():
-            if key in ['show_version', 'errors_to_stderr', 'verbose', 'quiet']:
-                # verbosity flags have no influence on the compilation result
+            if key in exclude_keys:
                 continue
-            elif key in ['output_file', 'output_dir']:
-                # ignore the exact name of the output file
-                continue
-            elif key in ['depfile']:
-                # external build system dependency tracking file does not influence outputs
-                continue
-            elif key in ['timestamps']:
-                # the cache cares about the content of files, not about the timestamps of sources
-                continue
-            elif key in ['cache']:
-                # hopefully caching has no influence on the compilation result
-                continue
-            elif key in ['compiler_directives']:
-                # directives passed on to the C compiler do not influence the generated C code
-                continue
-            elif key in ['include_path']:
-                # this path changes which headers are tracked as dependencies,
-                # it has no influence on the generated C code
-                continue
-            elif key in ['working_path']:
-                # this path changes where modules and pxd files are found;
-                # their content is part of the fingerprint anyway, their
-                # absolute path does not matter
-                continue
-            elif key in ['create_extension']:
-                # create_extension() has already mangled the options, e.g.,
-                # embedded_metadata, when the fingerprint is computed so we
-                # ignore it here.
-                continue
-            elif key in ['build_dir']:
-                # the (temporary) directory where we collect dependencies
-                # has no influence on the C output
-                continue
-            elif key in ['use_listing_file', 'generate_pxi', 'annotate', 'annotate_coverage_xml']:
-                # all output files are contained in the cache so the types of
-                # files generated must be part of the fingerprint
-                data[key] = value
-            elif key in ['formal_grammar', 'evaluate_tree_assertions']:
-                # these bits can change whether compilation to C passes/fails
-                data[key] = value
-            elif key in ['embedded_metadata', 'emit_linenums',
-                         'c_line_in_traceback', 'gdb_debug',
-                         'relative_path_in_code_position_comments']:
-                # the generated code contains additional bits when these are set
-                data[key] = value
-            elif key in ['cplus', 'language_level', 'compile_time_env', 'np_pythran']:
-                # assorted bits that, e.g., influence the parser
-                data[key] = value
-            elif key == ['capi_reexport_cincludes']:
-                if self.capi_reexport_cincludes:
-                    # our caching implementation does not yet include fingerprints of all the header files
-                    raise NotImplementedError('capi_reexport_cincludes is not compatible with Cython caching')
-            elif key == ['common_utility_include_dir']:
-                if self.common_utility_include_dir:
-                    raise NotImplementedError('common_utility_include_dir is not compatible with Cython caching yet')
-            else:
-                # any unexpected option should go into the fingerprint; it's better
-                # to recompile than to return incorrect results from the cache.
-                data[key] = value
+            if key == 'capi_reexport_cincludes' and value:
+                raise NotImplementedError('capi_reexport_cincludes is not compatible with Cython caching')
+            if key == 'common_utility_include_dir' and value:
+                raise NotImplementedError('common_utility_include_dir is not compatible with Cython caching yet')
+            data[key] = value
 
         def to_fingerprint(item):
-            r"""
-            Recursively turn item into a string, turning dicts into lists with
-            deterministic ordering.
-            """
+            """Recursively convert item to string with deterministic dict ordering."""
             if isinstance(item, dict):
                 item = sorted([(repr(key), to_fingerprint(value)) for key, value in item.items()])
             return repr(item)
@@ -795,7 +855,8 @@ class CompilationOptions:
 #
 # ------------------------------------------------------------------------
 
-default_options = dict(
+default_options: CompilationOptions = CompilationOptions(
+    include_path=[],
     show_version=0,
     use_listing_file=0,
     errors_to_stderr=1,
@@ -816,7 +877,7 @@ default_options = dict(
     emit_linenums=False,
     relative_path_in_code_position_comments=True,
     c_line_in_traceback=None,
-    language_level=None,  # warn but default to 2
+    language_level=None,
     formal_grammar=False,
     gdb_debug=False,
     compile_time_env=None,
@@ -829,3 +890,86 @@ default_options = dict(
     np_pythran=False,
     legacy_implicit_noexcept=None,
 )
+
+
+
+
+OPTIMIZED_OPTIONS: CompilationOptions = {
+    'binding': True,  # Needed for Python attribute access optimization
+    'boundscheck': False,  # Disable bounds checking for speed
+    'nonecheck': False,  # Disable None checks for performance
+    'initializedcheck': False,  # Avoid unnecessary initialization checks
+    'embedsignature': True,  # Reduce binary size
+    'auto_cpdef': True,  # Generate C functions automatically for performance
+    'auto_pickle': None,  # Control pickle behavior explicitly
+    'cdivision': True,  # Enable C-style division for efficiency
+    'cdivision_warnings': False,  # Avoid unnecessary warnings
+    'cpow': True,  # Optimize power operations
+    'c_api_binop_methods': True,  # Use optimized C-level binary operations
+    'overflowcheck': False,  # Disable Python integer overflow checks
+    'overflowcheck.fold': True,  # Optimize folding for overflow checking
+    'always_allow_keywords': False,  # Avoid overhead of keyword argument checking
+    'allow_none_for_extension_args': False,  # Strict type safety
+    'wraparound': False,  # Disable negative indexing checks
+    'ccomplex': True,  # Use C99/C++ complex number arithmetic
+    'callspec': "",
+    'nogil': True,  # Allow execution without GIL where possible
+    'gil': False,  # Avoid unnecessary GIL acquisition
+    'with_gil': False,  # Avoid implicit GIL handling
+    'profile': False,  # Disable profiling to remove performance overhead
+    'linetrace': False,  # Disable line tracing
+    'emit_code_comments': False,  # Reduce generated C code size
+    'annotation_typing': True,  # Enable type annotations
+    'infer_types': True,  # Allow Cython to infer types for better performance
+    'infer_types.verbose': False,  # Avoid extra debugging output
+    'autotestdict': False,  # Reduce object dictionary overhead
+    'autotestdict.cdef': False,
+    'autotestdict.all': False,
+    'language_level': '3',  # Ensure Python 3 compatibility
+    'fast_getattr': True,  # Optimize attribute access
+    'py2_import': False,  # Disable Python 2 compatibility
+    'iterable_coroutine': False,  # Disable legacy coroutine behavior
+    'c_string_type': 'bytes',  # Use efficient byte-based string storage
+    'c_string_encoding': 'utf8',  # Standardize encoding for better performance
+    'type_version_tag': True,  # Enable type versioning optimizations
+    'unraisable_tracebacks': False,  # Avoid extra traceback handling
+    'old_style_globals': False,
+    'np_pythran': True,  # Enable NumPy/Pythran optimizations
+    'fast_gil': True,  # Optimize GIL handling
+    'cpp_locals': True,  # Use std::optional for local variables in C++
+    'legacy_implicit_noexcept': False,  # Avoid legacy exception handling
+
+    # Set __file__ and/or __path__ to known values at runtime
+    'set_initial_path': None,
+
+    # Optimization-specific warnings
+    'warn': None,
+    'warn.undeclared': False,
+    'warn.unreachable': False,  # Disable unreachable code warnings
+    'warn.maybe_uninitialized': False,  # Avoid unnecessary init warnings
+    'warn.unused': False,  # Disable unused variable warnings
+    'warn.unused_arg': False,  # Disable unused argument warnings
+    'warn.unused_result': False,  # Ignore unused return values
+    'warn.multiple_declarators': False,  # Allow multiple C declarations
+    'warn.deprecated.DEF': False,
+    'warn.deprecated.IF': False,
+    'show_performance_hints': True,  # Enable performance warnings
+
+    # Advanced optimization flags
+    'optimize.inline_defnode_calls': True,  # Inline small function calls
+    'optimize.unpack_method_calls': True,  # Reduce method call overhead
+    'optimize.unpack_method_calls_in_pyinit': False,  # Avoid extra size increase
+    'optimize.use_switch': True,  # Use switch statements where applicable
+
+    # Control flow optimizations
+    'remove_unreachable': True,  # Eliminate dead code
+
+    # Experimental features
+    'formal_grammar': False,  # Avoid experimental grammar parsing
+
+    # Enable parallelism optimizations
+    'freethreading_compatible': True,
+}
+
+# Apply optimized options globally
+_directive_defaults.update(OPTIMIZED_OPTIONS)

@@ -3,7 +3,7 @@ requires = ["setuptools", "wheel"]
 
 [tool.cibuildwheel]
 build-verbosity = 2
-skip = ["pp*", "cp36*", "cp37*"]
+# skip = ["pp*", "cp36*", "cp37*"]
 # test-command = "make test"
 
 [tool.cibuildwheel.linux]
@@ -22,9 +22,19 @@ environment = {CFLAGS = "-O3 -g0 -pipe -fPIC -march=armv8-a -mtune=cortex-a72", 
 
 [tool.cibuildwheel.windows]
 archs = ["AMD64", "x86"]
-
+[tool.ruff.extend-per-file-ignores]
+"**/*.py" = ["E402","UP007"]
 [tool.cibuildwheel.macos]
 # https://cibuildwheel.readthedocs.io/en/stable/faq/#what-to-provide suggests to provide
 # x86_64 and one of universal2 or arm64 wheels.  x86_64 is still required by older pips,
 # so additional arm64 wheels should suffice.
 archs = ["x86_64", "arm64"]
+
+[project]
+name ="cython"
+dynamic = ["scripts","urls","version","classifiers","authors","readme","license","requires-python","description"]
+dependencies = [
+    "jedi-fork>=0.1.1",
+]
+[tool.cyright]
+license = "Apache-2.0"
