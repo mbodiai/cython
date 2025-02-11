@@ -715,7 +715,7 @@ class TestCase(unittest.TestCase):
         for cls in [C0, C1]:
             with self.subTest(cls=cls):
                 self.assertEqual(cls(), cls())
-                for (idx, fn) in enumerate([lambda a, b: a < b, lambda a, b: a <= b, lambda a, b: a > b, lambda a, b: a >= b]):
+                for idx, fn in enumerate([lambda a, b: a < b, lambda a, b: a <= b, lambda a, b: a > b, lambda a, b: a >= b]):
                     with self.subTest(idx=idx):
                         with self.assertRaises(TypeError):
                             fn(cls(), cls())
@@ -730,7 +730,7 @@ class TestCase(unittest.TestCase):
             with self.subTest(cls=cls):
                 self.assertEqual(cls(1), cls(1))
                 self.assertNotEqual(cls(0), cls(1))
-                for (idx, fn) in enumerate([lambda a, b: a < b, lambda a, b: a <= b, lambda a, b: a > b, lambda a, b: a >= b]):
+                for idx, fn in enumerate([lambda a, b: a < b, lambda a, b: a <= b, lambda a, b: a > b, lambda a, b: a >= b]):
                     with self.subTest(idx=idx):
                         with self.assertRaises(TypeError):
                             fn(cls(0), cls(0))
@@ -751,20 +751,20 @@ class TestCase(unittest.TestCase):
                 self.assertEqual(cls(1, 2), cls(1, 2))
                 self.assertNotEqual(cls(1, 0), cls(0, 0))
                 self.assertNotEqual(cls(1, 0), cls(1, 1))
-                for (idx, fn) in enumerate([lambda a, b: a < b, lambda a, b: a <= b, lambda a, b: a > b, lambda a, b: a >= b]):
+                for idx, fn in enumerate([lambda a, b: a < b, lambda a, b: a <= b, lambda a, b: a > b, lambda a, b: a >= b]):
                     with self.subTest(idx=idx):
                         with self.assertRaises(TypeError):
                             fn(cls(0, 0), cls(0, 0))
         C = C_TestCase_test_simple_compare
-        for (idx, fn) in enumerate([lambda a, b: a == b, lambda a, b: a <= b, lambda a, b: a >= b]):
+        for idx, fn in enumerate([lambda a, b: a == b, lambda a, b: a <= b, lambda a, b: a >= b]):
             with self.subTest(idx=idx):
                 self.assertTrue(fn(C(0, 0), C(0, 0)))
-        for (idx, fn) in enumerate([lambda a, b: a < b, lambda a, b: a <= b, lambda a, b: a != b]):
+        for idx, fn in enumerate([lambda a, b: a < b, lambda a, b: a <= b, lambda a, b: a != b]):
             with self.subTest(idx=idx):
                 self.assertTrue(fn(C(0, 0), C(0, 1)))
                 self.assertTrue(fn(C(0, 1), C(1, 0)))
                 self.assertTrue(fn(C(1, 0), C(1, 1)))
-        for (idx, fn) in enumerate([lambda a, b: a > b, lambda a, b: a >= b, lambda a, b: a != b]):
+        for idx, fn in enumerate([lambda a, b: a > b, lambda a, b: a >= b, lambda a, b: a != b]):
             with self.subTest(idx=idx):
                 self.assertTrue(fn(C(0, 1), C(0, 0)))
                 self.assertTrue(fn(C(1, 0), C(0, 1)))
@@ -773,10 +773,10 @@ class TestCase(unittest.TestCase):
     def test_compare_subclasses(self):
         B = B_TestCase_test_compare_subclasses
         C = C_TestCase_test_compare_subclasses
-        for (idx, (fn, expected)) in enumerate([(lambda a, b: a == b, False), (lambda a, b: a != b, True)]):
+        for idx, (fn, expected) in enumerate([(lambda a, b: a == b, False), (lambda a, b: a != b, True)]):
             with self.subTest(idx=idx):
                 self.assertEqual(fn(B(0), C(0)), expected)
-        for (idx, fn) in enumerate([lambda a, b: a < b, lambda a, b: a <= b, lambda a, b: a > b, lambda a, b: a >= b]):
+        for idx, fn in enumerate([lambda a, b: a < b, lambda a, b: a <= b, lambda a, b: a > b, lambda a, b: a >= b]):
             with self.subTest(idx=idx):
                 with self.assertRaises(TypeError):
                     fn(B(0), C(0))
@@ -822,7 +822,7 @@ class TestCase(unittest.TestCase):
         self.assertNotEqual(Point3D(2017, 6, 3), Date(2017, 6, 3))
         self.assertNotEqual(Point3D(1, 2, 3), (1, 2, 3))
         with self.assertRaises(TypeError):
-            (x, y, z) = Point3D(4, 5, 6)
+            x, y, z = Point3D(4, 5, 6)
         Point3Dv1 = Point3Dv1_TestCase_test_not_other_dataclass
         self.assertNotEqual(Point3D(0, 0, 0), Point3Dv1())
 

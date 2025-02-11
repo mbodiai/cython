@@ -1,5 +1,5 @@
 import numpy as np
-
+import cython
 def main():
 
     to_view: cython.int[:, :, :] = np.empty((20, 15, 30), dtype=np.intc)

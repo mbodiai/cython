@@ -1,35 +1,51 @@
-import cython
 
-import collections
+from collections import defaultdict
+import contextlib
 import os
-import re, sys, time
+import re
+import sys
+import time
+from collections.abc import Iterable
 from glob import iglob
 from io import StringIO
 from os.path import relpath as _relpath
-from .Cache import Cache, FingerprintFlags
+from typing import Unpack
 
-from collections.abc import Iterable
+import cython
+
+from .Cache import Cache, FingerprintFlags
 
 try:
     import pythran
 except:
     pythran = None
 
+from typing_extensions import TYPE_CHECKING
+
 from .. import Utils
-from ..Utils import (cached_function, cached_method, path_exists,
-    safe_makedirs, copy_file_to_dir_if_newer, is_package_dir, write_depfile)
-from ..Compiler import Errors
+from ..Compiler import Errors, Options
 from ..Compiler.Main import Context
-from ..Compiler import Options
-from ..Compiler.Options import (CompilationOptions, default_options,
-    get_directive_defaults)
+from ..Compiler.Options import CompilationOptions, default_options, get_directive_defaults
+from ..Utils import (
+    cached_function,
+    cached_method,
+    copy_file_to_dir_if_newer,
+    is_package_dir,
+    path_exists,
+    safe_makedirs,
+    write_depfile,
+)
 
 join_path = cached_function(os.path.join)
 copy_once_if_newer = cached_function(copy_file_to_dir_if_newer)
 safe_makedirs_once = cached_function(safe_makedirs)
 
 
-def _make_relative(file_paths, base=None):
+if TYPE_CHECKING:
+    from distutils.extension import Extension
+    
+
+def _make_relative(file_paths: list[str], base: str) -> list[str]:
     if not base:
         base = os.getcwd()
     if base[-1] != os.path.sep:
@@ -52,11 +68,8 @@ def extended_iglob(pattern):
     # because '/' is generally common for relative paths.
     if '**/' in pattern or os.sep == '\\' and '**\\' in pattern:
         seen = set()
-        first, rest = re.split(r'\*\*[%s]' % ('/\\\\' if os.sep == '\\' else '/'), pattern, 1)
-        if first:
-            first = iglob(first + os.sep)
-        else:
-            first = ['']
+        first, rest = re.split(r'\*\*[%s]' % ('/\\\\' if os.sep == '\\' else '/'), pattern, 1)  # noqa: B034
+        first = iglob(first + os.sep) if first else ['']
         for root in first:
             for path in extended_iglob(join_path(root, rest)):
                 if path not in seen:
@@ -99,14 +112,13 @@ def update_pythran_extension(ext):
 
     # These options are not compatible with the way normal Cython extensions work
     for bad_option in ["-fwhole-program", "-fvisibility=hidden"]:
-        try:
+        with contextlib.suppress(ValueError):
             ext.extra_compile_args.remove(bad_option)
-        except ValueError:
-            pass
 
 
-def parse_list(s):
-    """
+def parse_list(s: str) -> list[str]:
+    """Parse a string into a list of strings, allowing for quoted strings and commas.
+    
     >>> parse_list("")
     []
     >>> parse_list("a")
@@ -118,7 +130,7 @@ def parse_list(s):
     >>> parse_list('a " " b')
     ['a', ' ', 'b']
     >>> parse_list('[a, ",a", "a,", ",", ]')
-    ['a', ',a', 'a,', ',']
+    ['a', ',a', 'a,', ','].
     """
     if len(s) >= 2 and s[0] == '[' and s[-1] == ']':
         s = s[1:-1]
@@ -130,8 +142,7 @@ def parse_list(s):
         literal = literal.strip()
         if literal[0] in "'\"":
             return literals[literal[1:-1]]
-        else:
-            return literal
+        return literal
     return [unquote(item) for item in s.split(delimiter) if item.strip()]
 
 
@@ -162,7 +173,7 @@ def _legacy_strtobool(val):
     # Used to be "distutils.util.strtobool", adapted for deprecation warnings.
     if val == "True":
         return True
-    elif val == "False":
+    if val == "False":
         return False
 
     import warnings
@@ -170,10 +181,10 @@ def _legacy_strtobool(val):
     val = val.lower()
     if val in ('y', 'yes', 't', 'true', 'on', '1'):
         return True
-    elif val in ('n', 'no', 'f', 'false', 'off', '0'):
+    if val in ('n', 'no', 'f', 'false', 'off', '0'):
         return False
-    else:
-        raise ValueError("invalid truth value %r" % (val,))
+
+    raise ValueError(f"invalid truth value {val!r}")
 
 
 class DistutilsInfo:
@@ -211,7 +222,7 @@ class DistutilsInfo:
                 if value:
                     self.values[key] = value
 
-    def merge(self, other):
+    def merge(self, other:'Self') -> 'Self':
         if other is None:
             return self
         for key, value in other.values.items():
@@ -280,9 +291,9 @@ _FIND_FSTRING_TOKEN = cython.declare(object, re.compile(r"""
 
 
 def strip_string_literals(code: str, prefix: str = '__Pyx_L'):
-    """
-    Normalizes every string literal to be of the form '__Pyx_Lxxx',
-    returning the normalized code and a mapping of labels to
+    """Normalize every string literal to be of the form '__Pyx_Lxxx',.
+    
+    Returns the normalized code and a mapping of labels to
     string literals.
     """
     new_code: list = []
@@ -408,7 +419,8 @@ def normalize_existing(base_path, rel_paths):
 
 @cached_function
 def normalize_existing0(base_dir, rel_paths):
-    """
+    """Normalize a list of relative paths by replacing them with absolute paths.
+    
     Given some base directory ``base_dir`` and a list of path names
     ``rel_paths``, normalize each relative path name ``rel`` by
     replacing it by ``os.path.join(base, rel)`` if that file exists.
@@ -846,8 +858,17 @@ def create_extension_list(patterns, exclude=None, ctx=None, aliases=None, quiet=
 
 
 # This is the user-exposed entry point.
-def cythonize(module_list, exclude=None, nthreads=0, aliases=None, quiet=False, force=None, language=None,
-              exclude_failures=False, show_all_warnings=False, **options):
+def cythonize(module_list: "str | list[str] | list[Extension]", *,
+              exclude: list[str] | None = None,
+              nthreads: int | None = None,
+              aliases: dict[str, str] | None = None,
+              quiet: bool = False,
+              force: bool = False,
+              language: str | None = None,
+              exclude_failures: bool = False,
+              show_all_warnings: bool = False,
+              **options: Unpack[CompilationOptions], # type: ignore
+) -> list[Exception]:
     """Compile a set of source modules into C/C++ files and return a list of distutils
     Extension objects for them.
 
@@ -945,7 +966,8 @@ def cythonize(module_list, exclude=None, nthreads=0, aliases=None, quiet=False, 
         force = os.environ.get("CYTHON_FORCE_REGEN") == "1"  # allow global overrides for build systems
 
     c_options = CompilationOptions(**options)
-    cpp_options = CompilationOptions(**options); cpp_options.cplus = True
+    cpp_options = CompilationOptions(**options)
+    cpp_options.cplus = True
     ctx = Context.from_options(c_options)
     options = c_options
     module_list, module_metadata = create_extension_list(
@@ -981,7 +1003,7 @@ def cythonize(module_list, exclude=None, nthreads=0, aliases=None, quiet=False, 
                                 os.path.dirname(_relpath(filepath, root)))
             copy_once_if_newer(filepath_abs, mod_dir)
 
-    modules_by_cfile = collections.defaultdict(list)
+    modules_by_cfile = defaultdict(list)
     to_compile = []
     for m in module_list:
         if build_dir:
@@ -1107,7 +1129,7 @@ def cythonize(module_list, exclude=None, nthreads=0, aliases=None, quiet=False, 
             if not os.path.exists(c_file):
                 failed_modules.update(modules)
             elif os.path.getsize(c_file) < 200:  # noqa: PTH202
-                f = open(c_file, 'r', encoding='iso8859-1')
+                f = open(c_file, encoding='iso8859-1')
                 try:
                     if f.read(len('#error ')) == '#error ':
                         # dead compilation result
@@ -1117,8 +1139,8 @@ def cythonize(module_list, exclude=None, nthreads=0, aliases=None, quiet=False, 
         if failed_modules:
             for module in failed_modules:
                 module_list.remove(module)
-            print("Failed compilations: %s" % ', '.join(sorted([
-                module.name for module in failed_modules])))
+            print("Failed compilations: {}".format(', '.join(sorted([
+                module.name for module in failed_modules]))))
 
     if cache:
         cache.cleanup_cache()

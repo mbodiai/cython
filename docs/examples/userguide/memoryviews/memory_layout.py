@@ -1,3 +1,4 @@
+import cython
 from cython.cimports.cython import view
 
 def main():
@@ -10,3 +11,7 @@ def main():
     # direct or indirect in the first dimension, direct in the second dimension
     # strided in both dimensions
     c: cython.int[::view.generic, :]
+
+
+if __name__ == "__main__":
+    main()

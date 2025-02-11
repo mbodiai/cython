@@ -6,8 +6,6 @@
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from .. import Utils
-
 
 class ShouldBeFromDirective:
 
@@ -343,8 +341,44 @@ class DEFER_ANALYSIS_OF_ARGUMENTS:
     pass
 DEFER_ANALYSIS_OF_ARGUMENTS = DEFER_ANALYSIS_OF_ARGUMENTS()
 
+@dataclass
+class DirectiveScopes(dict):
+    #: Compiler directives used during compilation
+    language_level: str                   # values can be None/2/3/'3str', where None == 2+warning
+    auto_pickle: bool                     # Enable auto pickling
+    locals: dict                         # Local variable declarations
+    final: bool                          # Final cdef classes and methods
+    collection_type: str                 # Collection type ("sequence" only)
+    nogil: Any                          # No GIL directives 
+    gil: Any                            # GIL acquisition directives
+    critical_section: Any                # Critical section directives
+    with_gil: Any                        # With GIL directives
+    internal: bool                       # cdef class visibility in module dict
+    infer_types: bool                    # Type inference (True/None/False)
+    binding: bool                        # Enable binding
+    cfunc: Any                          # C function decorator (no value)
+    ccall: Any                          # C call decorator (no value) 
+    ufunc: Any                          # UFuncs (no value)
+    cpow: bool                          # Enable C power operations
+    inline: Any                         # Function inlining
+    staticmethod: Any                    # Static method decorator
+    cclass: Any                         # cdef class decorator
+    no_gc_clear: bool                    # Disable GC clearing 
+    no_gc: bool                         # Disable GC completely
+    returns: type                        # Return type annotation
+    exceptval: type                      # Exception value type
+    set_initial_path: str                # Initial module path
+    freelist: int                        # Freelist size
+    c_string_type: str                   # C string type
+    c_string_encoding: str               # C string encoding
+    trashcan: bool                       # Enable trashcan support
+    total_ordering: Any                  # Total ordering support
+    dataclasses_dataclass: Any           # Dataclass decorator support
+    dataclasses_field: Any               # Dataclass field support 
+    embedsignature_format: str           # Signature format
+
 # Override types possibilities above, if needed
-directive_types: "CompileDirectives" = {
+directive_types: "DirectiveScopes" = {
     'language_level': str,  # values can be None/2/3/'3str', where None == 2+warning
     'auto_pickle': bool,
     'locals': dict,
@@ -609,9 +643,7 @@ def parse_variable_value(value):
 
 
 def parse_compile_time_env(s, current_settings=None):
-    """
-    Parses a comma-separated list of pragma options. Whitespace
-    is not considered.
+    """Parse a comma-separated list of pragma options. Whitespace is not considered.
 
     >>> parse_compile_time_env('      ')
     {}
@@ -912,10 +944,6 @@ OPTIMIZED_OPTIONS: CompilationOptions = {
     'allow_none_for_extension_args': False,  # Strict type safety
     'wraparound': False,  # Disable negative indexing checks
     'ccomplex': True,  # Use C99/C++ complex number arithmetic
-    'callspec': "",
-    'nogil': True,  # Allow execution without GIL where possible
-    'gil': False,  # Avoid unnecessary GIL acquisition
-    'with_gil': False,  # Avoid implicit GIL handling
     'profile': False,  # Disable profiling to remove performance overhead
     'linetrace': False,  # Disable line tracing
     'emit_code_comments': False,  # Reduce generated C code size

@@ -79,7 +79,7 @@ class Context(dict):
     legacy_implicit_noexcept: bool
 
     def __init__(self, include_directories: list[str], compiler_directives: dict[str, str], cpp: bool=False,
-                 language_level: int=None, options: CompilationOptions=None):
+                 language_level: int=None, options: CompilationOptions|None=None):
         # cython_scope is a hack, set to False by subclasses, in order to break
         # an infinite loop.
         # Better code organization would fix it.
@@ -105,7 +105,7 @@ class Context(dict):
         self.gdb_debug_outputwriter = None
 
     @classmethod
-    def from_options(cls, options):
+    def from_options(cls, options: CompilationOptions):
         return cls(options.include_path, options.compiler_directives,
                    options.cplus, options.language_level, options=options)
 
@@ -591,8 +591,7 @@ class CompilationSource:
 
 @dataclass
 class CompilationResult:
-    """
-    Results from the Cython compiler:
+    """Results from the Cython compiler.
 
     c_file           string or None   The generated C source file
     h_file           string or None   The generated C header file
@@ -604,6 +603,7 @@ class CompilationResult:
     num_errors       integer          Number of compilation errors
     compilation_source CompilationSource
     """
+
     c_file: str | None = None
     h_file: str | None = None
     i_file: str | None = None
@@ -624,9 +624,9 @@ class CompilationResult:
 
 @dataclass
 class CompilationResultSet(dict):
-    """
-    Results from compiling multiple Pyrex source files. A mapping
-    from source file paths to CompilationResult instances. Also
+    """Results from compiling multiple Pyrex source files.
+    
+    A mapping  from source file paths to CompilationResult instances. Also
     has the following attributes:
 
     num_errors   integer   Total number of compilation errors
@@ -640,8 +640,8 @@ class CompilationResultSet(dict):
 
 
 def get_fingerprint(cache, source, options):
-        from ..Build.Dependencies import create_dependency_tree
         from ..Build.Cache import FingerprintFlags
+        from ..Build.Dependencies import create_dependency_tree
         context = Context.from_options(options)
         dependencies = create_dependency_tree(context)
         return cache.transitive_fingerprint(
@@ -673,8 +673,10 @@ def compile_single(source, options, full_module_name, cache=None, context=None, 
 
 
 def compile_multiple(sources: list[str], options: CompilationOptions, cache=None):
-    """
-    compile_multiple(sources, options, cache)
+    """Compile multiple Pyrex implementation files and return a CompilationResultSet.
+
+    Usage:
+        compile_multiple(sources, options, cache)
 
     Compiles the given sequence of Pyrex implementation files and returns
     a CompilationResultSet. Performs timestamp checking, caching and/or recursion
@@ -709,15 +711,18 @@ def compile_multiple(sources: list[str], options: CompilationOptions, cache=None
     return results
 
 
-def compile(source: str | list[str], options: CompilationOptions | dict = None, full_module_name: str = None, **kwds):
-    """
-    compile(source [, options], [, <option> = <value>]...)
+def compile(source: str | list[str], options: CompilationOptions | dict |None = None, full_module_name: str = None, **kwds):
+    """Compile one or more Pyrex implementation files, with optional timestamp checking and recursing on dependencies.
 
-    Compile one or more Pyrex implementation files, with optional timestamp
-    checking and recursing on dependencies.  The source argument may be a string
+    Example:
+        >>> from Cython.Compiler.Main import compile
+        >>> compile(source [, options], [, <option> = <value>]...)
+
+    The source argument may be a string
     or a sequence of strings.  If it is a string and no recursion or timestamp
     checking is requested, a CompilationResult is returned, otherwise a
     CompilationResultSet is returned.
+
     """
     options = options  or default_options
     options = CompilationOptions(**options, **kwds)
@@ -782,8 +787,7 @@ def compile(source: str | list[str], options: CompilationOptions | dict = None, 
 
 @Utils.cached_function
 def search_include_directories(dirs: tuple[str, ...], qualified_name: str, suffix: str, pos, include=False, source_file_path=None):
-    """
-    Search the list of include directories for the given file name.
+    """Search the list of include directories for the given file name.
 
     If a source file path or position is given, first searches the directory
     containing that file.  Returns None if not found, but does not report an error.
@@ -868,10 +872,10 @@ def main(command_line = 0):
         try:
             options, sources = parse_command_line(args)
         except FileNotFoundError as e:
-            print("{}: No such file or directory: '{}'".format(sys.argv[0], e.filename), file=sys.stderr)
+            print(f"{sys.argv[0]}: No such file or directory: '{e.filename}'", file=sys.stderr)
             sys.exit(1)
     else:
-        options = CompilationOptions(default_options)
+        options = CompilationOptions(**default_options)
         sources = args
 
     if options.show_version:

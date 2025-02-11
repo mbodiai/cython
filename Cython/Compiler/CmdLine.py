@@ -3,8 +3,10 @@
 #
 
 
+from dataclasses import dataclass
 import os
 from argparse import ArgumentParser, Action, SUPPRESS, RawDescriptionHelpFormatter
+from typing import Dict
 from . import Options
 
 
@@ -68,7 +70,56 @@ class SetAnnotateCoverageAction(Action):
         namespace.annotate_coverage_xml = values
 
 
-def create_cython_argparser():
+@dataclass
+@dataclass
+class CmdLineOptions:
+    show_version: int = 0
+    use_listing_file: int = 0
+    include_path: list[str] | None = None
+    output_file: str | None = None
+    timestamps: int | None = None
+    verbose: int = 0
+    embed_pos_in_docstring: int = 0
+    generate_cleanup_code: int | None = None
+    cache: bool = False
+    working_path: str | None = None
+    gdb_debug: bool = False
+    output_dir: str = os.curdir
+    docstrings: bool = True
+    annotate: str | None = None
+    annotate_coverage_xml: str | None = None
+    emit_linenums: bool = False
+    cplus: int = 0
+    embed: str | None = None
+    language_level: int | str | None = None
+    error_on_unknown_names: bool = True
+    error_on_uninitialized: bool = True
+    capi_reexport_cincludes: bool = False
+    fast_fail: bool = False
+    warning_errors: bool = False
+    compiler_directives: Dict[str, object] | None = None
+    compile_time_env: Dict[str, object] | None = None
+    module_name: str | None = None
+    depfile: bool = False
+    sources: list[str] = None
+    pre_import: str | None = None
+    convert_range: bool = False
+    c_line_in_traceback: bool = True
+    cimport_from_pyx: bool = False
+    old_style_globals: bool = False
+
+    def __post_init__(self):
+        if self.include_path is None:
+            self.include_path = []
+        if self.compiler_directives is None:
+            self.compiler_directives = {}
+        if self.compile_time_env is None:
+            self.compile_time_env = {}
+        if self.sources is None:
+            self.sources = []
+
+
+def create_cython_argparser() -> ArgumentParser:
     description = "Cython (https://cython.org/) is a compiler for code written in the "\
                   "Cython language.  Cython is based on Pyrex by Greg Ewing."
 
@@ -177,7 +228,7 @@ Environment variables:
     return parser
 
 
-def parse_command_line_raw(parser, args):
+def parse_command_line_raw(parser: ArgumentParser, args) -> tuple[CmdLineOptions, list[str]]:
     # special handling for --embed and --embed=xxxx as they aren't correctly parsed
     def filter_out_embed_options(args):
         with_embed, without_embed = [], []
@@ -190,7 +241,8 @@ def parse_command_line_raw(parser, args):
 
     with_embed, args_without_embed = filter_out_embed_options(args)
 
-    arguments, unknown = parser.parse_known_args(args_without_embed)
+    parsed: tuple[CmdLineOptions, list[str]] = parser.parse_known_args(args_without_embed)
+    arguments, unknown = parsed
 
     sources = arguments.sources
     del arguments.sources
@@ -213,7 +265,7 @@ def parse_command_line_raw(parser, args):
     return arguments, sources
 
 
-def parse_command_line(args):
+def parse_command_line(args) -> tuple[Options.CompilationOptions, list[str]]:
     parser = create_cython_argparser()
     arguments, sources = parse_command_line_raw(parser, args)
 
@@ -225,7 +277,7 @@ def parse_command_line(args):
             import errno
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), source)
 
-    options = Options.CompilationOptions(Options.default_options)
+    options = Options.CompilationOptions(**Options.default_options)
     for name, value in vars(arguments).items():
         if name.startswith('debug'):
             from . import DebugFlags

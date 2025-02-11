@@ -98,8 +98,7 @@ class Cache:
     def transitive_fingerprint(
         self, filename, dependencies, compilation_options, flags=FingerprintFlags()
     ):
-        r"""
-        Return a fingerprint of a cython file that is about to be cythonized.
+        r"""Return a fingerprint of a cython file that is about to be cythonized.
 
         Fingerprints are looked up in future compilations. If the fingerprint
         is found, the cythonization can be skipped. The fingerprint must
@@ -144,9 +143,8 @@ class Cache:
         ext = os.path.splitext(cached)[1]
         if ext == gzip_ext:
             os.utime(cached, None)
-            with gzip_open(cached, "rb") as g:
-                with open(c_file, "wb") as f:
-                    shutil.copyfileobj(g, f)
+            with gzip_open(cached, "rb") as g, open(c_file, "wb") as f:
+                shutil.copyfileobj(g, f)
         elif ext == zip_ext:
             os.utime(cached, None)
             dirname = os.path.dirname(c_file)
@@ -160,9 +158,8 @@ class Cache:
         artifacts = compilation_result.get_generated_source_files()
         if len(artifacts) == 1:
             fingerprint_file = self.fingerprint_file(c_file, fingerprint, gzip_ext)
-            with open(c_file, "rb") as f:
-                with gzip_open(fingerprint_file + ".tmp", "wb") as g:
-                    shutil.copyfileobj(f, g)
+            with open(c_file, "rb") as f, gzip_open(fingerprint_file + ".tmp", "wb") as g:
+                shutil.copyfileobj(f, g)
         else:
             fingerprint_file = self.fingerprint_file(c_file, fingerprint, zip_ext)
             with zipfile.ZipFile(
@@ -192,7 +189,7 @@ class Cache:
             total_size += s.st_size
             all.append((s.st_atime, s.st_size, path))
         if total_size > self.cache_size:
-            for time, size, file in reversed(sorted(all)):
+            for time, size, file in sorted(all,reverse=True):
                 os.unlink(file)
                 total_size -= size
                 if total_size < self.cache_size * ratio:

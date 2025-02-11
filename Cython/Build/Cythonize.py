@@ -1,10 +1,15 @@
 import os
 import shutil
 import tempfile
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
-from .Dependencies import cythonize, extended_iglob
-from ..Utils import is_package_dir
+from typing_extensions import Literal
+
 from ..Compiler import Options
+from ..Compiler.Options import CompilationOptions
+from ..Utils import is_package_dir
+from .Dependencies import cythonize, extended_iglob
 
 try:
     import multiprocessing
@@ -12,7 +17,8 @@ try:
 except ImportError:
     multiprocessing = None
     parallel_compiles = 0
-
+if TYPE_CHECKING:
+    from Cython.Compiler import Options
 
 class _FakePool:
     def map_async(self, func, args):
@@ -36,11 +42,11 @@ def find_package_base(path):
         package_path = '%s/%s' % (parent, package_path)
     return base_dir, package_path
 
-def cython_compile(path_pattern, options):
+def cython_compile(path_pattern, options: "CythonizeOptions"):
     all_paths = map(os.path.abspath, extended_iglob(path_pattern))
     _cython_compile_files(all_paths, options)
 
-def _cython_compile_files(all_paths, options):
+def _cython_compile_files(all_paths, options: "CythonizeOptions"):
     pool = None
     try:
         for path in all_paths:
@@ -121,6 +127,27 @@ def run_distutils(args):
             if temp_dir and os.path.isdir(temp_dir):
                 shutil.rmtree(temp_dir)
 
+@dataclass
+class CythonizeOptions(dict):
+    directives: dict[str, str] = field(default_factory=dict)
+    compile_time_env: dict[str, str] = field(default_factory=dict)
+    options: CompilationOptions = field(default_factory=lambda: CompilationOptions())
+    language_level: int = 3
+    language: Literal["c", "c++", None] = None
+    annotate: Literal["default", "fullc", None] = None
+    excludes: list[str] = field(default_factory=list)
+    build: bool = False
+    build_inplace: bool = False
+    parallel: int = parallel_compiles
+    force: bool = False
+    quiet: bool = False
+    lenient: bool = False
+    keep_going: bool = False
+    no_docstrings: bool = False
+    sources: list[str] = field(default_factory=list)
+    depfile: bool = False
+
+
 
 def create_args_parser():
     from argparse import ArgumentParser, RawDescriptionHelpFormatter
@@ -191,7 +218,9 @@ Environment variables:
 
 
 def parse_args_raw(parser, args):
-    options, unknown = parser.parse_known_args(args)
+    opts, unk = parser.parse_known_args(args)
+    options: CythonizeOptions = CythonizeOptions(**vars(opts))
+    unknown: list[str] = unk
     sources = options.sources
     # if positional arguments were interspersed
     # some of them are in unknown
