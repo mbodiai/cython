@@ -1,15 +1,13 @@
+from dataclasses import dataclass, field
 import os
 import shutil
 import tempfile
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
-
 from typing_extensions import Literal
 
+from .Dependencies import cythonize, extended_iglob
+from ..Utils import is_package_dir
 from ..Compiler import Options
 from ..Compiler.Options import CompilationOptions
-from ..Utils import is_package_dir
-from .Dependencies import cythonize, extended_iglob
 
 try:
     import multiprocessing
@@ -17,8 +15,7 @@ try:
 except ImportError:
     multiprocessing = None
     parallel_compiles = 0
-if TYPE_CHECKING:
-    from Cython.Compiler import Options
+
 
 class _FakePool:
     def map_async(self, func, args):

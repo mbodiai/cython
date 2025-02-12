@@ -3,14 +3,11 @@
 #
 
 
-from dataclasses import dataclass
-import inspect
 import os
-from pathlib import Path
 import re
 import sys
-from typing_extensions import Any
-from pydoc import locate, pathdirs
+import io
+
 if sys.version_info[:2] < (3, 8):
     sys.stderr.write("Sorry, Cython requires Python 3.8+, found %d.%d\n" % tuple(sys.version_info[:2]))
     sys.exit(1)
@@ -20,7 +17,6 @@ if sys.version_info[:2] < (3, 8):
 # conditional metaclass. These options are processed by CmdLine called from
 # main() in this file.
 # import Parsing
-
 from . import Errors
 from .StringEncoding import EncodedString
 from .Scanning import PyrexScanner, FileSourceDescriptor
@@ -34,7 +30,7 @@ from .Lexicon import (unicode_start_ch_any, unicode_continuation_ch_any,
                       unicode_start_ch_range, unicode_continuation_ch_range)
 
 
-def _make_range_re(chrs: str) -> str:
+def _make_range_re(chrs):
     out = []
     for i in range(0, len(chrs), 2):
         out.append("{}-{}".format(chrs[i], chrs[i+1]))
@@ -52,8 +48,7 @@ standard_include_path = os.path.abspath(
     os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Includes'))
 
 
-@dataclass
-class Context(dict):
+class Context:
     #  This class encapsulates the context needed for compiling
     #  one or more Cython implementation files along with their
     #  associated and imported declaration files. It includes
@@ -67,19 +62,9 @@ class Context(dict):
 
     cython_scope = None
     language_level = None  # warn when not set but default to Py2
-    modules: dict[str, ModuleScope]
-    include_directories: list[str]
-    future_directives: set
-    compiler_directives: dict[str, str]
-    cpp: bool
-    options: CompilationOptions
-    pxds: dict[str, tuple]
-    _interned: dict[tuple, EncodedString]
-    gdb_debug_outputwriter: Any
-    legacy_implicit_noexcept: bool
 
-    def __init__(self, include_directories: list[str], compiler_directives: dict[str, str], cpp: bool=False,
-                 language_level: int=None, options: CompilationOptions|None=None):
+    def __init__(self, include_directories, compiler_directives, cpp=False,
+                 language_level=None, options=None):
         # cython_scope is a hack, set to False by subclasses, in order to break
         # an infinite loop.
         # Better code organization would fix it.
@@ -105,7 +90,7 @@ class Context(dict):
         self.gdb_debug_outputwriter = None
 
     @classmethod
-    def from_options(cls, options: CompilationOptions):
+    def from_options(cls, options):
         return cls(options.include_path, options.compiler_directives,
                    options.cplus, options.language_level, options=options)
 
@@ -376,12 +361,11 @@ class Context(dict):
     def parse(self, source_desc, scope, pxd, full_module_name):
         if not isinstance(source_desc, FileSourceDescriptor):
             raise RuntimeError("Only file sources for code supported")
-        source_filename = source_desc.filename
         scope.cpp = self.cpp
         # Parse the given source file and return a parse tree.
         num_errors = Errors.get_errors_count()
         try:
-            with Utils.open_source_file(source_filename) as f:
+            with source_desc.get_file_object() as f:
                 from . import Parsing
                 s = PyrexScanner(f, source_desc, source_encoding = f.encoding,
                                  scope = scope, context = self)
@@ -392,7 +376,7 @@ class Context(dict):
                     except ImportError:
                         raise RuntimeError(
                             "Formal grammar can only be used with compiled Cython with an available pgen.")
-                    ConcreteSyntaxTree.p_module(source_filename)
+                    ConcreteSyntaxTree.p_module(source_desc.filename)
         except UnicodeDecodeError as e:
             #import traceback
             #traceback.print_exc()
@@ -461,7 +445,7 @@ class Context(dict):
             result.c_file = None
 
 
-def get_output_filename(source_filename: str, cwd: str, options: CompilationOptions) -> str:
+def get_output_filename(source_filename, cwd, options):
     if options.cplus:
         c_suffix = ".cpp"
     else:
@@ -477,7 +461,7 @@ def get_output_filename(source_filename: str, cwd: str, options: CompilationOpti
         return suggested_file_name
 
 
-def create_default_resultobj(compilation_source: "CompilationSource", options: CompilationOptions) -> "CompilationResult":
+def create_default_resultobj(compilation_source, options):
     result = CompilationResult()
     result.main_source_file = compilation_source.source_desc.filename
     result.compilation_source = compilation_source
@@ -506,7 +490,7 @@ def setup_source_object(source, source_ext, full_module_name, options, context):
     return CompilationSource(source_desc, full_module_name, cwd)
 
 
-def run_cached_pipeline(source, options: CompilationOptions, full_module_name, context, cache, fingerprint):
+def run_cached_pipeline(source, options, full_module_name, context, cache, fingerprint):
     cwd = os.getcwd()
     output_filename = get_output_filename(source, cwd, options)
     cached = cache.lookup_cache(output_filename, fingerprint)
@@ -526,7 +510,7 @@ def run_cached_pipeline(source, options: CompilationOptions, full_module_name, c
     return result
 
 
-def run_pipeline(source, options: CompilationOptions, full_module_name, context):
+def run_pipeline(source, options, full_module_name, context):
     from . import Pipeline
     if options.verbose:
         sys.stderr.write("Compiling %s\n" % source)
@@ -559,7 +543,7 @@ def run_pipeline(source, options: CompilationOptions, full_module_name, context)
                 "Dotted filenames ('%s') are deprecated."
                 " Please use the normal Python package directory layout." % os.path.basename(abs_path), level=1)
     if re.search("[.]c(pp|[+][+]|xx)$", result.c_file, re.RegexFlag.IGNORECASE) and not context.cpp:
-        warning((source.source_desc, 1, 0),
+        warning((source_desc, 1, 0),
                 "Filename implies a c++ file but Cython is not in c++ mode.",
                 level=1)
 
@@ -577,21 +561,21 @@ def run_pipeline(source, options: CompilationOptions, full_module_name, context)
 #  Main Python entry points
 #
 # ------------------------------------------------------------------------
-@dataclass
+
 class CompilationSource:
     """
     Contains the data necessary to start up a compilation pipeline for
     a single compilation unit.
     """
+    def __init__(self, source_desc, full_module_name, cwd):
+        self.source_desc = source_desc
+        self.full_module_name = full_module_name
+        self.cwd = cwd
 
-    source_desc: FileSourceDescriptor
-    full_module_name: EncodedString
-    cwd: str
 
-
-@dataclass
 class CompilationResult:
-    """Results from the Cython compiler.
+    """
+    Results from the Cython compiler:
 
     c_file           string or None   The generated C source file
     h_file           string or None   The generated C header file
@@ -604,17 +588,15 @@ class CompilationResult:
     compilation_source CompilationSource
     """
 
-    c_file: str | None = None
-    h_file: str | None = None
-    i_file: str | None = None
-    api_file: str | None = None
-    listing_file: str | None = None
-    object_file: str | None = None
-    extension_file: str | None = None
-    main_source_file: str | None = None
-    num_errors: int = 0
-    embedded_metadata: dict[str, Any] | None = None
-
+    c_file = None
+    h_file = None
+    i_file = None
+    api_file = None
+    listing_file = None
+    object_file = None
+    extension_file = None
+    main_source_file = None
+    num_errors = 0
 
     def get_generated_source_files(self):
         return [
@@ -622,11 +604,11 @@ class CompilationResult:
             if source_file
         ]
 
-@dataclass
+
 class CompilationResultSet(dict):
-    """Results from compiling multiple Pyrex source files.
-    
-    A mapping  from source file paths to CompilationResult instances. Also
+    """
+    Results from compiling multiple Pyrex source files. A mapping
+    from source file paths to CompilationResult instances. Also
     has the following attributes:
 
     num_errors   integer   Total number of compilation errors
@@ -634,14 +616,14 @@ class CompilationResultSet(dict):
 
     num_errors = 0
 
-    def add(self, source, result: CompilationResult):
+    def add(self, source, result):
         self[source] = result
         self.num_errors += result.num_errors
 
 
 def get_fingerprint(cache, source, options):
-        from ..Build.Cache import FingerprintFlags
         from ..Build.Dependencies import create_dependency_tree
+        from ..Build.Cache import FingerprintFlags
         context = Context.from_options(options)
         dependencies = create_dependency_tree(context)
         return cache.transitive_fingerprint(
@@ -672,11 +654,9 @@ def compile_single(source, options, full_module_name, cache=None, context=None, 
         return run_pipeline(source, options, full_module_name, context)
 
 
-def compile_multiple(sources: list[str], options: CompilationOptions, cache=None):
-    """Compile multiple Pyrex implementation files and return a CompilationResultSet.
-
-    Usage:
-        compile_multiple(sources, options, cache)
+def compile_multiple(sources, options, cache=None):
+    """
+    compile_multiple(sources, options, cache)
 
     Compiles the given sequence of Pyrex implementation files and returns
     a CompilationResultSet. Performs timestamp checking, caching and/or recursion
@@ -711,67 +691,22 @@ def compile_multiple(sources: list[str], options: CompilationOptions, cache=None
     return results
 
 
-def compile(source: str | list[str], options: CompilationOptions | dict |None = None, full_module_name: str = None, **kwds):
-    """Compile one or more Pyrex implementation files, with optional timestamp checking and recursing on dependencies.
+def compile(source, options = None, full_module_name = None, **kwds):
+    """
+    compile(source [, options], [, <option> = <value>]...)
 
-    Example:
-        >>> from Cython.Compiler.Main import compile
-        >>> compile(source [, options], [, <option> = <value>]...)
-
-    The source argument may be a string
+    Compile one or more Pyrex implementation files, with optional timestamp
+    checking and recursing on dependencies.  The source argument may be a string
     or a sequence of strings.  If it is a string and no recursion or timestamp
     checking is requested, a CompilationResult is returned, otherwise a
     CompilationResultSet is returned.
-
     """
-    options = options  or default_options
-    options = CompilationOptions(**options, **kwds)
-    
+    options = CompilationOptions(defaults = options, **kwds)
+
     # cache is enabled when:
     # * options.cache is True (the default path to the cache base dir is used)
     # * options.cache is the explicit path to the cache base dir
     # unless annotations are generated
-
-    if isinstance(source, str) or isinstance(source, Path) or len(source) == 1:
-        source = source[0] if isinstance(source, list) else source
-        print(f"isinstance(source, str) {source=}")
-        if Path(source).is_dir() or Path(source).suffix not in ('.pyx', '.py'):
-            mod = locate(source)
-            print(f"{mod=}")
-            if mod is None:  # try to find a module in the path
-                for path in pathdirs():
-                    mod = locate('.'.join([path, source]))
-                    if mod is not None:
-                        break
-            if mod is None:
-                raise RuntimeError(f'Could not find module {source}')
-            sources = [mod.__file__]
-            def get_source_files(mod):
-                # Get all the source files
-                for name, mm in inspect.getmembers(mod, inspect.ismodule):
-                    print(f"{name=}, {mm=}")
-                    source =getattr(mm, '__file__', None)
-                    if source and source not in sources:
-                        sources.append(source)
-                        get_source_files(mm)
-            get_source_files(mod)
-            return compile_multiple(sources, options, None)
-        print(f"{source=} {full_module_name=}")
-    
-        cache = None
-        if options.cache:
-            if options.annotate or Options.annotate:
-                if options.verbose:
-                    sys.stderr.write('Cache is ignored when annotations are enabled.\n')
-            else:
-                from ..Build.Cache import Cache
-                cache_path = None if options.cache is True else options.cache
-                cache = Cache(cache_path)
-
-        if not options.timestamps:
-            return compile_single(source, options, full_module_name, cache)
-        source = [source]
-
     cache = None
     if options.cache:
         if options.annotate or Options.annotate:
@@ -782,12 +717,17 @@ def compile(source: str | list[str], options: CompilationOptions | dict |None = 
             cache_path = None if options.cache is True else options.cache
             cache = Cache(cache_path)
 
+    if isinstance(source, str):
+        if not options.timestamps:
+            return compile_single(source, options, full_module_name, cache)
+        source = [source]
     return compile_multiple(source, options, cache)
 
 
 @Utils.cached_function
-def search_include_directories(dirs: tuple[str, ...], qualified_name: str, suffix: str, pos, include=False, source_file_path=None):
-    """Search the list of include directories for the given file name.
+def search_include_directories(dirs, qualified_name, suffix="", pos=None, include=False, source_file_path=None):
+    """
+    Search the list of include directories for the given file name.
 
     If a source file path or position is given, first searches the directory
     containing that file.  Returns None if not found, but does not report an error.
@@ -872,10 +812,10 @@ def main(command_line = 0):
         try:
             options, sources = parse_command_line(args)
         except FileNotFoundError as e:
-            print(f"{sys.argv[0]}: No such file or directory: '{e.filename}'", file=sys.stderr)
+            print("{}: No such file or directory: '{}'".format(sys.argv[0], e.filename), file=sys.stderr)
             sys.exit(1)
     else:
-        options = CompilationOptions(**default_options)
+        options = CompilationOptions(default_options)
         sources = args
 
     if options.show_version:

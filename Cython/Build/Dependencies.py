@@ -1,51 +1,35 @@
+import cython
 
-from collections import defaultdict
-import contextlib
+import collections
 import os
-import re
-import sys
-import time
-from collections.abc import Iterable
+import re, sys, time
 from glob import iglob
 from io import StringIO
 from os.path import relpath as _relpath
-from typing import Unpack
-
-import cython
-
 from .Cache import Cache, FingerprintFlags
+
+from collections.abc import Iterable
 
 try:
     import pythran
 except:
     pythran = None
 
-from typing_extensions import TYPE_CHECKING
-
 from .. import Utils
-from ..Compiler import Errors, Options
+from ..Utils import (cached_function, cached_method, path_exists,
+    safe_makedirs, copy_file_to_dir_if_newer, is_package_dir, write_depfile)
+from ..Compiler import Errors
 from ..Compiler.Main import Context
-from ..Compiler.Options import CompilationOptions, default_options, get_directive_defaults
-from ..Utils import (
-    cached_function,
-    cached_method,
-    copy_file_to_dir_if_newer,
-    is_package_dir,
-    path_exists,
-    safe_makedirs,
-    write_depfile,
-)
+from ..Compiler import Options
+from ..Compiler.Options import (CompilationOptions, default_options,
+    get_directive_defaults)
 
 join_path = cached_function(os.path.join)
 copy_once_if_newer = cached_function(copy_file_to_dir_if_newer)
 safe_makedirs_once = cached_function(safe_makedirs)
 
 
-if TYPE_CHECKING:
-    from distutils.extension import Extension
-    
-
-def _make_relative(file_paths: list[str], base: str) -> list[str]:
+def _make_relative(file_paths, base=None):
     if not base:
         base = os.getcwd()
     if base[-1] != os.path.sep:
@@ -68,8 +52,11 @@ def extended_iglob(pattern):
     # because '/' is generally common for relative paths.
     if '**/' in pattern or os.sep == '\\' and '**\\' in pattern:
         seen = set()
-        first, rest = re.split(r'\*\*[%s]' % ('/\\\\' if os.sep == '\\' else '/'), pattern, 1)  # noqa: B034
-        first = iglob(first + os.sep) if first else ['']
+        first, rest = re.split(r'\*\*[%s]' % ('/\\\\' if os.sep == '\\' else '/'), pattern, 1)
+        if first:
+            first = iglob(first + os.sep)
+        else:
+            first = ['']
         for root in first:
             for path in extended_iglob(join_path(root, rest)):
                 if path not in seen:
@@ -112,13 +99,14 @@ def update_pythran_extension(ext):
 
     # These options are not compatible with the way normal Cython extensions work
     for bad_option in ["-fwhole-program", "-fvisibility=hidden"]:
-        with contextlib.suppress(ValueError):
+        try:
             ext.extra_compile_args.remove(bad_option)
+        except ValueError:
+            pass
 
 
-def parse_list(s: str) -> list[str]:
-    """Parse a string into a list of strings, allowing for quoted strings and commas.
-    
+def parse_list(s):
+    """
     >>> parse_list("")
     []
     >>> parse_list("a")
@@ -130,7 +118,7 @@ def parse_list(s: str) -> list[str]:
     >>> parse_list('a " " b')
     ['a', ' ', 'b']
     >>> parse_list('[a, ",a", "a,", ",", ]')
-    ['a', ',a', 'a,', ','].
+    ['a', ',a', 'a,', ',']
     """
     if len(s) >= 2 and s[0] == '[' and s[-1] == ']':
         s = s[1:-1]
@@ -142,7 +130,8 @@ def parse_list(s: str) -> list[str]:
         literal = literal.strip()
         if literal[0] in "'\"":
             return literals[literal[1:-1]]
-        return literal
+        else:
+            return literal
     return [unquote(item) for item in s.split(delimiter) if item.strip()]
 
 
@@ -173,7 +162,7 @@ def _legacy_strtobool(val):
     # Used to be "distutils.util.strtobool", adapted for deprecation warnings.
     if val == "True":
         return True
-    if val == "False":
+    elif val == "False":
         return False
 
     import warnings
@@ -181,10 +170,10 @@ def _legacy_strtobool(val):
     val = val.lower()
     if val in ('y', 'yes', 't', 'true', 'on', '1'):
         return True
-    if val in ('n', 'no', 'f', 'false', 'off', '0'):
+    elif val in ('n', 'no', 'f', 'false', 'off', '0'):
         return False
-
-    raise ValueError(f"invalid truth value {val!r}")
+    else:
+        raise ValueError("invalid truth value %r" % (val,))
 
 
 class DistutilsInfo:
@@ -222,7 +211,7 @@ class DistutilsInfo:
                 if value:
                     self.values[key] = value
 
-    def merge(self, other:'Self') -> 'Self':
+    def merge(self, other):
         if other is None:
             return self
         for key, value in other.values.items():
@@ -291,9 +280,9 @@ _FIND_FSTRING_TOKEN = cython.declare(object, re.compile(r"""
 
 
 def strip_string_literals(code: str, prefix: str = '__Pyx_L'):
-    """Normalize every string literal to be of the form '__Pyx_Lxxx',.
-    
-    Returns the normalized code and a mapping of labels to
+    """
+    Normalizes every string literal to be of the form '__Pyx_Lxxx',
+    returning the normalized code and a mapping of labels to
     string literals.
     """
     new_code: list = []
@@ -419,8 +408,7 @@ def normalize_existing(base_path, rel_paths):
 
 @cached_function
 def normalize_existing0(base_dir, rel_paths):
-    """Normalize a list of relative paths by replacing them with absolute paths.
-    
+    """
     Given some base directory ``base_dir`` and a list of path names
     ``rel_paths``, normalize each relative path name ``rel`` by
     replacing it by ``os.path.join(base, rel)`` if that file exists.
@@ -778,9 +766,9 @@ def create_extension_list(patterns, exclude=None, ctx=None, aliases=None, quiet=
             if cython_sources:
                 filepattern = cython_sources[0]
                 if len(cython_sources) > 1:
-                    print(f"Warning: Multiple cython sources found for extension '{pattern.name}': {cython_sources}\n"
+                    print("Warning: Multiple cython sources found for extension '%s': %s\n"
                           "See https://cython.readthedocs.io/en/latest/src/userguide/sharing_declarations.html "
-                          "for sharing declarations among Cython files.")
+                          "for sharing declarations among Cython files." % (pattern.name, cython_sources))
             else:
                 # ignore non-cython modules
                 module_list.append(pattern)
@@ -790,8 +778,10 @@ def create_extension_list(patterns, exclude=None, ctx=None, aliases=None, quiet=
             base = DistutilsInfo(exn=template)
             ext_language = None  # do not override whatever the Extension says
         else:
-            msg = str(f"pattern is not of type str nor subclass of Extension ({repr(Extension)})"
-                      f" but of type {type(pattern)} and class {pattern.__class__}")
+            msg = str("pattern is not of type str nor subclass of Extension (%s)"
+                      " but of type %s and class %s" % (repr(Extension),
+                                                        type(pattern),
+                                                        pattern.__class__))
             raise TypeError(msg)
 
         for file in nonempty(sorted(extended_iglob(filepattern)), "'%s' doesn't match any files" % filepattern):
@@ -858,18 +848,10 @@ def create_extension_list(patterns, exclude=None, ctx=None, aliases=None, quiet=
 
 
 # This is the user-exposed entry point.
-def cythonize(module_list: "str | list[str] | list[Extension]", *,
-              exclude: list[str] | None = None,
-              nthreads: int | None = None,
-              aliases: dict[str, str] | None = None,
-              quiet: bool = False,
-              force: bool = False,
-              language: str | None = None,
-              exclude_failures: bool = False,
-              show_all_warnings: bool = False,
-              **options: Unpack[CompilationOptions], # type: ignore
-) -> list[Exception]:
-    """Compile a set of source modules into C/C++ files and return a list of distutils
+def cythonize(module_list, exclude=None, nthreads=0, aliases=None, quiet=False, force=None, language=None,
+              exclude_failures=False, show_all_warnings=False, **options):
+    """
+    Compile a set of source modules into C/C++ files and return a list of distutils
     Extension objects for them.
 
     :param module_list: As module list, pass either a glob pattern, a list of glob
@@ -945,7 +927,7 @@ def cythonize(module_list: "str | list[str] | list[Extension]", *,
     :param cache: If ``True`` the cache enabled with default path. If the value is a path to a directory,
                   then the directory is used to cache generated ``.c``/``.cpp`` files. By default cache is disabled.
                   See :ref:`cython-cache`.
-    """  # noqa: D205
+    """
     if exclude is None:
         exclude = []
     if 'include_path' not in options:
@@ -966,8 +948,7 @@ def cythonize(module_list: "str | list[str] | list[Extension]", *,
         force = os.environ.get("CYTHON_FORCE_REGEN") == "1"  # allow global overrides for build systems
 
     c_options = CompilationOptions(**options)
-    cpp_options = CompilationOptions(**options)
-    cpp_options.cplus = True
+    cpp_options = CompilationOptions(**options); cpp_options.cplus = True
     ctx = Context.from_options(c_options)
     options = c_options
     module_list, module_metadata = create_extension_list(
@@ -1003,7 +984,7 @@ def cythonize(module_list: "str | list[str] | list[Extension]", *,
                                 os.path.dirname(_relpath(filepath, root)))
             copy_once_if_newer(filepath_abs, mod_dir)
 
-    modules_by_cfile = defaultdict(list)
+    modules_by_cfile = collections.defaultdict(list)
     to_compile = []
     for m in module_list:
         if build_dir:
@@ -1013,7 +994,7 @@ def cythonize(module_list: "str | list[str] | list[Extension]", *,
         cy_sources = [
             source for source in m.sources
             if os.path.splitext(source)[1] in ('.pyx', '.py')]
-        if len(cy_sources) == 1:  # noqa: SIM108
+        if len(cy_sources) == 1:
             # normal "special" case: believe the Extension module name to allow user overrides
             full_module_name = m.name
         else:
@@ -1049,7 +1030,10 @@ def cythonize(module_list: "str | list[str] | list[Extension]", *,
                     write_depfile(c_file, source, dependencies)
 
                 # Missing files and those generated by other Cython versions should always be recreated.
-                c_timestamp = os.path.getmtime(c_file) if Utils.file_generated_by_this_cython(c_file) else -1
+                if Utils.file_generated_by_this_cython(c_file):
+                    c_timestamp = os.path.getmtime(c_file)
+                else:
+                    c_timestamp = -1
 
                 # Priority goes first to modified files, second to direct
                 # dependents, and finally to indirect dependents.
@@ -1062,9 +1046,12 @@ def cythonize(module_list: "str | list[str] | list[Extension]", *,
                 if force or c_timestamp < dep_timestamp:
                     if not quiet and not force:
                         if source == dep:
-                            print(f"Compiling {Utils.decode_filename(source)} because it changed.")
+                            print("Compiling %s because it changed." % Utils.decode_filename(source))
                         else:
-                            print(f"Compiling {Utils.decode_filename(source)} because it depends on {Utils.decode_filename(dep)}.")
+                            print("Compiling %s because it depends on %s." % (
+                                Utils.decode_filename(source),
+                                Utils.decode_filename(dep),
+                            ))
                     if not force and cache:
                         fingerprint = cache.transitive_fingerprint(
                                 source, deps.all_dependencies(source), options,
@@ -1111,7 +1098,7 @@ def cythonize(module_list: "str | list[str] | list[Extension]", *,
             result = pool.map_async(cythonize_one_helper, to_compile, chunksize=1)
             pool.close()
             while not result.ready():
-                try:  # noqa: SIM105
+                try:
                     result.get(99999)  # seconds
                 except multiprocessing.TimeoutError:
                     pass
@@ -1128,8 +1115,8 @@ def cythonize(module_list: "str | list[str] | list[Extension]", *,
         for c_file, modules in modules_by_cfile.items():
             if not os.path.exists(c_file):
                 failed_modules.update(modules)
-            elif os.path.getsize(c_file) < 200:  # noqa: PTH202
-                f = open(c_file, encoding='iso8859-1')
+            elif os.path.getsize(c_file) < 200:
+                f = open(c_file, 'r', encoding='iso8859-1')
                 try:
                     if f.read(len('#error ')) == '#error ':
                         # dead compilation result
@@ -1139,8 +1126,8 @@ def cythonize(module_list: "str | list[str] | list[Extension]", *,
         if failed_modules:
             for module in failed_modules:
                 module_list.remove(module)
-            print("Failed compilations: {}".format(', '.join(sorted([
-                module.name for module in failed_modules]))))
+            print("Failed compilations: %s" % ', '.join(sorted([
+                module.name for module in failed_modules])))
 
     if cache:
         cache.cleanup_cache()

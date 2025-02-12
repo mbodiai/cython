@@ -4,7 +4,6 @@ try:
 except ImportError:
     from distutils.core import setup, Extension
 import os
-from pathlib import Path
 import stat
 import subprocess
 import sysconfig
@@ -83,7 +82,7 @@ else:
 
 def compile_cython_modules(profile=False, coverage=False, compile_minimal=False, compile_more=False, cython_with_refnanny=False,
                            cython_limited_api=False):
-    source_root = os.path.dirname(__file__)
+    source_root = os.path.abspath(os.path.dirname(__file__))
     compiled_modules = [
         "Cython.Plex.Actions",
         "Cython.Plex.Scanners",
@@ -175,7 +174,7 @@ def compile_cython_modules(profile=False, coverage=False, compile_minimal=False,
             depends=dep_files,
             **(extra_extension_args if '.refnanny' not in module else {})))
         # XXX hack around setuptools quirk for '*.pyx' sources
-        extensions[-1].sources[0] = str(Path(extensions[-1].sources[0]).relative_to(source_root))
+        extensions[-1].sources[0] = pyx_source_file
 
     # optimise build parallelism by starting with the largest modules
     extensions.sort(key=lambda ext: os.path.getsize(ext.sources[0]), reverse=True)
@@ -210,7 +209,7 @@ def compile_cython_modules(profile=False, coverage=False, compile_minimal=False,
 
     # not using cythonize() directly to let distutils decide whether building extensions was requested
     add_command_class("build_ext", build_ext)
-    setup_args['ext_modules'] = extensions  
+    setup_args['ext_modules'] = extensions
 
 
 def check_option(name):

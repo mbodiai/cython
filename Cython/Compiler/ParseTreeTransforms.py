@@ -3847,6 +3847,12 @@ class CoerceCppTemps(EnvTransform, SkipDeclarations):
 
         return node
 
+    def visit_CppOptionalTempCoercion(self, node):
+        return node
+
+    def visit_CppIteratorNode(self, node):
+        return node
+
     def visit_ExprStatNode(self, node):
         # Deliberately skip `expr` in ExprStatNode - we don't need to access it.
         self.visitchildren(node.expr)
