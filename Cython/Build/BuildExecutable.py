@@ -10,6 +10,7 @@ Basic usage:
 
 DEBUG = True
 
+from pathlib import Path
 import sys
 import os
 if sys.version_info < (3, 9):
@@ -29,18 +30,24 @@ else:
 
 
 def get_config_var(name, default=''):
-    return sysconfig.get_config_var(name) or default
+    """Retrieve config variable dynamically, ensuring compatibility."""
+    value = sysconfig.get_config_vars().get(name)
+    return value if value is not None else default
+
+# Replace SO with EXT_SUFFIX
+EXT_SUFFIX = get_config_var('EXT_SUFFIX')
 
 INCDIR = sysconfig.get_path('include')
 LIBDIR1 = get_config_var('LIBDIR')
-LIBDIR2 = get_config_var('LIBPL')
+LIBDIR2 = get_config_var('LIBPL') or sysconfig.get_path('stdlib')  # Fallback
+
 PYLIB = get_config_var('LIBRARY')
 PYLIB_DYN = get_config_var('LDLIBRARY')
-if PYLIB_DYN == PYLIB:
-    # no shared library
-    PYLIB_DYN = ''
-else:
-    PYLIB_DYN = os.path.splitext(PYLIB_DYN[3:])[0]  # 'lib(XYZ).so' -> XYZ
+
+if PYLIB_DYN and PYLIB_DYN.startswith("lib"):
+    PYLIB_DYN = Path(PYLIB_DYN).stem
+elif not PYLIB_DYN or PYLIB_DYN == PYLIB:
+    PYLIB_DYN = ""  # No shared library
 
 CC = get_config_var('CC', os.environ.get('CC', ''))
 CFLAGS = get_config_var('CFLAGS') + ' ' + os.environ.get('CFLAGS', '')
@@ -48,16 +55,9 @@ LINKCC = get_config_var('LINKCC', os.environ.get('LINKCC', CC))
 LINKFORSHARED = get_config_var('LINKFORSHARED')
 LIBS = get_config_var('LIBS')
 SYSLIBS = get_config_var('SYSLIBS')
-EXE_EXT = sysconfig.get_config_var('EXE')
+EXE_EXT = get_config_var('EXE')
 
-
-def _debug(msg, *args):
-    if DEBUG:
-        if args:
-            msg = msg % args
-        sys.stderr.write(msg + '\n')
-
-
+# Ensure debug output reflects the updates
 def dump_config():
     _debug('INCDIR: %s', INCDIR)
     _debug('LIBDIR1: %s', LIBDIR1)
@@ -71,6 +71,15 @@ def dump_config():
     _debug('LIBS: %s', LIBS)
     _debug('SYSLIBS: %s', SYSLIBS)
     _debug('EXE_EXT: %s', EXE_EXT)
+
+def _debug(msg, *args):
+    if DEBUG:
+        if args:
+            msg = msg % args
+        sys.stderr.write(msg + '\n')
+
+
+
 
 
 def _parse_args(args):
@@ -166,4 +175,5 @@ def _build(args):
 
 
 if __name__ == '__main__':
+    dump_config()
     _build(sys.argv[1:])
