@@ -28,3 +28,9 @@ archs = ["AMD64", "x86"]
 # x86_64 and one of universal2 or arm64 wheels.  x86_64 is still required by older pips,
 # so additional arm64 wheels should suffice.
 archs = ["x86_64", "arm64"]
+
+[project]
+dependencies = []
+
+[project.optional-dependencies]
+all = []
