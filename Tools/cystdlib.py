@@ -159,6 +159,7 @@ if __name__ == '__main__':
     if options.current_python:
         # assume that the stdlib is where the "os" module lives
         os.chdir(os.path.dirname(os.__file__))
+        print(f"Compiling files to {os.getcwd()}")
     else:
         os.chdir(args[0])
 

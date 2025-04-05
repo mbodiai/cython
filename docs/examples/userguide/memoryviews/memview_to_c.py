@@ -1,5 +1,6 @@
 import numpy as np
-
+import cython
+import multiply_by_10_in_C
 def multiply_by_10(arr):  # 'arr' is a one-dimensional numpy array
 
     if not arr.flags['C_CONTIGUOUS']:

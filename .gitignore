@@ -65,5 +65,9 @@ MANIFEST
 /*.komodoproject
 # Visual Studio Code files
 .vscode
+# Development directories and patterns from HEAD branch
 newstuff
 .devv
+# File patterns from tmp branch
+**/*.zip
+**/*.python-version

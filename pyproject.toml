@@ -3,7 +3,7 @@ requires = ["setuptools", "wheel"]
 
 [tool.cibuildwheel]
 build-verbosity = 2
-skip = ["pp*", "cp36*", "cp37*"]
+# skip = ["pp*", "cp36*", "cp37*"]
 # test-command = "make test"
 
 [tool.cibuildwheel.linux]
@@ -15,14 +15,16 @@ CFLAGS = "-O3 -g0 -pipe -fPIC -march=core2"
 AR = "gcc-ar"
 NM = "gcc-nm"
 RANLIB = "gcc-ranlib"
-
+# [tool.pyright]
+# extraPaths = ["../mbnew/tmp/mbodiai/mbcore/src","../mbnew"]
 [[tool.cibuildwheel.overrides]]
 select = "*aarch64"
 environment = {CFLAGS = "-O3 -g0 -pipe -fPIC -march=armv8-a -mtune=cortex-a72", AR = "gcc-ar", NM = "gcc-nm", RANLIB = "gcc-ranlib" }
 
 [tool.cibuildwheel.windows]
 archs = ["AMD64", "x86"]
-
+[tool.ruff.extend-per-file-ignores]
+"**/*.py" = ["E402","UP007"]
 [tool.cibuildwheel.macos]
 # https://cibuildwheel.readthedocs.io/en/stable/faq/#what-to-provide suggests to provide
 # x86_64 and one of universal2 or arm64 wheels.  x86_64 is still required by older pips,
@@ -30,7 +32,25 @@ archs = ["AMD64", "x86"]
 archs = ["x86_64", "arm64"]
 
 [project]
-dependencies = []
+name = "cython"
+dynamic = ["scripts", "urls", "version", "classifiers", "authors", "readme", "license", "requires-python", "description"]
+dependencies = [
+    "parso",
+]
 
 [project.optional-dependencies]
 all = []
+
+[tool.cyright]
+license = "Apache-2.0"
+
+[tool.ruff]
+target-version = "py37"
+line-length = 100
+select = ["E", "F", "B"]
+extend-ignore = ["E401", "E402"] 
+
+[tool.mypy]
+python_version = "3.7"
+warn_return_any = true
+warn_unused_configs = true

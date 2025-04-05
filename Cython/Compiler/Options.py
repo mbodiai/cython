@@ -3,9 +3,9 @@
 #
 
 
-import os
-
-from .. import Utils
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, NotRequired, Optional, TypedDict
+from typing_extensions import Annotated
 
 
 class ShouldBeFromDirective:
@@ -28,8 +28,7 @@ class ShouldBeFromDirective:
         raise RuntimeError(repr(self))
 
     def __repr__(self):
-        return "Illegal access of '%s' from Options module rather than directive '%s'" % (
-            self.options_name, self.directive_name)
+        return f"Illegal access of '{self.options_name}' from Options module rather than directive '{self.directive_name}'"
 
 
 """
@@ -188,7 +187,7 @@ def copy_for_internal(outer_directives):
 
 
 # Declare compiler directives
-_directive_defaults = {
+_directive_defaults= {
     'binding': True,  # was False before 3.0
     'boundscheck' : True,
     'nonecheck' : False,
@@ -305,8 +304,7 @@ _normalise_common_encoding_name = {
 
 
 def normalise_encoding_name(option_name, encoding):
-    """
-    >>> normalise_encoding_name('c_string_encoding', 'ascii')
+    """>>> normalise_encoding_name('c_string_encoding', 'ascii')
     'ascii'
     >>> normalise_encoding_name('c_string_encoding', 'AsCIi')
     'ascii'
@@ -321,8 +319,8 @@ def normalise_encoding_name(option_name, encoding):
     >>> normalise_encoding_name('c_string_encoding', 'default')
     'utf8'
     >>> normalise_encoding_name('c_string_encoding', 'SeriousLyNoSuch--Encoding')
-    'SeriousLyNoSuch--Encoding'
-    """
+    'SeriousLyNoSuch--Encoding'.
+    """  # noqa: D205, D402
     if not encoding:
         return ''
     encoding_name = _normalise_common_encoding_name(encoding.lower())
@@ -347,7 +345,7 @@ class DEFER_ANALYSIS_OF_ARGUMENTS:
 DEFER_ANALYSIS_OF_ARGUMENTS = DEFER_ANALYSIS_OF_ARGUMENTS()
 
 # Override types possibilities above, if needed
-directive_types = {
+directive_types: "DirectiveScopes" = {
     'language_level': str,  # values can be None/2/3/'3str', where None == 2+warning
     'auto_pickle': bool,
     'locals': dict,
@@ -460,8 +458,7 @@ immediate_decorator_directives = {
 
 
 def parse_directive_value(name, value, relaxed_bool=False):
-    """
-    Parses value as an option value for the given name and returns
+    """Parses value as an option value for the given name and returns
     the interpreted value. None is returned if the option does not exist.
 
     >>> print(parse_directive_value('nonexisting', 'asdf asdfd'))
@@ -486,7 +483,7 @@ def parse_directive_value(name, value, relaxed_bool=False):
     >>> parse_directive_value('c_string_type', 'unnicode')
     Traceback (most recent call last):
     ValueError: c_string_type directive must be one of ('bytes', 'bytearray', 'str', 'unicode'), got 'unnicode'
-    """
+    """  # noqa: D205, D401
     type = directive_types.get(name)
     if not type:
         return None
@@ -521,8 +518,7 @@ def parse_directive_value(name, value, relaxed_bool=False):
 
 def parse_directive_list(s, relaxed_bool=False, ignore_unknown=False,
                          current_settings=None):
-    """
-    Parses a comma-separated list of pragma options. Whitespace
+    """Parses a comma-separated list of pragma options. Whitespace
     is not considered.
 
     >>> parse_directive_list('      ')
@@ -547,7 +543,7 @@ def parse_directive_list(s, relaxed_bool=False, ignore_unknown=False,
     True
     >>> sum(warnings.values()) == len(warnings)  # all true.
     True
-    """
+    """  # noqa: D205, D401
     if current_settings is None:
         result = {}
     else:
@@ -582,8 +578,7 @@ def parse_directive_list(s, relaxed_bool=False, ignore_unknown=False,
 
 
 def parse_variable_value(value):
-    """
-    Parses value as an option value for the given name and returns
+    """Parses value as an option value for the given name and returns
     the interpreted value.
 
     >>> parse_variable_value('True')
@@ -599,7 +594,7 @@ def parse_variable_value(value):
     >>> parse_variable_value('1.23')
     1.23
 
-    """
+    """  # noqa: D205, D401
     if value == "True":
         return True
     elif value == "False":
@@ -618,9 +613,7 @@ def parse_variable_value(value):
 
 
 def parse_compile_time_env(s, current_settings=None):
-    """
-    Parses a comma-separated list of pragma options. Whitespace
-    is not considered.
+    """Parse a comma-separated list of pragma options. Whitespace is not considered.
 
     >>> parse_compile_time_env('      ')
     {}
@@ -655,6 +648,47 @@ def parse_compile_time_env(s, current_settings=None):
 # CompilationOptions are constructed from user input and are the `option`
 #  object passed throughout the compilation pipeline.
 
+
+class CompilationOptionKwargs(TypedDict):
+    """See default_options at the end of this module for a list of all possible
+    options and CmdLine.usage and CmdLine.parse_command_line() for their 
+    meaning.
+    """  # noqa: D205
+
+    include_path: Annotated[List[str], field(default=None)]
+    show_version: Annotated[int, field(default=0)]
+    use_listing_file: Annotated[int, field(default=0)]
+    errors_to_stderr: Annotated[int, field(default=1)]
+    cplus: Annotated[int, field(default=0)]
+    output_file: NotRequired[str] 
+    depfile: NotRequired[str]
+    annotate: NotRequired[bool]
+    annotate_coverage_xml: NotRequired[str]
+    generate_pxi: Annotated[int, field(default=0)]
+    capi_reexport_cincludes: Annotated[int, field(default=0)]
+    working_path: Annotated[str, field(default="")]
+    timestamps: NotRequired[Any]
+    verbose: Annotated[int, field(default=0)]
+    quiet: Annotated[int, field(default=0)]
+    compiler_directives: Annotated[Dict[str, Any], field(default=None)]
+    embedded_metadata: Annotated[Dict[str, Any], field(default=None)]
+    evaluate_tree_assertions: Annotated[bool, field(default=False)]
+    emit_linenums: Annotated[bool, field(default=False)]
+    relative_path_in_code_position_comments: Annotated[bool, field(default=True)]
+    c_line_in_traceback: NotRequired[bool]
+    language_level: NotRequired[Any] 
+    formal_grammar: Annotated[bool, field(default=False)]
+    gdb_debug: Annotated[bool, field(default=False)]
+    compile_time_env: NotRequired[Dict[str, Any]]
+    module_name: NotRequired[str]
+    common_utility_include_dir: NotRequired[str]
+    output_dir: NotRequired[str]
+    build_dir: NotRequired[str]
+    cache: NotRequired[Any]
+    create_extension: NotRequired[Any]
+    np_pythran: Annotated[bool, field(default=False)]
+    legacy_implicit_noexcept: NotRequired[bool]
+    
 class CompilationOptions:
     r"""
     See default_options at the end of this module for a list of all possible

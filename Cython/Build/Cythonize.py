@@ -1,11 +1,15 @@
+from dataclasses import dataclass, field
 import os
 import shutil
 import tempfile
 from collections import defaultdict
+from typing import Dict, List, Optional, Union
+from typing_extensions import Literal
 
 from .Dependencies import cythonize, extended_iglob
 from ..Utils import is_package_dir
 from ..Compiler import Options
+from ..Compiler.Options import CompilationOptions
 
 try:
     import multiprocessing
@@ -38,13 +42,15 @@ def find_package_base(path):
     return base_dir, package_path
 
 
-def cython_compile(path_pattern, options) -> dict:
+def cython_compile(path_pattern, options: "CythonizeOptions") -> None:
+    """Compile a pattern of files using Cython and build if requested."""
     all_paths = map(os.path.abspath, extended_iglob(path_pattern))
     ext_modules_by_basedir = _cython_compile_files(all_paths, options)
     _build(list(ext_modules_by_basedir.items()), options.parallel)
 
 
-def _cython_compile_files(all_paths, options) -> dict:
+def _cython_compile_files(all_paths, options: "CythonizeOptions") -> Dict:
+    """Compile Cython files and return modules to build by directory."""
     ext_modules_to_build = defaultdict(list)
 
     for path in all_paths:
@@ -132,6 +138,29 @@ def run_distutils(args):
             os.chdir(cwd)
             if temp_dir and os.path.isdir(temp_dir):
                 shutil.rmtree(temp_dir)
+
+@dataclass
+class CythonizeOptions(dict):
+    directives: Dict[str, str] = field(default_factory=dict)
+    compile_time_env: Dict[str, str] = field(default_factory=dict)
+    options: CompilationOptions = field(default_factory=lambda: CompilationOptions())
+    language_level: int = 3
+    language: Optional[Literal["c", "c++"]] = None
+    annotate: Optional[Literal["default", "fullc"]] = None
+    excludes: List[str] = field(default_factory=list)
+    build: bool = False
+    build_inplace: bool = False
+    parallel: int = parallel_compiles
+    force: bool = False
+    quiet: bool = False
+    lenient: bool = False
+    keep_going: bool = False
+    no_docstrings: bool = False
+    sources: List[str] = field(default_factory=list)
+    depfile: bool = False
+    benchmark: Optional[str] = None  # Added attribute for benchmark 
+    benchmark_setup: Optional[str] = None  # Added attribute for benchmark setup
+
 
 
 def benchmark(code, setup_code=None, import_module=None, directives=None):
@@ -238,7 +267,9 @@ Environment variables:
 
 
 def parse_args_raw(parser, args):
-    options, unknown = parser.parse_known_args(args)
+    opts, unk = parser.parse_known_args(args)
+    options: CythonizeOptions = CythonizeOptions(**vars(opts))
+    unknown: list[str] = unk
     sources = options.sources
     # if positional arguments were interspersed
     # some of them are in unknown
