@@ -4,6 +4,7 @@
 
 
 import os
+from typing import TypedDict, List, Dict, Optional, Any, Union, Literal, Set
 
 from .. import Utils
 
@@ -833,3 +834,92 @@ default_options = dict(
     shared_c_file_path=None,
     shared_utility_qualified_name = None,
 )
+
+# Compiler directives TypedDict
+class CompilerDirectivesDict(TypedDict, total=False):
+    """TypedDict for Cython compiler directives."""
+    boundscheck: bool
+    wraparound: bool
+    initializedcheck: bool
+    nonecheck: bool
+    overflowcheck: bool
+    overflowcheck_fold: bool
+    embedsignature: bool
+    cdivision: bool
+    cdivision_warnings: bool
+    always_allow_keywords: bool
+    profile: bool
+    linetrace: bool
+    infer_types: bool
+    language_level: Union[int, str]
+    c_string_type: str
+    c_string_encoding: str
+    type_version_tag: bool
+    unraisable_tracebacks: bool
+    iterable_coroutine: bool
+    annotation_typing: bool
+    emit_code_comments: bool
+    cpp_locals: bool
+    legacy_implicit_noexcept: bool
+    optimize_use_switch: bool
+    optimize_unpack_method_calls: bool
+    warn_undeclared: bool
+    warn_unreachable: bool
+    warn_maybe_uninitialized: bool
+    warn_unused: bool
+    warn_unused_arg: bool
+    warn_unused_result: bool
+    warn_multiple_declarators: bool
+    
+# Compile-time environment TypedDict
+class CompileTimeEnvDict(TypedDict, total=False):
+    """TypedDict for compile-time environment variables for Cython."""
+    CXX_FLAGS: str
+    CC: str
+    CFLAGS: str
+    LDFLAGS: str
+    PYTHONPATH: str
+    CYTHON_TRACE: str
+    CYTHON_TRACE_NOGIL: str
+    CYTHONIZE_VERBOSE: str
+    CYTHON_FORCE_REGEN: str
+    CYTHON_CACHE_DIR: str
+
+# Compilation options TypedDict
+class CompilationOptionsDict(TypedDict, total=False):
+    """TypedDict for Cython compilation options."""
+    language_level: Union[int, str, Literal["2", "3", "3str"]]
+    compiler_directives: CompilerDirectivesDict
+    compile_time_env: CompileTimeEnvDict
+    include_path: List[str]
+    output_file: Optional[str]
+    module_name: Optional[str]
+    generate_pxi: bool
+    annotate: Union[bool, Literal["fullc", "default"]]
+    cache: bool
+    create_extension: bool
+    show_version: bool
+    use_listing_file: bool
+    errors_to_stderr: bool
+    cplus: bool
+    np_pythran: bool
+    formal_grammar: bool
+    evaluate_tree_assertions: bool
+    embed: Optional[str]
+    c_line_in_traceback: bool
+    timestamps: bool
+    verbose: int
+    quiet: bool
+    docstrings: bool
+    emit_linenums: bool
+    generate_cleanup_code: Optional[int]
+    annotate_coverage_xml: Optional[str]
+    force: bool
+    capi_reexport_cincludes: bool
+    fast_fail: bool
+    warning_errors: bool
+    error_on_unknown_names: bool
+    error_on_uninitialized: bool
+    convert_range: bool
+    old_style_globals: bool
+    cimport_from_pyx: bool

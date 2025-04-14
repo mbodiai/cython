@@ -10,7 +10,6 @@ __pycache__
 .*cache*/
 *venv*/
 /.hg
-
 /Cython/Build/*.c
 /Cython/Compiler/*.c
 /Cython/Debugger/*.c
@@ -22,12 +21,10 @@ __pycache__
 /Cython/*.c
 /Cython/*.html
 /Cython/*/*.html
-
 /Tools/*.elc
 /Demos/*.html
 /Demos/*/*.html
 /Demos/benchmarks/*.c
-
 /TEST/
 /TEST_TMP/
 /build/
@@ -54,23 +51,19 @@ coverage*.html
 *.xz
 *~
 callgrind.out.*
-
 .ipynb_checkpoints
 docs/build
 docs/_build
-
 tags
 TAGS
 MANIFEST
-
 .tox
-
 # Jetbrains IDE project files
 /.idea
 /*.iml
-
 # Komodo EDIT/IDE project files
 /*.komodoproject
-
 # Visual Studio Code files
 .vscode
+.venv
+de

@@ -915,10 +915,8 @@ def cythonize(module_list, exclude=None, nthreads=0, aliases=None, quiet=False, 
                      See examples in :ref:`determining_where_to_add_types` or
                      :ref:`primes`.
 
-
     :param annotate-fullc: If ``True`` will produce a colorized HTML version of
                            the source which includes entire generated C/C++-code.
-
 
     :param compiler_directives: Allow to set compiler directives in the ``setup.py`` like this:
                                 ``compiler_directives={'embedsignature': True}``.
@@ -928,6 +926,9 @@ def cythonize(module_list, exclude=None, nthreads=0, aliases=None, quiet=False, 
     :param cache: If ``True`` the cache enabled with default path. If the value is a path to a directory,
                   then the directory is used to cache generated ``.c``/``.cpp`` files. By default cache is disabled.
                   See :ref:`cython-cache`.
+                  
+    :param openmp: Enable OpenMP support. Can be 'auto' (detect), 'enable' (required), 'disable' (never)
+    :param force_openmp_check: Force recheck for OpenMP support, ignoring cached configuration
     """
     if exclude is None:
         exclude = []
@@ -937,6 +938,43 @@ def cythonize(module_list, exclude=None, nthreads=0, aliases=None, quiet=False, 
         safe_makedirs(options['common_utility_include_dir'])
 
     depfile = options.pop('depfile', None)
+    
+    # Handle OpenMP settings if present
+    openmp = options.pop('openmp', 'auto')
+    force_openmp_check = options.pop('force_openmp_check', False)
+    
+    # Check for OpenMP support if needed and apply settings
+    use_openmp = False
+    
+    # Check if we're using OpenMP
+    if openmp != 'disable':
+        # Either auto or explicit enable
+        config_file = os.path.join(os.path.expanduser("~"), ".config", "cython", "openmp_config.json")
+        
+        # Check for cached config if not forcing recheck
+        if os.path.exists(config_file) and not force_openmp_check:
+            try:
+                with open(config_file, 'r') as f:
+                    config = json.load(f)
+                if 'openmp_enabled' in config:
+                    use_openmp = config['openmp_enabled']
+                    if not quiet:
+                        print(f"Using cached OpenMP setting: {'enabled' if use_openmp else 'disabled'}")
+            except Exception:
+                # Fall back to environment check
+                use_openmp = os.environ.get("CYTHON_USE_OPENMP") == "1"
+        else:
+            # Fall back to environment check
+            use_openmp = os.environ.get("CYTHON_USE_OPENMP") == "1"
+    
+    # Apply OpenMP flags to compile_time_env
+    if 'compile_time_env' not in options:
+        options['compile_time_env'] = {}
+    
+    if use_openmp:
+        options['compile_time_env']['CYTHON_USE_OPENMP'] = "1"
+        if not quiet:
+            print("OpenMP support enabled for this build")
 
     if pythran is None:
         pythran_options = None
@@ -1270,3 +1308,26 @@ def _init_multiprocessing_helper():
     # KeyboardInterrupt kills workers, so don't let them get it
     import signal
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+
+def create_extension_mod(template_ext, kwds, source, module_name=None):
+    """
+    Create a new Extension instance from a template and keyword arguments.
+    """
+    if module_name is not None:
+        kwds['name'] = module_name
+    if 'sources' not in kwds:
+        kwds['sources'] = []
+    kwds['sources'] = kwds['sources'] + [source]
+
+    # Apply compile_time_env flags that affect the extension
+    if 'compile_time_env' in kwds:
+        compile_time_env = kwds.pop('compile_time_env')
+        if compile_time_env and 'CXX_FLAGS' in compile_time_env:
+            cxx_flags = compile_time_env['CXX_FLAGS']
+            if 'extra_compile_args' not in kwds:
+                kwds['extra_compile_args'] = []
+            if isinstance(kwds['extra_compile_args'], (list, tuple)):
+                kwds['extra_compile_args'].append(cxx_flags)
+
+    return template_ext.__class__(**kwds)
