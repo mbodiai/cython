@@ -1,0 +1,1 @@
+pgrep -f 'Frameworks/Code Helper (Plugin)' | xargs kill -9

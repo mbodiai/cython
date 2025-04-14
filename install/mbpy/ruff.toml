@@ -1,0 +1,19 @@
+
+
+fix = true
+show-fixes = true
+unsafe-fixes = true
+[format]
+
+
+[lint]
+exclude = ["tests/*", "**/*/site-packages/**/*","**/lib/python**/*"]
+[lint.ruff]
+[pycodestyle]
+max-line-length = 120
+
+
+[analyze]
+detect-string-imports = true
+exclude = ["tests/*", "**/*/site-packages/**/*","**/lib/python**/*"]
+

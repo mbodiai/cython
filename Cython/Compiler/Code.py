@@ -21,13 +21,13 @@ from functools import partial, wraps
 from contextlib import closing, contextmanager
 from collections import defaultdict
 
-from . import Naming
-from . import Options
-from . import DebugFlags
-from . import StringEncoding
-from .. import Utils
-from .Scanning import SourceDescriptor
-from ..StringIOTree import StringIOTree
+from Cython.Compiler import Naming
+from Cython.Compiler import Options
+from Cython.Compiler import DebugFlags
+from Cython.Compiler import StringEncoding
+from Cython import Utils
+from Cython.Compiler.Scanning import SourceDescriptor
+from Cython.StringIOTree import StringIOTree
 
 
 renamed_py2_builtins_map = {
@@ -361,7 +361,7 @@ class AbstractUtilityCode:
 
     requires = None
 
-    def put_code(self, output):
+    def put_code(self, output: "UtilityCodeBase"):
         pass
 
     def get_tree(self, **kwargs):

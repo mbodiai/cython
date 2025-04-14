@@ -1,0 +1,187 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools", "wheel"]
+[project]
+
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Cython",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+dependencies = [
+  "numpy>=2.2.4",
+  "backoff>=0.2.1",
+  "jupyterlab>=0.3.5",
+  "bs4>=0.0.2",
+  "rich-click>=0.8.6",
+  "networkx>=0.4.2",
+  "tomlkit>=0.13.2",
+  "aiofiles>=0.1.0",
+]
+description = ""
+name = "mbcore"
+readme = "README.md"
+requires-python = ">=3.10"
+version = "2.0.20"
+
+[project.scripts]
+mbc = "mbcore.main:cache"
+mbcache = "mbcore.main:cache"
+mbuild = "mbcore.build:main"
+mlog = "mbcore.main:log"
+
+[project.optional-dependencies]
+cython = []
+dev = [
+  "pytest-asyncio",
+  "datamodel-code-generator>=0.28.3",
+  "rich-click>=1.8.6",
+  "pydantic>=2.10.6",
+  "uvloop>=0.21.0",
+  "httpx>=0.28.1",
+  "scikit-learn",
+  "fake-useragent>=2.0.3",
+  "sqlmodel>=0.0.22",
+  "textual>=1.0.0",
+]
+extras = [
+  'uvloop>=0.21.0',
+  'aiofiles==24.1.0',
+  'diskcache>=5.6.3',
+  'lxml',
+  'more-itertools>=10.5.0',
+  'requests>=2.26.0',
+  'rich-click>=1.8.3',
+  'tomlkit>=0.12.0',
+]
+
+dependencies = ["mrender>=1.0.218", "rich-click>=1.8.5", "aiofiles>=24.1.0"]
+graph = ["networkx>=2.6.3", "numpy>=1.21.2", "scikit-learn>=1.0.2"]
+# all = [
+#     "numpy",
+#     "pytest-asyncio>=0.25.3",
+#     "cython @ git+https://github.com/None/None.git#subdirectory=vendored/cython/cython",
+#     "aiostream @ git+https://github.com/None/None.git#subdirectory=vendored/sebbyjp/aiostream",
+#     "mbpy @ file:///users/sebastianperalta/simply/corp/projects/mbnew",
+#     "rich-click>=1.8.6",
+#     "pydantic>=2.10.6",
+#     "uvloop>=0.21.0",
+#     "backoff>=0.2.1",
+# ]
+all = []
+
+[tool.setuptools.packages.find]
+include = ["*"]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"*" = ["*.json", "*.yaml", "*.yml", "*.txt", "*.csv", "*.sh"]
+
+[tool.ruff]
+fixable = ["ALL"]
+ignore = [
+  "D105",
+  "PGH004",
+  "D100",
+  "D101",
+  "D104",
+  "D106",
+  "ANN001",
+  "ANN002",
+  "ANN003",
+  "ANN204",
+  "UP009",
+  "B026",
+  "ANN001",
+  "ANN401",
+  "ANN202",
+  "D107",
+  "D102",
+  "D103",
+  "E731",
+  "UP006",
+  "UP035",
+  "ANN002",
+  "UP037",
+]
+line-length = 120
+select = [
+  "A",
+  "COM812",
+  "C4",
+  "D",
+  "E",
+  "F",
+  "UP",
+  "B",
+  "SIM",
+  "N",
+  "ANN",
+  "ASYNC",
+  "S",
+  "T20",
+  "RET",
+  "SIM",
+  "ARG",
+  "PTH",
+  "ERA",
+  "PD",
+  "I",
+  "PLW",
+]
+[tool.mb]
+include = ["mbpy", "tmp/mbodiai/mbcore"]
+src = "src"
+[tool.mb.entries]
+cache = "mbcore.main:cache"
+logs = "mbcore.main:log"
+[tool.mb.envs.mb]
+dependencies = ["datamodel-codegenerator"]
+
+[tool.mb.logs]
+exclude_modules = ["markdown_it"]
+full_trace = false
+ignore_third_party = false
+level = "info"
+log_off = false
+pathdir = "/Users/sebastianperalta/.mb/logs"
+show_locals = false
+show_stack = false
+
+[tool.mb.logs.handlers]
+default = ["rich"]
+file = ["file"]
+[tool.pyright]
+extraPaths = [".dev/sebbyjp/aiostream/aiostream", ".dev/cython/cython/cython", "/Users/sebastianperalta/simply/corp/projects/mbnew"]
+
+[dependency-groups]
+c = ["cython>=3.0.11"]
+dev = ["jaraco-text>=4.0.0", "mypy>=1.13.0", "playwright>=1.49.0"]
+types = ["mypy>=1.13.0"]
+
+[tool.mypy]
+plugins = ["mbpy.plugin"]
+[tool.pytest]
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.uv.workspace]
+members = ["jedi"]
+
+[tool.ruff.lint]
+fixable = ["ALL"]
+preview = true # Enable preview features that might include unsafe fixes
+unfixable = [] # Allow fixing all issues
+
+# Ignore assert statements in test files
+per-file-ignores = {"tests/**/*.py" = ["S101", "ANN201", "D400", "D415"]}

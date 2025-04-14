@@ -1,0 +1,45 @@
+# Agent Memory
+
+## Debugging Technique: Binary Search with Print Statements
+
+**Goal:** Isolate the exact point in code where state becomes incorrect.
+
+**Principle:** Repeatedly narrow the search space between a known good state (LOW) and a known bad state (HIGH) by checking the state at a midpoint.
+
+**Prompt Template:**
+
+```markdown
+Okay, I need to debug the function/method `[Function/Method Name]` in file `[File Name]` because it's producing an incorrect result or state change.
+
+We know the state is **correct** at **[Describe LOW Point - e.g., 'the beginning of the function', 'before line X']**.
+We know the state becomes **incorrect** by **[Describe HIGH Point - e.g., 'the end of the function', 'when property Y is accessed', 'at the point of the failing assertion on line Z in the test']**.
+
+Let's use binary search with print statements to isolate the exact point where the state goes wrong.
+
+**Instructions:**
+
+1.  **Identify LOW and HIGH:** Confirm the lines corresponding to the known good state (LOW) and the known bad state (HIGH) in `[File Name]`.
+2.  **Add MIDPOINT Print:** Find a logical midpoint line number roughly halfway between LOW and HIGH. Insert a print statement there.
+    *   Make the print statement very clear, e.g., `print(f\"[DEBUG MIDPOINT 1] ...\")`.
+    *   Print the values of the key variables or object attributes that are relevant to the expected state at that point. For example: `print(f\"[DEBUG MIDPOINT 1] Var A: {variable_a}, Object Flag: {self.flag}\")`.
+3.  **Run the Code/Test:** Execute the code path that triggers the bug (e.g., run the specific failing test `pytest -k ...` or run the script).
+4.  **Evaluate MIDPOINT Print and Narrow Search:**
+    *   Examine the output from your `[DEBUG MIDPOINT X]` print.
+    *   Compare the printed state to the **EXPECTED** state at that midpoint.
+    *   **If the printed state MATCHES the EXPECTED state:** This means the bug occurs *after* this midpoint. Update the search range: 
+        *   Set **LOW = [Midpoint Line Number]** (The state is good *at* the midpoint).
+        *   **HIGH** remains the same as the previous HIGH.
+        *   State: "The state at the midpoint was EXPECTED. The new search range is LOW=[New LOW Line Number], HIGH=[Previous HIGH Line Number]."
+    *   **If the printed state DOES NOT MATCH the EXPECTED state:** This means the bug occurs *at or before* this midpoint. Update the search range: 
+        *   **LOW** remains the same as the previous LOW.
+        *   Set **HIGH = [Midpoint Line Number]** (The state is bad *by* the midpoint).
+        *   State: "The state at the midpoint was UNEXPECTED. The new search range is LOW=[Previous LOW Line Number], HIGH=[New HIGH Line Number]."
+5.  **Repeat:** Choose a new midpoint line number roughly halfway between the **updated** LOW and HIGH points. Add another distinct print statement (e.g., `[DEBUG MIDPOINT X+1] ...`). Run the code again and repeat step 4.
+6.  **Isolate:** Continue this process, repeatedly narrowing the range between LOW and HIGH, until the bug is isolated between two adjacent print statements or within a very small block of code.
+
+**(Optional) Start Search:** Please begin by adding the first midpoint print statement in `[Function/Method Name]` between lines `[LOW Line Number]` and `[HIGH Line Number]` and print the state of `[Key Variable 1]`, `[Key Variable 2]`, etc.
+```
+
+## TODO Items
+
+1. Fix the `mbgit ignore` command, which is trying to run `git ignore` directly (which is not a valid git command). The error occurs in the gcliff.py file. Either implement a proper handling of .gitignore file manipulation or modify the implementation to avoid calling `git ignore` directly. 

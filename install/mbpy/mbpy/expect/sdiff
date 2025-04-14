@@ -1,0 +1,190 @@
+class SpawnBase:
+    def __init__(
+            self,
+            command: str | list[str] | None = None,
+            args: list[str] | None = None,
+            timeout: float | None = 30,
+            maxread: int = 2000,
+            searchwindowsize: int | None = None,
+            encoding: str | None = None,
+            codec_errors: str = "strict",
+            cwd: str | Path | None = None,
+            env: dict[str, str] | None = None,
+    ):
+            """Initialize process attributes and ensure compatibility with Command."""
+            # Process attributes
+            self.terminated: bool = True
+            self.exitstatus: int | None = None
+            self.signalstatus: int | None = None
+            self.child_fd: int | None = -1
+            self.timeout: float | None = timeout
+            self.maxread: int = maxread
+            self.searchwindowsize: int | None = searchwindowsize
+            self.closed: bool = True  # Ensure process starts as "closed"
+            
+            # Platform detection
+            self.platform_is_windows = sys.platform == "win32"
+            
+            # Set command and arguments
+            if isinstance(command, str):
+                # If command is a string, wrap it in a shell
+                self.cmd = ["bash", "-c", command] if not self.platform_is_windows else ["cmd.exe", "/c", command]
+            elif isinstance(command, list):
+                # Command is already a list
+                self.cmd = command
+            else:
+                raise ValueError("Command must be a string or list of strings")
+
+            self.args = args or []
+            self.cwd = Path(cwd).resolve() if cwd else Path.cwd()
+            self.env = env or os.environ.copy()
+
+            # Encoding setup
+            self.encoding = encoding
+            self.codec_errors = codec_errors
+            self.stdin: TextIO = sys.stdin
+            self.stdout: TextIO = sys.stdout
+            self.stderr: TextIO = sys.stderr
+
+            if encoding is None:
+                # No encoding: use raw bytes
+                self._encoder = self._decoder = self._NullCoder()
+                self.crlf = b"\r\n"
+                self.linesep = os.linesep.encode("ascii")
+                self._buffer = BytesIO()
+            else:
+                # Encoding enabled: setup text-based processing
+                self._encoder = codecs.getincrementalencoder(encoding)(codec_errors)
+                self._decoder = codecs.getincrementaldecoder(encoding)(codec_errors)
+                self.crlf = "\r\n"
+                self.linesep = os.linesep
+                self._buffer = StringIO()
+
+            # Default encoding for Windows (UTF-8) and Unix (locale-based)
+            if encoding is None:
+                if self.platform_is_windows:
+                    self.encoding = "utf-8"
+                else:
+                    import locale
+                    self.encoding = locale.getpreferredencoding(False)
+
+        class _NullCoder:
+            """Pass bytes through unchanged (for raw binary mode)."""
+            @staticmethod
+            def encode(b, final=False): return b
+            @staticmethod
+            def decode(b, final=False): return b
+        class _NullCoder:
+            """Pass bytes through unchanged (for raw binary mode)."""
+            @staticmethod
+            def encode(b, final=False): return b
+            @staticmethod
+            def decode(b, final=False): return b
+        
+
+        def expect(self, pattern: Any | list[Any], timeout: float | None = -1) -> int:
+            """Waits for one of the patterns to appear in the output."""
+            compiled_pattern_list = self.compile_pattern_list(pattern)
+            return self.expect_list(compiled_pattern_list, timeout)
+        
+        def expect_list(self, pattern_list: list[Any], timeout: float | None = -1) -> int:
+            """Matches output against a list of patterns."""
+            if timeout == -1:
+                timeout = self.timeout
+        
+            searcher = searcher_re(pattern_list)
+            return self.expect_loop(searcher, timeout)
+        
+        def expect_exact(self, pattern_list: Any | list[Any], timeout: float | None = -1) -> int:
+            """Matches exact strings instead of regex."""
+            if isinstance(pattern_list, (str, bytes)):
+                pattern_list = [pattern_list]
+        
+            pattern_list = [self._coerce_expect_string(p) for p in pattern_list]
+            searcher = self.searcher_string(pattern_list)
+            return self.expect_loop(searcher, timeout)
+        
+        def expect_loop(self, searcher, timeout: float | None = -1) -> int:
+            """Searches output for a pattern with a timeout."""
+            exp = Expecter(self, searcher)
+            return exp.expect_loop(timeout)
+        
+        def compile_pattern_list(self, patterns):
+            """Compiles patterns into regex objects if needed."""
+            if not isinstance(patterns, list):
+                patterns = [patterns]
+        
+            compiled_patterns = []
+            for p in patterns:
+                if isinstance(p, (str, bytes)):
+                    p = self._coerce_expect_string(p)
+                    compiled_patterns.append(re.compile(p))
+                else:
+                    compiled_patterns.append(p)
+            return compiled_patterns
+        
+        def fileno(self) -> int:
+            """Returns the file descriptor of the child process."""
+            return self.child_fd if self.child_fd is not None else -1
+        
+        def isatty(self) -> bool:
+            """Returns True if the process is attached to a terminal."""
+            return os.isatty(self.child_fd) if self.child_fd else False
+        
+        def _validate_fd(self) -> bool:
+            """Checks if the file descriptor is valid."""
+            if self.child_fd is None or self.child_fd < 0:
+                return False
+            try:
+                os.fstat(self.child_fd)
+                return True
+            except OSError:
+                return False
+        
+        def close(self) -> None:
+            """Closes the process file descriptor safely."""
+            if self._validate_fd():
+                os.close(self.child_fd)
+            self.child_fd = -1
+            self.closed = True
+        def read(self, size: int = -1) -> AnyStrT:
+            """Reads up to `size` bytes/chars from the process."""
+            if size == 0:
+                return self._buffer.getvalue()
+            if size < 0:
+                return self._buffer.read()
+            return self._buffer.read(size)
+        
+        def readline(self, size: int = -1) -> AnyStrT:
+            """Reads a single line up to `size` bytes/chars."""
+            return self._buffer.readline(size)
+        
+        def readlines(self, sizehint: int = -1) -> list[AnyStrT]:
+            """Reads all lines, optionally hinting at size."""
+            return self._buffer.readlines(sizehint)
+        
+        def read_nonblocking(self, size: int = 1, timeout: float | None = None) -> AnyStrT:
+            """Non-blocking read from the child process."""
+            if not self._validate_fd():
+                self.flag_eof = True
+                raise EOFError("File descriptor is invalid or closed")
+        
+            try:
+                if self.platform_is_windows:
+                    import msvcrt
+                    if not msvcrt.kbhit():
+                        return b"" if self.encoding is None else ""
+                    s = os.read(self.child_fd, size)
+                else:
+                    s = os.read(self.child_fd, size)
+            except OSError as err:
+                if err.errno in (errno.EIO, errno.EBADF):
+                    self.flag_eof = True
+                    raise EOFError("EOF or invalid file descriptor")
+                raise
+        
+            if not s:
+                self.flag_eof = True
+                raise EOFError("EOF reached.")
+        
+            return s if self.encoding is None else self._decoder.decode(s, final=False)`

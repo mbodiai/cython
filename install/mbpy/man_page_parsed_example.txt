@@ -1,0 +1,60 @@
+Document Structure Analysis for man ls.txt:
+
+[header] LS(1)                    BSD General Commands Manual                   LS(1)
+
+[upppercase] NAME
+     [lowercase] ls -- list directory contents
+
+[uppercase] SYNOPSIS
+     [lowercase] ls [-@ABCFGHILOPRSTUWabcdefghiklmnopqrstuvwxy1%,] [--color=when] [file ...]
+
+[uppercase] DESCRIPTION
+     [lowercase] For each operand that names a file of a type other than directory, ls
+     displays its name as well as any requested, associated information.  For
+     each operand that names a file of type directory, ls displays the names
+     of files contained within that directory, as well as any requested, asso-
+     ciated information.
+
+     [lowercase] If no operands are given, the contents of the current directory are
+     displayed.  If more than one operand is given, non-directory operands are
+     displayed first; directory and non-directory operands are sorted sepa-
+     rately and in lexicographical order.
+
+     [lowercase] The following options are available:
+
+     -@      [lowercase] Display extended attribute keys and sizes in long (-l) output.
+
+     -A      [lowercase] List all entries except for . and ...  Always set for the super-
+             user.
+
+     -B      [lowercase] Force printing of non-printable characters (as defined by
+             ctype(3) and current locale settings) in file names as \xxx, where xxx
+             is the numeric value of the character in octal.
+
+     -C      [lowercase] Force multi-column output; this is the default when output is to a
+             terminal.
+
+     -F      [lowercase] Display a slash (/) immediately after each pathname that is a
+             directory, an asterisk (*) after each that is executable, an at sign
+             (@) after each symbolic link, an equals sign (=) after each socket, a
+             percent sign (%) after each whiteout, and a vertical bar (|) after
+             each that is a FIFO.
+
+     -G      [lowercase] Enable colorized output.  This option is equivalent to defining the
+             CLICOLOR environment variable.  (See below.)
+
+     -H      [lowercase] Symbolic links on the command line are followed.  This option is
+             assumed if none of the -F, -d, or -l options are specified.
+
+     [lowercase] The -l option causes ls to print the following information for each file:
+     file mode, number of links, owner name, group name, size in bytes, time
+     of last modification, and the pathname.  If the file is a special file,
+     the size field instead contains the major and minor device numbers.
+
+     [lowercase] In addition to the eleven standard flags above, ls will recognize and
+     process the following flags if the user sets the POSIXLY_CORRECT environment
+     variable:
+
+     -k      [lowercase] If the -s option is specified, print the file size allocation in
+             kibibytes.  This is the default.  If -k is not specified, the size shown is
+             units of 512 bytes. 

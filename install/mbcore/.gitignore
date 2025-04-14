@@ -1,0 +1,70 @@
+# Python
+tmp/
+__pycache__/
+.python-version
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+.env/
+.venv/
+
+# C++
+*.o
+*.obj
+*.exe
+*.out
+*.app
+*.dll
+*.dylib
+*.a
+*.lib
+.vs/
+Debug/
+Release/
+x64/
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+# Logs and databases
+*.log
+*.sqlite
+*.db
+# Compiled files
+bin/
+obj/
+target/
+# Node/npm
+node_modules/
+npm-debug.log*
+# Temporary files
+*.tmp
+*.temp
+*.bak# Python
+*.bakinstall
+build
+install
+*.bak
+.dev
+.aider*

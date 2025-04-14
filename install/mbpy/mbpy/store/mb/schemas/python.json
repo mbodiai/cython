@@ -1,0 +1,25 @@
+{
+    "$schema": "http://json-schema.org/draft/2020-12/schema",
+    "$id": "python.json",
+    "$dynamicAnchor": "python",
+    "type": "object",
+    "properties": {
+      "version": {
+        "type": "string",
+        "pattern": "^\\d+\\.\\d+(\\.\\d+)*$",
+        "default": "3.11"
+      },
+      "packageManager": {
+        "type": "string",
+        "enum": ["pip", "conda","uv","hatch"],
+        "default": "pip"
+      },
+      "virtualEnv": {
+        "type": "boolean",
+        "description": "Use virtual environments.",
+        "default": true
+      }
+    },
+    "required": ["version", "packageManager", "virtualEnv"],
+    "additionalProperties": false
+  }

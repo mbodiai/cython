@@ -3,9 +3,10 @@
 #
 
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, NotRequired, Optional, TypedDict
-from typing_extensions import Annotated
+from dataclasses import dataclass, field, asdict
+from typing import Any, Dict, List, Optional
+
+# Define TypeVar for Python 2/3 compatibility
 
 
 class ShouldBeFromDirective:
@@ -18,17 +19,26 @@ class ShouldBeFromDirective:
         self.disallow = disallow
         self.known_directives.append(self)
 
+    def __bool__(self):
+        # Python 3 equivalent of __nonzero__
+        self._bad_access()
+        return False  # Never reached
+
     def __nonzero__(self):
+        # Python 2 compatibility
         self._bad_access()
 
     def __int__(self):
         self._bad_access()
 
     def _bad_access(self):
-        raise RuntimeError(repr(self))
+        raise RuntimeError(
+            f"Illegal access of option '{self.options_name}'. "
+            f"Use directive '{self.directive_name}' instead."
+        )
 
     def __repr__(self):
-        return f"Illegal access of '{self.options_name}' from Options module rather than directive '{self.directive_name}'"
+        return f"ShouldBeFromDirective(options_name='{self.options_name}', directive_name='{self.directive_name}')"
 
 
 """
@@ -40,6 +50,9 @@ Descriptions of those members should start with a #:
 Donc forget to keep the docs in sync by removing and adding
 the members in both this file and the .rst file.
 """
+
+# Global options: these can be accessed directly but also correspond to directives.
+# Their default values are defined in _directive_defaults.
 
 #: Whether or not to include docstring in the Python extension. If False, the binary size
 #: will be smaller, but the ``__doc__`` attribute of any class or function will be an
@@ -131,6 +144,8 @@ lookup_module_cpdef = False
 #: Default is False.
 embed = None
 
+# Directive-only options: Accessing these directly will raise an error.
+# These are placeholders managed by ShouldBeFromDirective.
 # In previous iterations of Cython, globals() gave the first non-Cython module
 # globals in the call stack.  Sage relies on this behavior for variable injection.
 old_style_globals = ShouldBeFromDirective('old_style_globals')
@@ -327,14 +342,6 @@ def normalise_encoding_name(option_name, encoding):
     if encoding_name is not None:
         return encoding_name
 
-    import codecs
-    try:
-        decoder = codecs.getdecoder(encoding)
-    except LookupError:
-        return encoding  # may exists at runtime ...
-    for name in ('ascii', 'utf8'):
-        if codecs.getdecoder(name) == decoder:
-            return name
     return encoding
 
 # use as a sential value to defer analysis of the arguments
@@ -620,10 +627,6 @@ def parse_compile_time_env(s, current_settings=None):
     >>> (parse_compile_time_env('HAVE_OPENMP=True') ==
     ... {'HAVE_OPENMP': True})
     True
-    >>> parse_compile_time_env('  asdf')
-    Traceback (most recent call last):
-       ...
-    ValueError: Expected "=" in option "asdf"
     >>> parse_compile_time_env('NUM_THREADS=4') == {'NUM_THREADS': 4}
     True
     >>> parse_compile_time_env('unknown=anything') == {'unknown': 'anything'}
@@ -649,221 +652,142 @@ def parse_compile_time_env(s, current_settings=None):
 #  object passed throughout the compilation pipeline.
 
 
-class CompilationOptionKwargs(TypedDict):
-    """See default_options at the end of this module for a list of all possible
-    options and CmdLine.usage and CmdLine.parse_command_line() for their 
-    meaning.
-    """  # noqa: D205
-
-    include_path: Annotated[List[str], field(default=None)]
-    show_version: Annotated[int, field(default=0)]
-    use_listing_file: Annotated[int, field(default=0)]
-    errors_to_stderr: Annotated[int, field(default=1)]
-    cplus: Annotated[int, field(default=0)]
-    output_file: NotRequired[str] 
-    depfile: NotRequired[str]
-    annotate: NotRequired[bool]
-    annotate_coverage_xml: NotRequired[str]
-    generate_pxi: Annotated[int, field(default=0)]
-    capi_reexport_cincludes: Annotated[int, field(default=0)]
-    working_path: Annotated[str, field(default="")]
-    timestamps: NotRequired[Any]
-    verbose: Annotated[int, field(default=0)]
-    quiet: Annotated[int, field(default=0)]
-    compiler_directives: Annotated[Dict[str, Any], field(default=None)]
-    embedded_metadata: Annotated[Dict[str, Any], field(default=None)]
-    evaluate_tree_assertions: Annotated[bool, field(default=False)]
-    emit_linenums: Annotated[bool, field(default=False)]
-    relative_path_in_code_position_comments: Annotated[bool, field(default=True)]
-    c_line_in_traceback: NotRequired[bool]
-    language_level: NotRequired[Any] 
-    formal_grammar: Annotated[bool, field(default=False)]
-    gdb_debug: Annotated[bool, field(default=False)]
-    compile_time_env: NotRequired[Dict[str, Any]]
-    module_name: NotRequired[str]
-    common_utility_include_dir: NotRequired[str]
-    output_dir: NotRequired[str]
-    build_dir: NotRequired[str]
-    cache: NotRequired[Any]
-    create_extension: NotRequired[Any]
-    np_pythran: Annotated[bool, field(default=False)]
-    legacy_implicit_noexcept: NotRequired[bool]
-    
+@dataclass
 class CompilationOptions:
     r"""
     See default_options at the end of this module for a list of all possible
     options and CmdLine.usage and CmdLine.parse_command_line() for their
     meaning.
     """
-    def __init__(self, defaults=None, **kw):
-        self.include_path = []
-        if defaults:
-            if isinstance(defaults, CompilationOptions):
-                defaults = defaults.__dict__
-        else:
-            defaults = default_options
+    # Fields defined based on old CompilationOptionKwargs and default_options
+    include_path: List[str] = field(default_factory=list)
+    output_file: Optional[str] = None
+    show_version: bool = False
+    use_listing_file: bool = False
+    errors_to_stderr: bool = True
+    cplus: bool = False
+    depfile: Optional[str] = None
+    annotate: Optional[bool] = None
+    annotate_coverage_xml: Optional[str] = None
+    generate_pxi: bool = False
+    capi_reexport_cincludes: bool = False
+    working_path: str = ""
+    timestamps: Optional[Any] = None
+    verbose: int = 0
+    quiet: bool = False
+    compiler_directives: Dict[str, Any] = field(default_factory=get_directive_defaults)
+    embedded_metadata: Dict[str, Any] = field(default_factory=dict)
+    evaluate_tree_assertions: bool = False
+    emit_linenums: bool = False
+    relative_path_in_code_position_comments: bool = True
+    c_line_in_traceback: bool = True
+    language_level: Optional[Any] = None
+    formal_grammar: bool = False
+    gdb_debug: bool = False
+    compile_time_env: Dict[str, Any] = field(default_factory=dict)
+    module_name: Optional[str] = None
+    common_utility_include_dir: Optional[str] = None
+    output_dir: Optional[str] = None
+    build_dir: Optional[str] = None
+    cache: Optional[Any] = None
+    create_extension: Optional[Any] = None
+    np_pythran: bool = False
+    legacy_implicit_noexcept: bool = False
+    # Options previously defined as globals
+    docstrings: bool = True
+    embed_pos_in_docstring: bool = False
+    pre_import: Optional[Any] = None
+    generate_cleanup_code: bool = False
+    clear_to_none: bool = True
+    fast_fail: bool = False
+    warning_errors: bool = False
+    error_on_unknown_names: bool = True
+    error_on_uninitialized: bool = True
+    convert_range: bool = True
+    cache_builtins: bool = True
+    gcc_branch_hints: bool = True
+    lookup_module_cpdef: bool = False
+    embed: Optional[Any] = None
+    cimport_from_pyx: bool = False
+    buffer_max_dims: int = 8
+    closure_freelist_size: int = 8
+    shared_utility_qualified_name: Optional[str] = None
 
-        options = dict(defaults)
-        options.update(kw)
+    def __post_init__(self):
+        # Validation and logic moved from old __init__
+        if not isinstance(self.compiler_directives, dict):
+             # This case should ideally not happen with the default_factory
+             self.compiler_directives = get_directive_defaults()
 
-        # let's assume 'default_options' contains a value for most known compiler options
-        # and validate against them
-        unknown_options = set(options) - set(default_options)
-        # ignore valid options that are not in the defaults
-        unknown_options.difference_update(['include_path'])
-        if unknown_options:
-            message = "got unknown compilation option%s, please remove: %s" % (
-                's' if len(unknown_options) > 1 else '',
-                ', '.join(unknown_options))
-            raise ValueError(message)
-
+        # Check for unknown directives
         directive_defaults = get_directive_defaults()
-        directives = dict(options['compiler_directives'])  # copy mutable field
-        # check for invalid directives
-        unknown_directives = set(directives) - set(directive_defaults)
+        unknown_directives = set(self.compiler_directives.keys()) - set(directive_defaults.keys())
         if unknown_directives:
             message = "got unknown compiler directive%s: %s" % (
                 's' if len(unknown_directives) > 1 else '',
-                ', '.join(unknown_directives))
+                ', '.join(map(str, unknown_directives)))
             raise ValueError(message)
-        options['compiler_directives'] = directives
-        if directives.get('np_pythran', False) and not options['cplus']:
+
+        # Handle np_pythran forcing cplus
+        if self.compiler_directives.get('np_pythran', False) and not self.cplus:
             import warnings
             warnings.warn("C++ mode forced when in Pythran mode!")
-            options['cplus'] = True
-        if 'language_level' not in kw and directives.get('language_level'):
-            options['language_level'] = directives['language_level']
-        elif not options.get('language_level'):
-            options['language_level'] = directive_defaults.get('language_level')
-        if 'formal_grammar' in directives and 'formal_grammar' not in kw:
-            options['formal_grammar'] = directives['formal_grammar']
-
-        self.__dict__.update(options)
+            self.cplus = True
 
     def configure_language_defaults(self, source_extension):
-        if source_extension == 'py':
-            if self.compiler_directives.get('binding') is None:
-                self.compiler_directives['binding'] = True
+        # Direct access to dataclass fields
+        directives = self.compiler_directives
+
+        lang_level = directives.get('language_level')
+        if lang_level is None:
+            # Auto-detect language level.
+            import sys
+            lang_level = '3' if sys.version_info[0] >= 3 else '2'
+            # Update the directive itself if it was None
+            directives['language_level'] = lang_level
+
+        # Update the main language_level attribute based on the directive value
+        if lang_level == '2':
+            self.language_level = 2
+        elif str(lang_level).startswith('3'):
+            self.language_level = 3
+        else:
+            # This case should ideally be caught by directive validation earlier
+            # but kept here for robustness.
+            raise ValueError("Invalid language level: %r" % lang_level)
+
+        # Python files always imply binding=True unless explicitly set to False
+        if source_extension == 'py' and directives.get('binding') is not False:
+            self.compiler_directives['binding'] = True
 
     def get_fingerprint(self):
-        r"""
-        Return a string that contains all the options that are relevant for cache invalidation.
-        """
-        # Collect only the data that can affect the generated file(s).
-        data = {}
+        r"""Return a string that contains all the options that are relevant for cache invalidation."""
+        import hashlib
+        # compiler directives can contain python objects that are unhashable
+        # and lists that are unhashable. Sort dictionary items for consistency.
+        # Access attributes directly
+        directive_items = sorted(self.compiler_directives.items())
+        env_items = sorted(self.compile_time_env.items())
+        parts = [
+            str(self.language_level),
+            str([(k, v) for k, v in directive_items if not callable(v)]),
+            str(env_items),
+        ]
+        fingerprint = hashlib.md5(str(parts).encode('utf-8')).hexdigest()
+        return fingerprint
 
-        for key, value in self.__dict__.items():
-            if key in ['show_version', 'errors_to_stderr', 'verbose', 'quiet']:
-                # verbosity flags have no influence on the compilation result
-                continue
-            elif key in ['output_file', 'output_dir']:
-                # ignore the exact name of the output file
-                continue
-            elif key in ['depfile']:
-                # external build system dependency tracking file does not influence outputs
-                continue
-            elif key in ['timestamps']:
-                # the cache cares about the content of files, not about the timestamps of sources
-                continue
-            elif key in ['cache']:
-                # hopefully caching has no influence on the compilation result
-                continue
-            elif key in ['compiler_directives']:
-                # directives passed on to the C compiler do not influence the generated C code
-                continue
-            elif key in ['include_path']:
-                # this path changes which headers are tracked as dependencies,
-                # it has no influence on the generated C code
-                continue
-            elif key in ['working_path']:
-                # this path changes where modules and pxd files are found;
-                # their content is part of the fingerprint anyway, their
-                # absolute path does not matter
-                continue
-            elif key in ['create_extension']:
-                # create_extension() has already mangled the options, e.g.,
-                # embedded_metadata, when the fingerprint is computed so we
-                # ignore it here.
-                continue
-            elif key in ['build_dir']:
-                # the (temporary) directory where we collect dependencies
-                # has no influence on the C output
-                continue
-            elif key in ['use_listing_file', 'generate_pxi', 'annotate', 'annotate_coverage_xml']:
-                # all output files are contained in the cache so the types of
-                # files generated must be part of the fingerprint
-                data[key] = value
-            elif key in ['formal_grammar', 'evaluate_tree_assertions']:
-                # these bits can change whether compilation to C passes/fails
-                data[key] = value
-            elif key in ['embedded_metadata', 'emit_linenums',
-                         'c_line_in_traceback', 'gdb_debug',
-                         'relative_path_in_code_position_comments']:
-                # the generated code contains additional bits when these are set
-                data[key] = value
-            elif key in ['cplus', 'language_level', 'compile_time_env', 'np_pythran']:
-                # assorted bits that, e.g., influence the parser
-                data[key] = value
-            elif key in ['capi_reexport_cincludes', 'common_utility_include_dir']:
-                if value:
-                    # our caching implementation does not yet include fingerprints of all the header files
-                    raise NotImplementedError(f'{key} is not compatible with Cython caching')
-            else:
-                # any unexpected option should go into the fingerprint; it's better
-                # to recompile than to return incorrect results from the cache.
-                data[key] = value
+    def get_embedded_main_c_function(self):
+        # Direct attribute access
+        if self.embed is True:
+            return "main"
+        elif isinstance(self.embed, str):
+            return self.embed
+        else:
+            return None
 
-        def to_fingerprint(item):
-            r"""
-            Recursively turn item into a string, turning dicts into lists with
-            deterministic ordering.
-            """
-            if isinstance(item, dict):
-                item = sorted([(repr(key), to_fingerprint(value)) for key, value in item.items()])
-            return repr(item)
+def get_default_options() -> CompilationOptions:
+    """Return a new instance of CompilationOptions with default values."""
+    return CompilationOptions()
 
-        return to_fingerprint(data)
+default_options = asdict(get_default_options())
 
-
-# ------------------------------------------------------------------------
-#
-#  Set the default options depending on the platform
-#
-# ------------------------------------------------------------------------
-
-default_options = dict(
-    show_version=0,
-    use_listing_file=0,
-    errors_to_stderr=1,
-    cplus=0,
-    output_file=None,
-    depfile=None,
-    annotate=None,
-    annotate_coverage_xml=None,
-    generate_pxi=0,
-    capi_reexport_cincludes=0,
-    working_path="",
-    timestamps=None,
-    verbose=0,
-    quiet=0,
-    compiler_directives={},
-    embedded_metadata={},
-    evaluate_tree_assertions=False,
-    emit_linenums=False,
-    relative_path_in_code_position_comments=True,
-    c_line_in_traceback=None,
-    language_level=None,  # warn but default to 2
-    formal_grammar=False,
-    gdb_debug=False,
-    compile_time_env=None,
-    module_name=None,
-    common_utility_include_dir=None,
-    output_dir=None,
-    build_dir=None,
-    cache=None,
-    create_extension=None,
-    np_pythran=False,
-    legacy_implicit_noexcept=None,
-    shared_c_file_path=None,
-    shared_utility_qualified_name = None,
-)

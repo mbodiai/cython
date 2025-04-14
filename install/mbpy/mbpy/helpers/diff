@@ -1,0 +1,131 @@
+class Command(CommandProtocol):
+    """High-performance command execution with non-blocking streaming."""
+
+    def __init__(self, cmd: Union[str, List[str]], show: bool = False, cwd: Optional[Union[str, Path]] = None) -> None:
+        self.show = show
+        self.cmd = cmd if isinstance(cmd, list) else ["bash", "-c", cmd]  # Ensure shell compatibility
+        self.cwd = Path(str(cwd)).resolve() if cwd else Path.cwd()
+        self.process: Optional[subprocess.Popen] = None
+        self.lines: List[str] = []
+        self._threads: List[Thread] = []
+
+    def start(self) -> subprocess.Popen:
+        """Start the command process and set non-blocking I/O."""
+        try:
+            self.process = subprocess.Popen(
+                self.cmd,
+                cwd=self.cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                text=True,
+            )
+
+            # Make stdout and stderr non-blocking
+            for stream in [self.process.stdout, self.process.stderr]:
+                if stream:
+                    fd = stream.fileno()
+                    flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+                    fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+            return self.process
+
+        except FileNotFoundError as e:
+            print(f"🚨 Command Not Found: {self.cmd}", file=sys.stderr)
+            raise e
+
+    def streamlines(self, *, show: Optional[bool] = None, timeout: Optional[float] = None) -> Generator[str, None, None]:
+        """Yield output lines from the command in real-time using efficient I/O handling."""
+        if not self.process:
+            self.start()
+
+        if sys.platform == "darwin":
+            kq = select.kqueue()
+            events = [
+                select.kevent(self.process.stdout.fileno(), filter=select.KQ_FILTER_READ, flags=select.KQ_EV_ADD),
+                select.kevent(self.process.stderr.fileno(), filter=select.KQ_FILTER_READ, flags=select.KQ_EV_ADD),
+            ]
+            kq.control(events, 0)
+
+            while self.process.poll() is None:
+                triggered = kq.control(None, len(events), timeout)
+                for event in triggered:
+                    fd = event.ident
+                    stream = self.process.stdout if fd == self.process.stdout.fileno() else self.process.stderr
+                    try:
+                        output = os.read(fd, 4096).decode()
+                        for line in output.splitlines():
+                            if show:
+                                print(line)
+                            self.lines.append(line)
+                            yield line
+                    except OSError:
+                        continue
+        else:
+            while self.process.poll() is None:
+                rlist, _, _ = select.select([self.process.stdout, self.process.stderr], [], [], timeout)
+                for stream in rlist:
+                    try:
+                        output = os.read(stream.fileno(), 4096).decode()
+                        for line in output.splitlines():
+                            if show:
+                                print(line)
+                            self.lines.append(line)
+                            yield line
+                    except OSError:
+                        continue
+
+    def expect(self, show: Optional[bool] = None) -> Optional[str]:
+        """Reads and returns a single line."""
+        if not self.process:
+            self.start()
+
+        try:
+            output = self.process.stdout.read(1024) if self.process.stdout else ""
+            err_output = self.process.stderr.read(1024) if self.process.stderr else ""
+            full_output = output + err_output
+
+            if full_output:
+                line = full_output.strip()
+                if show:
+                    print(line)
+                return line
+
+        except OSError:
+            return None
+
+    @contextmanager
+    def inbackground(self, *, show: bool = False, timeout: float = 10) -> Generator[Command, None, None]:
+        """Run process in background without blocking."""
+        self.process = self.start()
+        thread = Thread(target=lambda: list(self.streamlines(show=show, timeout=timeout)), daemon=True)
+        self._threads.append(thread)
+        thread.start()
+        try:
+            yield self
+        finally:
+            thread.join(timeout)
+
+    def readlines(self, *, show: Optional[bool] = None) -> List[str]:
+        """Returns all output lines as a list."""
+        return list(self.streamlines(show=show))
+
+    def readtext(self, *, show: Optional[bool] = None) -> str:
+        """Returns the entire output as a single string."""
+        return "\n".join(self.readlines(show=show))
+
+    def __iter__(self) -> Generator[str, None, None]:
+        """Enable iteration over command output."""
+        yield from self.streamlines()
+
+    def __enter__(self) -> str:
+        """Enable `with` statement support."""
+        return self.readtext()
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Ensure clean termination of background processes."""
+        for thread in self._threads:
+            with suppress(Exception):
+                thread.join(timeout=10)
+        if self.process:
+            self.process.terminate()

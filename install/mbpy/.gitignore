@@ -1,0 +1,77 @@
+obj/
+tmp/
+lib64/
+*.tmp
+*.temp
+npm-debug.log*
+.vscode/
+bin/
+.venv/
+.python-version
+eggs/
+*.a
+target/
+wheels/
+*$py.class
+parts/
+*.o
+x64/
+*.swo
+*.py[cod]
+build/
+.vs/
+# Logs and databases
+# Python
+*.obj
+*.log
+Thumbs.db
+.idea/
+*.app
+node_modules/
+.DS_Store
+# Node/npm
+*.egg-info/
+# IDEs and editors
+*.dll
+# Compiled files
+*.dylib
+venv/
+lib/
+*.sqlite
+*.exe
+*~
+.eggs/
+dist/
+.env/
+*.out
+*.egg
+develop-eggs/
+.installed.cfg
+downloads/
+var/
+.Python
+sdist/
+# Temporary files
+Debug/
+*.db
+*.lib
+*.so
+__pycache__/
+*.swp
+# C++
+*.bak
+
+Release/
+.temp
+ctree
+pyscripts
+.dev
+.last_vendored
+mbpy.log
+.agents
+testfile
+
+
+# Added by cargo
+
+/target

@@ -1,0 +1,47 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "html.json",
+    "title": "HTML Structured Parsing Schema",
+    "allOf": [
+      { "$ref": "document.json" },
+      {
+        "properties": {
+          "tag": {
+            "$dynamicRef": "#/definitions/TagDefinition",
+            "enum": ["h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "li", "div", "span", "code", "blockquote", "table", "tr", "td", "th"]
+          },
+          "transition_rule": {
+            "$dynamicRef": "#/definitions/TransitionRule",
+            "const": "\n\n"
+          },
+          "nesting_rule": {
+            "$dynamicRef": "#/definitions/NestingRule",
+            "const": "\t"
+          },
+          "summary": {
+            "$dynamicRef": "#/definitions/SummaryDefinition",
+            "type": "string",
+            "pattern": ".*(Abstract|Conclusion|Summary).*"
+          }
+        }
+      }
+    ],
+    "$defs": {
+      "TagDefinition": {
+        "$dynamicAnchor": "TagDefinition",
+        "type": "string"
+      },
+      "TransitionRule": {
+        "$dynamicAnchor": "TransitionRule",
+        "type": "string"
+      },
+      "NestingRule": {
+        "$dynamicAnchor": "NestingRule",
+        "type": "string"
+      },
+      "SummaryDefinition": {
+        "$dynamicAnchor": "SummaryDefinition",
+        "type": "string"
+      }
+    }
+  }
