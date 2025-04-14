@@ -67,3 +67,5 @@ MANIFEST
 .vscode
 .venv
 de
+
+.dev
