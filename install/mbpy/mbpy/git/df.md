@@ -1,1 +1,0 @@
-# How A Declarative Data Fabric Bridges a Missing Gap between Determistic Executation and Intelligent Generation

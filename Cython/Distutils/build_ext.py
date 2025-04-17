@@ -88,7 +88,7 @@ class build_ext(_build_ext):
         #    2.    Add in any (unique) paths from the extension
         #        cython_include_dirs (if Cython.Distutils.extension is used).
         #    3.    Add in any (unique) paths from the extension include_dirs
-        includes = list(self.cython_include_dirs)
+        includes = list(self.cython_include_dirs or [])
         for include_dir in getattr(ext, 'cython_include_dirs', []):
             if include_dir not in includes:
                 includes.append(include_dir)
@@ -104,7 +104,7 @@ class build_ext(_build_ext):
         #    1. Start with the command line option.
         #    2. Add in any (unique) entries from the extension
         #         cython_directives (if Cython.Distutils.extension is used).
-        directives = dict(self.cython_directives)
+        directives = dict(self.cython_directives or {})
         if hasattr(ext, "cython_directives"):
             directives.update(ext.cython_directives)
 
@@ -132,7 +132,18 @@ class build_ext(_build_ext):
             ext,force=self.force, quiet=self.verbose == 0, **options
         )[0]
 
-        ext.sources = new_ext.sources
+        # Ensure paths are relative to the project root directory
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        relative_sources = []
+        for source in new_ext.sources:
+            abs_source = os.path.abspath(source)
+            # Check if it's already relative or outside the project (unlikely but safe)
+            if not os.path.isabs(source) or not abs_source.startswith(project_root):
+                 relative_sources.append(source)
+            else:
+                 relative_sources.append(os.path.relpath(abs_source, project_root))
+        ext.sources = relative_sources
+
         super().build_extension(ext)
 
 # backward compatibility

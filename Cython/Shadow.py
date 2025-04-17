@@ -687,8 +687,21 @@ if not TYPE_CHECKING:
     # shadow the standard library ones (if they are available)
     dataclasses = sys.modules['cython.dataclasses'] = CythonDotImportedFromElsewhere('dataclasses')
 else:
+    from typing import Any
     parallel = CythonDotParallel()
     cimports = CythonCImports('cython.cimports')
     
     dataclasses = CythonDotImportedFromElsewhere('dataclasses')
+    double = Any
+    int = Any
+    float = Any
+    long = Any
+    short = Any
+    char = Any
+    unsigned_long = Any
+    unsigned_int = Any
+    unsigned_short = Any
+    unsigned_char = Any
+    unsigned_long_long = Any
+    
 del math, sys

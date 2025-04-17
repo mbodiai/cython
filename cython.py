@@ -22,5 +22,4 @@ else:
     # Void cython.* directives.
     ## and bring in the __version__
     from Cython import __version__, load_ipython_extension
-    from Cython.Shadow import *  # noqa: F403
-
+    from Cython.Shadow import *

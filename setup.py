@@ -11,7 +11,6 @@ import textwrap
 import sys
 
 import platform
-TYPE_CHECKING = False
 is_cpython = platform.python_implementation() == 'CPython'
 
 # this specifies which versions of python we support, pip >= 9 knows to skip
@@ -29,18 +28,15 @@ def add_command_class(name, cls):
     cmdclasses = setup_args.get('cmdclass', {})
     cmdclasses[name] = cls
     setup_args['cmdclass'] = cmdclasses
-try:
-    from distutils.command.sdist import sdist as sdist_orig
-except ImportError:
-    if not TYPE_CHECKING:
-        from setuptools.command.sdist import sdist as sdist_orig
+
+from distutils.command.sdist import sdist as sdist_orig
 class sdist(sdist_orig):
     def run(self):
-    self.force_manifest = 1
-    if (sys.platform != "win32" and
-        os.path.isdir('.git')):
-        assert os.system("git rev-parse --verify HEAD > .gitrev") == 0
-    sdist_orig.run(self)
+        self.force_manifest = 1
+        if (sys.platform != "win32" and
+            os.path.isdir('.git')):
+            assert os.system("git rev-parse --verify HEAD > .gitrev") == 0
+        sdist_orig.run(self)
 add_command_class('sdist', sdist)
 
 pxd_include_dirs = [
@@ -294,9 +290,7 @@ def run_build():
     if compile_cython_itself and (is_cpython or cython_compile_more or cython_compile_minimal):
         compile_cython_modules(cython_profile, cython_coverage, cython_compile_minimal, cython_compile_more, cython_with_refnanny,
                                cython_limited_api)
-        
-    import Cython
-    import cython
+
     from Cython import __version__ as version
     setup(
         name='Cython',
