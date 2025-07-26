@@ -304,5 +304,6 @@ class DeferAnalysisType:
     """Sentinel class for directives that need deferred analysis."""
     pass
 
+
 # Create singleton instance
 DEFER_ANALYSIS = DeferAnalysisType() 

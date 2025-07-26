@@ -296,7 +296,7 @@ def run_build():
         name='Cython',
         version=version,
         url='https://cython.org/',
-        author='Robert Bradshaw, Stefan Behnel, David Woods, Greg Ewing, et al.',
+        authors=['Robert Bradshaw', 'Stefan Behnel', 'David Woods', 'Greg Ewing', 'et al.'],
         author_email='cython-devel@python.org',
         description="The Cython compiler for writing C extensions in the Python language.",
         long_description=textwrap.dedent("""\

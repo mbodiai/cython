@@ -471,14 +471,8 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         self.assure_safe_target(result.c_file, allow_failed=True)
         modules = self.referenced_modules
 
-        # Get annotation setting from module-level Option, which we know exists
-        # and fall back to options.annotate only if it exists
-        use_annotate = Options.annotate
-        if not use_annotate and hasattr(options, 'annotate'):
-            use_annotate = options.annotate
-        
-        if use_annotate:
-            show_entire_c_code = use_annotate == "fullc"
+        if Options.annotate or options.annotate:
+            show_entire_c_code = Options.annotate == "fullc" or options.annotate == "fullc"
             rootwriter = Annotate.AnnotationCCodeWriter(
                 show_entire_c_code=show_entire_c_code,
                 source_desc=self.compilation_source.source_desc,
@@ -487,16 +481,6 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
             rootwriter = Code.CCodeWriter()
 
         c_code_config = generate_c_code_config(env, options)
-        
-        # Fix the safe access to compilation_source (may not have it)
-        module_source_desc = getattr(self, 'compilation_source', None)
-        cwd = None
-        if module_source_desc:
-            # May have different structures in the compilation_source attribute
-            if hasattr(module_source_desc, 'cwd'):
-                cwd = module_source_desc.cwd
-            elif hasattr(module_source_desc, 'compilation_source') and hasattr(module_source_desc.compilation_source, 'cwd'):
-                cwd = module_source_desc.compilation_source.cwd
 
         globalstate = Code.GlobalState(
             rootwriter, self,
@@ -505,7 +489,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         )
         globalstate.initialize_main_c_code()
         h_code = globalstate['h_code']
-        
+
         self.generate_module_preamble(env, options, modules, result.embedded_metadata, h_code)
 
         globalstate.module_pos = self.pos

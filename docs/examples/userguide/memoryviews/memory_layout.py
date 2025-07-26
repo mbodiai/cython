@@ -1,4 +1,3 @@
-import cython
 from cython.cimports.cython import view
 
 def main():

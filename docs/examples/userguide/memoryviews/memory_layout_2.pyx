@@ -1,6 +1,8 @@
 # mode: error
 from cython cimport view
 
+
+
 def main():
     # VALID
     cdef int[::view.indirect, ::1, :] a

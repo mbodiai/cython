@@ -7,30 +7,26 @@ import os
 import re
 import sys
 import io
-from pathlib import Path
 
 if sys.version_info[:2] < (3, 8):
     sys.stderr.write("Sorry, Cython requires Python 3.8+, found %d.%d\n" % tuple(sys.version_info[:2]))
     sys.exit(1)
-
-# For debug print coloring
-from Cython.Compiler.CmdLine import Colors
 
 # Do not import Parsing here, import it when needed, because Parsing imports
 # Nodes, which globally needs debug command line options initialized to set a
 # conditional metaclass. These options are processed by CmdLine called from
 # main() in this file.
 # import Parsing
-from Cython.Compiler import Errors
-from Cython.Compiler.StringEncoding import EncodedString
-from Cython.Compiler.Scanning import PyrexScanner, FileSourceDescriptor
-from Cython.Compiler.Errors import PyrexError, CompileError, error, warning
-from Cython.Compiler.Symtab import ModuleScope
-from Cython import Utils
-from Cython.Compiler import Options
-from Cython.Compiler.Options import CompilationOptions, default_options
-from Cython.Compiler.CmdLine import parse_command_line
-from Cython.Compiler.Lexicon import (unicode_start_ch_any, unicode_continuation_ch_any,
+from . import Errors
+from .StringEncoding import EncodedString
+from .Scanning import PyrexScanner, FileSourceDescriptor
+from .Errors import PyrexError, CompileError, error, warning
+from .Symtab import ModuleScope
+from .. import Utils
+from . import Options
+from .Options import CompilationOptions, default_options
+from .CmdLine import parse_command_line
+from .Lexicon import (unicode_start_ch_any, unicode_continuation_ch_any,
                       unicode_start_ch_range, unicode_continuation_ch_range)
 
 
@@ -73,7 +69,7 @@ class Context:
         # an infinite loop.
         # Better code organization would fix it.
 
-        from Cython.Compiler import Builtin, CythonScope
+        from . import Builtin, CythonScope
         self.modules = {"__builtin__" : Builtin.builtin_scope}
         self.cython_scope = CythonScope.create_cython_scope(self)
         self.modules["cython"] = self.cython_scope
@@ -104,7 +100,7 @@ class Context:
         return self.options.shared_utility_qualified_name if self.options else None
 
     def set_language_level(self, level):
-        from Cython.Compiler.Future import print_function, unicode_literals, absolute_import, division, generator_stop
+        from .Future import print_function, unicode_literals, absolute_import, division, generator_stop
         future_directives = set()
         if level == '3str':
             level = 3
@@ -132,14 +128,14 @@ class Context:
     # pipeline creation functions can now be found in Pipeline.py
 
     def process_pxd(self, source_desc, scope, module_name):
-        from Cython.Compiler import Pipeline
+        from . import Pipeline
         if isinstance(source_desc, FileSourceDescriptor) and source_desc._file_type == 'pyx':
             source = CompilationSource(source_desc, module_name, os.getcwd())
             result_sink = create_default_resultobj(source, self.options)
             pipeline = Pipeline.create_pyx_as_pxd_pipeline(self, result_sink)
             result = Pipeline.run_pipeline(pipeline, source)
         elif source_desc.in_utility_code:
-            from Cython.Compiler import ParseTreeTransforms
+            from . import ParseTreeTransforms
             transform = ParseTreeTransforms.CnameDirectivesTransform(self)
             pipeline = Pipeline.create_pxd_pipeline(self, scope, module_name)
             pipeline = Pipeline.insert_into_pipeline(
@@ -310,9 +306,9 @@ class Context:
 
     def search_include_directories(self, qualified_name,
                                    suffix=None, source_pos=None, include=False, sys_path=False, source_file_path=None):
-        include_dirs = self.include_directories
+        include_dirs = list(self.include_directories)
         if sys_path:
-            include_dirs = include_dirs + sys.path
+            include_dirs.extend(sys.path)
         # include_dirs must be hashable for caching in @cached_function
         include_dirs = tuple(include_dirs + [standard_include_path])
         return search_include_directories(
@@ -383,7 +379,7 @@ class Context:
         num_errors = Errors.get_errors_count()
         try:
             with source_desc.get_file_object() as f:
-                from Cython.Compiler import Parsing
+                from . import Parsing
                 s = PyrexScanner(f, source_desc, source_encoding = f.encoding,
                                  scope = scope, context = self)
                 tree = Parsing.p_module(s, pxd, full_module_name)
@@ -467,28 +463,15 @@ def get_output_filename(source_filename, cwd, options):
         c_suffix = ".cpp"
     else:
         c_suffix = ".c"
-    
-    suggested_file_name = os.path.basename(Utils.replace_suffix(source_filename, c_suffix))
-
+    suggested_file_name = Utils.replace_suffix(source_filename, c_suffix)
     if options.output_file:
-        # If -o is provided, use it directly, assuming user knows best
-        # Ensure the directory exists if -o contains a path
-        output_path = Path(options.output_file)
-        if not output_path.is_absolute():
-            output_path = Path(cwd) / output_path
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        return str(output_path)
-    elif options.output_dir:
-        # If --output-dir is provided (and -o is not), place the file there
-        output_dir_path = Path(options.output_dir)
-        if not output_dir_path.is_absolute():
-             output_dir_path = Path(cwd) / output_dir_path
-        # Ensure output_dir exists (might be redundant if handler did it, but safe)
-        output_dir_path.mkdir(parents=True, exist_ok=True) 
-        return str(output_dir_path / suggested_file_name)
+        out_path = os.path.join(cwd, options.output_file)
+        if os.path.isdir(out_path):
+            return os.path.join(out_path, os.path.basename(suggested_file_name))
+        else:
+            return out_path
     else:
-        # Default: place next to source file
-        return Utils.replace_suffix(source_filename, c_suffix)
+        return suggested_file_name
 
 
 def create_default_resultobj(compilation_source, options):
@@ -521,46 +504,45 @@ def setup_source_object(source, source_ext, full_module_name, options, context):
 
 
 def run_cached_pipeline(source, options, full_module_name, context, cache, fingerprint):
-    # Check whether source has been already processed in the cache
-    if full_module_name and fingerprint:
-        for cached in cache.lookup_dependencies(source, fingerprint, full_module_name):
-            if cached:
-                check = cache.check_dependencies(cached.dependencies, inplace=True)
+    cwd = os.getcwd()
+    output_filename = get_output_filename(source, cwd, options)
+    cached = cache.lookup_cache(output_filename, fingerprint)
+    if cached:
+        cache.load_from_cache(output_filename, cached)
 
-                if check == cache.CACHE_OK:
-                    return cached.result
+        source_ext = os.path.splitext(source)[1]
+        options.configure_language_defaults(source_ext[1:])  # py/pyx
 
-    # Run the compiler pipeline as for a full source compilation
+        source = setup_source_object(source, source_ext, full_module_name, options, context)
+        # Set up result object
+        return create_default_resultobj(source, options)
+
     result = run_pipeline(source, options, full_module_name, context)
-
-    # Store the compilation result with its dependencies in the cache
-    if fingerprint and cache.enabled:
-        cache.store_dependencies(fingerprint, full_module_name, result, source)
-
+    if fingerprint:
+        cache.store_to_cache(output_filename, fingerprint, result)
     return result
 
 
 def run_pipeline(source, options, full_module_name, context):
-    from Cython.Compiler import Pipeline
-    if hasattr(options, 'verbose') and options.verbose:
+    from . import Pipeline
+    if options.verbose:
         sys.stderr.write("Compiling %s\n" % source)
     source_ext = os.path.splitext(source)[1]
     abs_path = os.path.abspath(source)
     options.configure_language_defaults(source_ext[1:])  # py/pyx
-    
-    # Special case for direct execution
-    if __name__ == "__main__" or sys._getframe(1).f_globals['__name__'] == "__main__":
-        print(f"{Colors.BOLD}{Colors.GREEN}Direct execution detected in run_pipeline{Colors.ENDC}")
-        # Force these options for direct execution when main module is used
-        Options.annotate = 'default'
-        Options.embed = 'main'
 
     source = setup_source_object(source, source_ext, full_module_name, options, context)
     # Set up result object
     result = create_default_resultobj(source, options)
 
-    # No need to check options.annotate, we're using Options.annotate directly
-    
+    if options.annotate is None:
+        # By default, decide based on whether an html file already exists.
+        html_filename = os.path.splitext(result.c_file)[0] + ".html"
+        if os.path.exists(html_filename):
+            with open(html_filename, encoding="UTF-8") as html_file:
+                if '<!-- Generated by Cython' in html_file.read(100):
+                    options.annotate = True
+
     # Get pipeline
     if source_ext.lower() == '.py' or not source_ext:
         pipeline = Pipeline.create_py_pipeline(context, options, result)
@@ -573,17 +555,14 @@ def run_pipeline(source, options, full_module_name, context):
         warning((source.source_desc, 1, 0),
                 "Dotted filenames ('%s') are deprecated."
                 " Please use the normal Python package directory layout." % os.path.basename(abs_path), level=1)
-    
-    # Check if c_file exists and ends with .cpp or similar extension
-    if hasattr(result, 'c_file') and result.c_file:
-        if re.search("[.]c(pp|[+][+]|xx)$", result.c_file, re.RegexFlag.IGNORECASE) and not context.cpp:
-            warning((source.source_desc, 1, 0),
-                    "Filename implies a c++ file but Cython is not in c++ mode.",
-                    level=1)
+    if re.search("[.]c(pp|[+][+]|xx)$", result.c_file, re.RegexFlag.IGNORECASE) and not context.cpp:
+        warning((source.source_desc, 1, 0),
+                "Filename implies a c++ file but Cython is not in c++ mode.",
+                level=1)
 
     err, enddata = Pipeline.run_pipeline(pipeline, source)
     context.teardown_errors(err, options, result)
-    if err is None and hasattr(options, 'depfile') and options.depfile:
+    if err is None and options.depfile:
         from ..Build.Dependencies import create_dependency_tree
         dependencies = create_dependency_tree(context).all_dependencies(result.main_source_file)
         Utils.write_depfile(result.c_file, result.main_source_file, dependencies)
@@ -656,16 +635,17 @@ class CompilationResultSet(dict):
 
 
 def get_fingerprint(cache, source, options):
-    if Options.embedding_file_timestamp:
-        # Include timestamp of embedding file in fingerprint
-        from ..Utils import modification_time
-        mtime = modification_time(Options.embedding_file_name)
-        return cache.get_fingerprint(options.compiler_directives, source,
-                                     options.compile_time_env, options=options,
-                                     embedding_file_timestamp=mtime)
-    else:
-        return cache.get_fingerprint(options.compiler_directives, source,
-                                    options.compile_time_env, options=options)
+        from ..Build.Dependencies import create_dependency_tree
+        from ..Build.Cache import FingerprintFlags
+        context = Context.from_options(options)
+        dependencies = create_dependency_tree(context)
+        return cache.transitive_fingerprint(
+                source, dependencies.all_dependencies(source), options,
+                FingerprintFlags(
+                    'c++' if options.cplus else 'c',
+                    np_pythran=options.np_pythran
+                )
+        )
 
 
 def compile_single(source, options, full_module_name, cache=None, context=None, fingerprint=None):
@@ -676,6 +656,7 @@ def compile_single(source, options, full_module_name, cache=None, context=None, 
     Always compiles a single file; does not perform timestamp checking or
     recursion.
     """
+
     if context is None:
         context = Context.from_options(options)
 
@@ -733,51 +714,24 @@ def compile(source, options = None, full_module_name = None, **kwds):
     checking is requested, a CompilationResult is returned, otherwise a
     CompilationResultSet is returned.
     """
-    # Special case for direct execution
-    if __name__ == "__main__" or sys._getframe(1).f_globals['__name__'] == "__main__":
-        print(f"{Colors.BOLD}{Colors.GREEN}Direct execution detected in compile function{Colors.ENDC}")
-        # Set these on the module level Options directly
-        Options.annotate = 'default'
-        Options.embed = 'main'
-        
-        # Handle embed/annotate in kwds to avoid validation errors
-        for key in ['embed', 'annotate']:
-            if key in kwds:
-                del kwds[key]
-        
-        # If options is a CmdLineOptions, convert to a clean dict without problematic attributes
-        if options is not None:
-            clean_defaults = {}
-            if hasattr(options, '__dict__'):
-                # Copy attributes excluding problematic ones
-                for key, value in vars(options).items():
-                    if key not in ('embed', 'annotate'):
-                        clean_defaults[key] = value
-            else:
-                # If not a proper object, make it None
-                clean_defaults = default_options
-            options = clean_defaults
-
-    # Create the compilation options 
-    options = CompilationOptions(**options, **kwds)
+    options = CompilationOptions(**options.as_dict(), **kwds) # type: ignore
 
     # cache is enabled when:
     # * options.cache is True (the default path to the cache base dir is used)
     # * options.cache is the explicit path to the cache base dir
     # unless annotations are generated
     cache = None
-    if hasattr(options, 'cache') and getattr(options, 'cache', False):
-        # Check for Options.annotate directly since options may not have annotate
-        if Options.annotate:
-            if hasattr(options, 'verbose') and options.verbose:
+    if options.cache:
+        if options.annotate or Options.annotate:
+            if options.verbose:
                 sys.stderr.write('Cache is ignored when annotations are enabled.\n')
         else:
             from ..Build.Cache import Cache
-            cache_path = None if getattr(options, 'cache', True) is True else options.cache
+            cache_path = None if options.cache is True else options.cache
             cache = Cache(cache_path)
 
     if isinstance(source, str):
-        if not getattr(options, 'timestamps', None):
+        if not options.timestamps:
             return compile_single(source, options, full_module_name, cache)
         source = [source]
     return compile_multiple(source, options, cache)
@@ -865,9 +819,7 @@ def setuptools_main():
 
 
 def main(command_line = 0):
-    print(f"\n{Colors.BOLD}{Colors.RED}DEBUG: Entering Main.main() function, command_line={command_line}{Colors.ENDC}\n") # DEBUG
     args = sys.argv[1:]
-    print(f"Raw args in main(): {args}")
     any_failures = 0
     if command_line:
         try:
@@ -879,24 +831,15 @@ def main(command_line = 0):
         options = CompilationOptions(default_options)
         sources = args
 
-    if hasattr(options, 'show_version') and options.show_version:
+    if options.show_version:
         Utils.print_version()
 
-    # Only change directory if working_path is not None and not empty
-    if hasattr(options, 'working_path') and options.working_path and options.working_path != "":
+    if options.working_path!="":
         os.chdir(options.working_path)
 
-    # If running directly from Main, set these values in the Options module
-    # This ensures embedding and annotation work in direct execution
-    if __name__ == "__main__":
-        Options.annotate = 'default'
-        Options.embed = 'main'
-        print(f"{Colors.BOLD}{Colors.GREEN}Set Options.annotate = {Options.annotate}{Colors.ENDC}")
-        print(f"{Colors.BOLD}{Colors.GREEN}Set Options.embed = {Options.embed}{Colors.ENDC}")
-
     try:
-        if hasattr(options, 'shared_c_file_path') and options.shared_c_file_path:
-            from Cython.Build.SharedModule import generate_shared_module
+        if options.shared_c_file_path:
+            from ..Build.SharedModule import generate_shared_module
             generate_shared_module(options)
             return
 
@@ -908,30 +851,3 @@ def main(command_line = 0):
         any_failures = 1
     if any_failures:
         sys.exit(1)
-
-
-if __name__ == "__main__":
-    # This allows running the Main module directly, similar to -m
-    # WARNING: This is generally discouraged for modules within packages.
-    # Add the parent directory to sys.path to allow relative imports.
-    import os
-    import sys
-    
-    # Use absolute import for Colors
-    from Cython.Compiler.CmdLine import Colors
-    
-    script_dir = os.path.dirname(__file__)
-    package_dir = os.path.abspath(os.path.join(script_dir, os.pardir))
-    project_dir = os.path.abspath(os.path.join(package_dir, os.pardir))
-    if project_dir not in sys.path:
-        sys.path.insert(0, project_dir)
-        print(f"{Colors.YELLOW}DEBUG: Added {project_dir} to sys.path for direct execution{Colors.ENDC}")
-
-    # Set needed options directly on the Options module
-    from Cython.Compiler import Options
-    Options.annotate = 'default'
-    Options.embed = 'main'
-    print(f"{Colors.BOLD}{Colors.GREEN}Set Options.annotate = {Options.annotate} and Options.embed = {Options.embed}{Colors.ENDC}")
-    
-    # Call setuptools_main
-    setuptools_main()

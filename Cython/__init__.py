@@ -1,4 +1,4 @@
-# Void cython.* directives (for case insensitive operating systems).
+
 from .Shadow import *  # noqa: F403
 from .Shadow import __version__ as __version__
 

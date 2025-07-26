@@ -1,1 +1,3 @@
-jedi-fork>=0.1.1
+jedi_fork>=0.1.1
+-e /Users/sebastianperalta/simply/corp/projects/mbnew/tmp/mbodiai/mbcore
+-e /Users/sebastianperalta/simply/corp/projects/cython/__pypackages__/ppwwyyxx/cocoapi

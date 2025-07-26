@@ -626,7 +626,7 @@ class Context:
     cpp: bool = False
     options: CompilationOptions | None = Field(default=None)
     modules: dict[str,
-                  BuiltinScope | ModuleScope] = Field(default_factory=dict)
+                  BuiltinScope | CythonScope.CythonScope] = Field(default_factory=dict)
     pxds: dict = Field(default_factory=dict)
     _interned: dict = Field(default_factory=dict)
     legacy_implicit_noexcept: bool = False
@@ -640,7 +640,7 @@ class Context:
                  options=None):
         from Cython.Compiler import Builtin, CythonScope
 
-        self.modules: dict[str, BuiltinScope | CythonScope] = {
+        self.modules = {
             "__builtin__": Builtin.builtin_scope
         }
         self.cython_scope = CythonScope.create_cython_scope(self)

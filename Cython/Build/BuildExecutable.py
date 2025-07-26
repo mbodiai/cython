@@ -279,10 +279,39 @@ def ccompile(basename):
 
 
 def cycompile(input_file, options=()):
-    from ..Compiler import Version, CmdLine, Main
-    options, sources = CmdLine.parse_command_line(list(options or ()) + ['--embed', input_file])
+    from ..Compiler import Version, Main
+    
+    # Skip CmdLine import attempt to avoid dependency on rich_click
     _debug('Using Cython %s to compile %s', Version.version, input_file)
-    result = Main.compile(sources, options)
+    
+    # Create compilation options directly without using CmdLine
+    from ..Compiler.Options import CompilationOptions, default_options
+    comp_options = CompilationOptions(**default_options)
+    
+    # Apply essential options
+    comp_options.embed = True  # Add embedding
+    
+    # Set the output file based on the input file
+    basename = os.path.splitext(input_file)[0]
+    if comp_options.cplus:
+        comp_options.output_file = basename + '.cpp'
+    else:
+        comp_options.output_file = basename + '.c'
+    
+    # Process any command-line options that were passed
+    # (basic handling of common options without CmdLine dependency)
+    for opt in options:
+        if opt == '--cplus' or opt == '-+':
+            comp_options.cplus = True
+            if comp_options.output_file.endswith('.c'):
+                comp_options.output_file = comp_options.output_file[:-2] + '.cpp'
+        elif opt == '--no-docstrings' or opt == '-D':
+            comp_options.docstrings = False
+    
+    _debug(f"Direct compilation with output: {comp_options.output_file}")
+    
+    # Compile the file
+    result = Main.compile(input_file, comp_options)
     if result.num_errors > 0:
         sys.exit(1)
 

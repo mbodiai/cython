@@ -527,7 +527,7 @@ def parse_command_line(args: List[str]) -> Tuple[Options.CompilationOptions, Lis
     # print(f"Compatibility parse_command_line received args: {args}") # Debug
     try:
         prog_name = os.path.basename(sys.argv[0]) if sys.argv else 'cython'
-        context = cython_command.make_context(info_name=prog_name, args=args, standalone_mode=False)
+        context = cython_command.make_context(info_name=prog_name, args=args)
 
         if '--help' in args or '-h' in args:
              print_usage()
@@ -550,7 +550,7 @@ def parse_command_line(args: List[str]) -> Tuple[Options.CompilationOptions, Lis
             sys.exit(1)
 
     except click.exceptions.Exit as e:
-        sys.exit(e.code)
+        sys.exit(e)
     except click.exceptions.UsageError as e:
         print(e.format_message(), file=sys.stderr)
         sys.exit(e.exit_code)
@@ -625,7 +625,7 @@ def create_cython_argparser() -> ArgumentParser:
 @click.option('--module-name', type=str, default=None, help='Fully qualified module name.')
 @click.option('-M', '--depfile', 'make_depfile', is_flag=True, default=False, help='Produce depfiles for the sources.') 
 @click.option('--cache', is_flag=True, default=False, help='Enable Cython compilation cache.')
-@click.option('--embed', type=str, default=None, is_flag=False, flag_value='main', help='Generate main() embedding Python. Optional value=func name.', metavar='[FUNC_NAME]')
+@click.option('--embed', type=str, default=None, is_flag=True, flag_value='main', help='Generate main() embedding Python. Optional value=FUNC_NAME.', metavar='[FUNC_NAME]')
 @click.option('--gdb', 'gdb_debug', is_flag=True, default=False, help='Output debug information for cygdb.')
 @click.option('--gdb-outdir', type=click.Path(file_okay=False, writable=True, resolve_path=True), callback=OptionHandlers.handle_gdb_outdir, help='Specify gdb debug output directory (implies --gdb).')
 @click.option('--annotate-coverage', type=click.Path(exists=True, dir_okay=False), callback=OptionHandlers.handle_annotate_coverage, help='Annotate using coverage.xml (implies -a).')
@@ -648,6 +648,15 @@ def cython_command(ctx: click.Context, sources: Tuple[str, ...], _version_flag_s
     if _version_flag_set:
         print_version()
         ctx.exit()
+
+    # Fail fast if the user did not supply any sources.  Historically the
+    # compiler would happily exit with success in that case, which is usually
+    # an error due to a mis-typed option (e.g. ``--embed`` eating the first
+    # filename).  We treat *zero* sources as a usage error unless a specialised
+    # action (such as ``--shared``) explicitly allows it.
+    if not sources:
+        print(Colors.error("Error: No source files supplied."), file=sys.stderr)
+        ctx.exit(1)
 
     # print(Colors.info("Processing options...")) # Debug
     final_options = {} 

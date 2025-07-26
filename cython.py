@@ -4,7 +4,10 @@
 #   Cython -- Main Program, generic
 #
 
-TYPE_CHECKING = False
+try:
+    from typing import TYPE_CHECKING
+except ImportError:
+    TYPE_CHECKING = False
 
 if not TYPE_CHECKING and __name__ == '__main__':
 
@@ -20,6 +23,7 @@ if not TYPE_CHECKING and __name__ == '__main__':
 
 else:
     # Void cython.* directives.
-    ## and bring in the __version__
-    from Cython import __version__, load_ipython_extension
     from Cython.Shadow import *
+    ## and bring in the __version__
+    from Cython import __version__
+    from Cython import load_ipython_extension

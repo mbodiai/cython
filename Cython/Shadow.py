@@ -1,16 +1,8 @@
+# cython.* namespace for pure mode.
 
-
-TYPE_CHECKING=False
-if TYPE_CHECKING:
-    from Cython.Compiler.Options import CompilationOptions
-else:
-    TypeVar = lambda *args, **kwargs: object
-    class CompilationOptions:
-        pass
 # Possible version formats: "3.1.0", "3.1.0a1", "3.1.0a1.dev0"
 __version__ = "3.1.0b1"
 
-from Cython.Compiler.Options import CompilationOptions
 
 # BEGIN shameless copy from Cython/minivect/minitypes.py
 
@@ -105,6 +97,8 @@ class _EmptyDecoratorAndManager:
     def __exit__(self, exc_type, exc_value, traceback):
         pass
 
+class _Optimization:
+    pass
 
 cclass = ccall = cfunc = _EmptyDecoratorAndManager()
 
@@ -122,14 +116,6 @@ annotation_typing = returns = wraparound = boundscheck = initializedcheck = \
 fast_getattr = lambda _: _EmptyDecoratorAndManager()
 # c_compile_guard is largely for internal use
 c_compile_guard = lambda _:_EmptyDecoratorAndManager()
-
-class _Optimization:
-    """Empty class used for optimization attributes."""
-    def __call__(self, *args, **kwargs):
-        return _EmptyDecoratorAndManager()
-    
-    def __getattr__(self, name):
-        return lambda arg: _EmptyDecoratorAndManager()
 
 exceptval = lambda _=None, check=True: _EmptyDecoratorAndManager()
 
@@ -213,8 +199,8 @@ def _is_value_type(t):
         return _is_value_type(t._basetype)
 
     return isinstance(t, type) and issubclass(t, (StructType, UnionType, ArrayType))
-T=TypeVar('T')
-def declare(t:type|None=None, value:T=_Unspecified, **kwds):
+
+def declare(t=None, value=_Unspecified, **kwds):
     if value is not _Unspecified:
         return cast(t, value)
     elif _is_value_type(t):
@@ -273,7 +259,6 @@ class CythonType(CythonTypeObject):
         return self
 
 class PointerType(CythonType):
-    _basetype: CythonType
 
     def __init__(self, value=None):
         if isinstance(value, (ArrayType, PointerType)):
@@ -317,7 +302,6 @@ class ArrayType(PointerType):
 
 
 class StructType(CythonType):
-    _members: dict[str, CythonType]
 
     def __init__(self, *posargs, **data):
         if not (posargs or data):
@@ -358,7 +342,6 @@ class StructType(CythonType):
 
 
 class UnionType(CythonType):
-    _members: dict[str, CythonType]
 
     def __init__(self, cast_from=_Unspecified, **data):
         if cast_from is not _Unspecified:
@@ -677,31 +660,12 @@ class CythonCImports:
 
 
 import math, sys
-if not TYPE_CHECKING:
-    sys.modules['cython.parallel'] = CythonDotParallel()
-    sys.modules['cython.cimports.libc.math'] = math
-    sys.modules['cython.cimports.libc'] = CythonCImports('cython.cimports.libc', math=math)
-    sys.modules['cython.cimports'] = CythonCImports('cython.cimports', libc=sys.modules['cython.cimports.libc'])
+sys.modules['cython.parallel'] = CythonDotParallel()
+sys.modules['cython.cimports.libc.math'] = math
+sys.modules['cython.cimports.libc'] = CythonCImports('cython.cimports.libc', math=math)
+sys.modules['cython.cimports'] = CythonCImports('cython.cimports', libc=sys.modules['cython.cimports.libc'])
 
-    # In pure Python mode @cython.dataclasses.dataclass and dataclass field should just
-    # shadow the standard library ones (if they are available)
-    dataclasses = sys.modules['cython.dataclasses'] = CythonDotImportedFromElsewhere('dataclasses')
-else:
-    from typing import Any
-    parallel = CythonDotParallel()
-    cimports = CythonCImports('cython.cimports')
-    
-    dataclasses = CythonDotImportedFromElsewhere('dataclasses')
-    double = Any
-    int = Any
-    float = Any
-    long = Any
-    short = Any
-    char = Any
-    unsigned_long = Any
-    unsigned_int = Any
-    unsigned_short = Any
-    unsigned_char = Any
-    unsigned_long_long = Any
-    
+# In pure Python mode @cython.dataclasses.dataclass and dataclass field should just
+# shadow the standard library ones (if they are available)
+dataclasses = sys.modules['cython.dataclasses'] = CythonDotImportedFromElsewhere('dataclasses')
 del math, sys
