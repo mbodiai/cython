@@ -4,6 +4,7 @@
 #
 
 
+from cython.Cython.Compiler.Options import DirectivesDict
 from . import Naming
 from . import PyrexTypes
 from .Errors import error, warn_once
@@ -1158,7 +1159,7 @@ def get_slot_table(compiler_directives):
         # fetch default directives here since the builtin type classes don't have
         # directives set
         from .Options import get_directive_defaults
-        compiler_directives = get_directive_defaults()
+        compiler_directives: DirectivesDict = get_directive_defaults()
 
     old_binops = compiler_directives['c_api_binop_methods']
     key = (old_binops,)

@@ -1014,14 +1014,23 @@ def cythonize(module_list, exclude=None, nthreads=0, aliases=None, quiet=False, 
                     options = cpp_options
                 else:
                     c_file = base + '.c'
-                    options = c_options
+
+                # When not using an explicit build_dir, distutils sometimes
+                # changes cwd to the build temp directory and then passes the
+                # *relative* path of the generated C source to the compiler.
+                # This breaks when the path contains directories ("tests/run/")
+                # because the relative path is no longer valid from inside the
+                # build/temp.* directory.  If no build_dir is provided we fix
+                # this by switching to an *absolute* path so the compiler can
+                # always locate the file.
+
+
 
                 # setup for out of place build directory if enabled
                 if build_dir:
-                    if os.path.isabs(c_file):
-                        c_file = os.path.splitdrive(c_file)[1]
-                        c_file = c_file.split(os.sep, 1)[1]
-                    c_file = os.path.join(build_dir, c_file)
+                    # Place generated C source inside *build_dir* using only
+                    # the base filename so we avoid deep directory trees.
+                    c_file = os.path.join(build_dir, os.path.basename(c_file))
                     dir = os.path.dirname(c_file)
                     safe_makedirs_once(dir)
 

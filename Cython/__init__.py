@@ -1,6 +1,14 @@
 
+# Provide a provisional version string *before* importing sub-modules
+# to break circular import chains that expect ``Cython.__version__``
+# to exist very early (e.g. ``Cython.Build.Cache``).
+# It will be overwritten with the canonical value a few lines below.
+__version__ = "0.0"
+
 from .Shadow import *  # noqa: F403
 from .Shadow import __version__ as __version__
+# Ensure downstream modules have a non-None version string
+cython_version = __version__
 
 TYPE_CHECKING = False   
 if TYPE_CHECKING:

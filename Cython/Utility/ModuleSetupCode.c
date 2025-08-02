@@ -426,6 +426,10 @@
   #endif
 #endif
 
+#ifndef CYTHON_LOCK_AND_GIL_DEADLOCK_AVOIDANCE_TIME
+  #define CYTHON_LOCK_AND_GIL_DEADLOCK_AVOIDANCE_TIME 100  /* ms */
+#endif
+
 #ifndef __has_attribute
   #define __has_attribute(x) 0
 #endif
@@ -486,7 +490,7 @@
 #endif
 
 #ifndef CYTHON_NCP_UNUSED
-# if CYTHON_COMPILING_IN_CPYTHON
+# if CYTHON_COMPILING_IN_CPYTHON && !CYTHON_COMPILING_IN_CPYTHON_FREETHREADING
 #  define CYTHON_NCP_UNUSED
 # else
 #  define CYTHON_NCP_UNUSED CYTHON_UNUSED
@@ -630,6 +634,7 @@
 #endif
 
 // Work around clang bug https://stackoverflow.com/questions/21847816/c-invoke-nested-template-class-destructor
+// (even without the clang bug, the need not to know the typename is generally a benefit)
 template<typename T>
 void __Pyx_call_destructor(T& x) {
     x.~T();
@@ -668,29 +673,37 @@ class __Pyx_FakeReference {
 
 #if CYTHON_COMPILING_IN_LIMITED_API
     // Cython uses these constants but they are not available in the limited API.
-    // (it'd be nice if there was a more robust way of looking these up)
+    // Therefore define them as static variables and look them up at module init.
     #ifndef CO_OPTIMIZED
-    #define CO_OPTIMIZED 0x0001
+    static int CO_OPTIMIZED;
     #endif
     #ifndef CO_NEWLOCALS
-    #define CO_NEWLOCALS 0x0002
+    static int CO_NEWLOCALS;
     #endif
     #ifndef CO_VARARGS
-    #define CO_VARARGS 0x0004
+    static int CO_VARARGS;
     #endif
     #ifndef CO_VARKEYWORDS
-    #define CO_VARKEYWORDS 0x0008
+    static int CO_VARKEYWORDS;
     #endif
     #ifndef CO_ASYNC_GENERATOR
-    #define CO_ASYNC_GENERATOR 0x0200
+    static int CO_ASYNC_GENERATOR;
     #endif
     #ifndef CO_GENERATOR
-    #define CO_GENERATOR 0x0020
+    static int CO_GENERATOR;
     #endif
     #ifndef CO_COROUTINE
-    #define CO_COROUTINE 0x0080
+    static int CO_COROUTINE;
+    #endif
+#else
+    #ifndef CO_COROUTINE
+      #define CO_COROUTINE 0x80
+    #endif
+    #ifndef CO_ASYNC_GENERATOR
+      #define CO_ASYNC_GENERATOR 0x200
     #endif
 #endif
+static int __Pyx_init_co_variables(void); /* proto */
 
 #if PY_VERSION_HEX >= 0x030900A4 || defined(Py_IS_TYPE)
   #define __Pyx_IS_TYPE(ob, type) Py_IS_TYPE(ob, type)
@@ -724,13 +737,6 @@ class __Pyx_FakeReference {
   #define __Pyx_PyObject_GC_IsFinalized(o) PyObject_GC_IsFinalized(o)
 #else
   #define __Pyx_PyObject_GC_IsFinalized(o) _PyGC_FINALIZED(o)
-#endif
-
-#ifndef CO_COROUTINE
-  #define CO_COROUTINE 0x80
-#endif
-#ifndef CO_ASYNC_GENERATOR
-  #define CO_ASYNC_GENERATOR 0x200
 #endif
 
 #ifndef Py_TPFLAGS_CHECKTYPES
@@ -1074,11 +1080,19 @@ static CYTHON_INLINE PyObject * __Pyx_PyDict_GetItemStrWithError(PyObject *dict,
   #define __Pyx_SET_SIZE(obj, size) Py_SIZE(obj) = (size)
 #endif
 
-#if CYTHON_COMPILING_IN_LIMITED_API || CYTHON_AVOID_BORROWED_REFS || CYTHON_AVOID_THREAD_UNSAFE_BORROWED_REFS || !CYTHON_ASSUME_SAFE_MACROS
+#if CYTHON_AVOID_BORROWED_REFS || CYTHON_AVOID_THREAD_UNSAFE_BORROWED_REFS
+  #if __PYX_LIMITED_VERSION_HEX >= 0x030d0000
+    #define __Pyx_PyList_GetItemRef(o, i) PyList_GetItemRef(o, i)
+  #elif CYTHON_COMPILING_IN_LIMITED_API || !CYTHON_ASSUME_SAFE_MACROS
+    #define __Pyx_PyList_GetItemRef(o, i) (likely((i) >= 0) ? PySequence_GetItem(o, i) : (PyErr_SetString(PyExc_IndexError, "list index out of range"), (PyObject*)NULL))
+  #else
+    #define __Pyx_PyList_GetItemRef(o, i) PySequence_ITEM(o, i)
+  #endif
+#elif CYTHON_COMPILING_IN_LIMITED_API || !CYTHON_ASSUME_SAFE_MACROS
   #if __PYX_LIMITED_VERSION_HEX >= 0x030d0000
     #define __Pyx_PyList_GetItemRef(o, i) PyList_GetItemRef(o, i)
   #else
-    #define __Pyx_PyList_GetItemRef(o, i) PySequence_GetItem(o, i)
+    #define __Pyx_PyList_GetItemRef(o, i) __Pyx_XNewRef(PyList_GetItem(o, i))
   #endif
 #else
   #define __Pyx_PyList_GetItemRef(o, i) __Pyx_NewRef(PyList_GET_ITEM(o, i))
@@ -1234,6 +1248,57 @@ extern "C"
 PyAPI_FUNC(void *) PyMem_Calloc(size_t nelem, size_t elsize); /* proto */
 #endif
 
+#if CYTHON_COMPILING_IN_LIMITED_API
+// returns 1 for success and 0 for failure to enable it to be chained in an &&
+static int __Pyx_init_co_variable(PyObject *inspect, const char* name, int *write_to) {
+    int value;
+    PyObject *py_value = PyObject_GetAttrString(inspect, name);
+    if (!py_value) return 0;
+    // There's a small chance of overflow here, but it'd only happen if inspect was set up wrongly.
+    value = (int) PyLong_AsLong(py_value);
+    Py_DECREF(py_value);
+    *write_to = value;
+    return value != -1 || !PyErr_Occurred();
+}
+
+// Returns 0 on success and -1 on failure for normal error handling
+static int __Pyx_init_co_variables(void) {
+    PyObject *inspect;
+    int result;
+    inspect = PyImport_ImportModule("inspect");
+
+    result =
+#if !defined(CO_OPTIMIZED)
+        __Pyx_init_co_variable(inspect, "CO_OPTIMIZED", &CO_OPTIMIZED) &&
+#endif
+#if !defined(CO_NEWLOCALS)
+        __Pyx_init_co_variable(inspect, "CO_NEWLOCALS", &CO_NEWLOCALS) &&
+#endif
+#if !defined(CO_VARARGS)
+        __Pyx_init_co_variable(inspect, "CO_VARARGS", &CO_VARARGS) &&
+#endif
+#if !defined(CO_VARKEYWORDS)
+        __Pyx_init_co_variable(inspect, "CO_VARKEYWORDS", &CO_VARKEYWORDS) &&
+#endif
+#if !defined(CO_ASYNC_GENERATOR)
+        __Pyx_init_co_variable(inspect, "CO_ASYNC_GENERATOR", &CO_ASYNC_GENERATOR) &&
+#endif
+#if !defined(CO_GENERATOR)
+        __Pyx_init_co_variable(inspect, "CO_GENERATOR", &CO_GENERATOR) &&
+#endif
+#if !defined(CO_COROUTINE)
+        __Pyx_init_co_variable(inspect, "CO_COROUTINE", &CO_COROUTINE) &&
+#endif
+        1;
+
+    Py_DECREF(inspect);
+    return result ? 0 : -1;
+}
+#else
+static int __Pyx_init_co_variables(void) {
+    return 0;  // It's a limited API-only feature
+}
+#endif
 
 /////////////// CythonABIVersion.proto ///////////////
 //@proto_block: module_declarations
@@ -1283,6 +1348,10 @@ PyAPI_FUNC(void *) PyMem_Calloc(size_t nelem, size_t elsize); /* proto */
 
 #define __PYX_ABI_MODULE_NAME "_cython_" CYTHON_ABI
 #define __PYX_TYPE_MODULE_PREFIX __PYX_ABI_MODULE_NAME "."
+
+/////////////// PythonCompatibility.init ///////////////
+
+if (likely(__Pyx_init_co_variables() == 0)); else
 
 
 /////////////// IncludeStructmemberH.proto ///////////////
@@ -1606,7 +1675,7 @@ bad:
 
 
 /////////////// CodeObjectCache.proto ///////////////
-//@requires: MemoryView_C.c::Atomics
+//@requires: Synchronization.c::Atomics
 
 #if CYTHON_COMPILING_IN_LIMITED_API
 typedef PyObject __Pyx_CachedCodeObjectType;
@@ -2251,7 +2320,10 @@ static void __Pyx_FastGilFuncInit(void) {
 // In C++ a variable must actually be initialized to make returning
 // it defined behaviour, and there doesn't seem to be a viable compiler trick to
 // avoid that.
+#if __cplusplus > 201103L
 #include <type_traits>
+#endif
+
 template <typename T>
 static void __Pyx_pretend_to_initialize(T* ptr) {
     // In C++11 we have enough introspection to work out which types it's actually
@@ -2298,12 +2370,12 @@ static PyObject* __Pyx_PyCode_New(
         // int s,
         //int flags,
         //int first_line,
-        __Pyx_PyCode_New_function_description descr,
+        const __Pyx_PyCode_New_function_description descr,
         // PyObject *code,
         // PyObject *consts,
         // PyObject* n,
         // PyObject *varnames_tuple,
-        PyObject **varnames,
+        PyObject * const *varnames,
         // PyObject *freevars,
         // PyObject *cellvars,
         PyObject *filename,
@@ -2428,15 +2500,15 @@ static PyObject* __Pyx_PyCode_New(
         // int s,
         //int flags,
         //int first_line,
-        __Pyx_PyCode_New_function_description descr,
+        const __Pyx_PyCode_New_function_description descr,
         // PyObject *code,
         // PyObject *consts,
         // PyObject* n,
         // PyObject *varnames_tuple,
-        PyObject **varnames,
+        PyObject * const *varnames,
         // PyObject *freevars,
         // PyObject *cellvars,
-        PyObject* filename,
+        PyObject *filename,
         PyObject *funcname,
         // line table replaced lnotab in Py3.11 (PEP-626)
         const char *line_table,
@@ -2516,14 +2588,6 @@ done:
 }
 
 
-////////////////////////// SharedInFreeThreading.proto //////////////////
-
-#if CYTHON_COMPILING_IN_CPYTHON_FREETHREADING
-#define __Pyx_shared_in_cpython_freethreading(x) shared(x)
-#else
-#define __Pyx_shared_in_cpython_freethreading(x)
-#endif
-
 ////////////////////////// MultiPhaseInitModuleState.proto /////////////
 
 #if CYTHON_PEP489_MULTI_PHASE_INIT && CYTHON_USE_MODULE_STATE
@@ -2541,7 +2605,7 @@ static int __Pyx_State_RemoveModule(void*); /* proto */
 #endif
 
 ////////////////////////// MultiPhaseInitModuleState /////////////
-//@requires: MemoryView_C.c::Atomics
+//@requires: Synchronization.c::Atomics
 
 
 // Code to maintain a mapping between (sub)interpreters and the module instance that they imported.
@@ -2968,33 +3032,6 @@ static int __Pyx_State_RemoveModule(CYTHON_UNUSED void* dummy) {
     return 0;
 }
 
-#endif
-
-/////////////////////// CriticalSections.proto /////////////////////
-//@proto_block: utility_code_proto_before_types
-
-#if !CYTHON_COMPILING_IN_CPYTHON_FREETHREADING
-#define __Pyx_PyCriticalSection void*
-#define __Pyx_PyCriticalSection2 void*
-#define __Pyx_PyCriticalSection_Begin1(cs, arg) (void)cs
-#define __Pyx_PyCriticalSection_Begin2(cs, arg1, arg2) (void)cs
-#define __Pyx_PyCriticalSection_End1(cs)
-#define __Pyx_PyCriticalSection_End2(cs)
-#else
-#define __Pyx_PyCriticalSection PyCriticalSection
-#define __Pyx_PyCriticalSection2 PyCriticalSection2
-#define __Pyx_PyCriticalSection_Begin1 PyCriticalSection_Begin
-#define __Pyx_PyCriticalSection_Begin2 PyCriticalSection2_Begin
-#define __Pyx_PyCriticalSection_End1 PyCriticalSection_End
-#define __Pyx_PyCriticalSection_End2 PyCriticalSection2_End
-#endif
-
-#if PY_VERSION_HEX < 0x030d0000 || CYTHON_COMPILING_IN_LIMITED_API
-#define __Pyx_BEGIN_CRITICAL_SECTION(o) {
-#define __Pyx_END_CRITICAL_SECTION() }
-#else
-#define __Pyx_BEGIN_CRITICAL_SECTION Py_BEGIN_CRITICAL_SECTION
-#define __Pyx_END_CRITICAL_SECTION Py_END_CRITICAL_SECTION
 #endif
 
 ////////////////////// IncludeStdlibH.proto //////////////////////

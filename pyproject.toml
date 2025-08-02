@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "wheel", "rich_click"]
+requires = ["setuptools", "wheel","rich_click"]
 
 [tool.cibuildwheel]
 build-verbosity = 2
@@ -32,23 +32,13 @@ archs = ["AMD64", "x86"]
 archs = ["x86_64", "arm64"]
 
 
-[tool.pyright]
-extraPaths = ["../mbnew/tmp/mbodiai/mbcore/src","../mbnew"]
 [project]
 name = "cython"
 dynamic = ["scripts", "urls", "version", "classifiers", "authors", "readme", "license", "requires-python", "description"]
 
-dependencies = [
-    "rich_click>=1.10.0",
-    "cython @ file://cython",
-    "pycocotools @ file:///Users/sebastianperalta/simply/corp/projects/cython/__pypackages__/ppwwyyxx/cocoapi",
-]
 
 
-[project.optional-dependencies]
-all = [
-    "pycocotools @ file:///Users/sebastianperalta/simply/corp/projects/cython/__pypackages__/ppwwyyxx/cocoapi",
-]
+
 [tool.cyright]
 license = "Apache-2.0"
 

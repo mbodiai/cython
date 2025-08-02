@@ -515,7 +515,7 @@ def get_directive_defaults() -> DirectivesDict:
     return _directive_defaults.copy()
 
 def copy_inherited_directives(outer_directives: DirectivesDict,
-                              **new_directives: object) -> DirectivesDict:
+                              **new_directives: Any) -> DirectivesDict:
     # A few directives are not copied downwards and this function removes them.
     # For example, test_assert_path_exists and test_fail_if_path_exists should not be inherited
     #  otherwise they can produce very misleading test failures
@@ -523,7 +523,7 @@ def copy_inherited_directives(outer_directives: DirectivesDict,
     for name in ('test_assert_path_exists', 'test_fail_if_path_exists', 'test_assert_c_code_has', 'test_fail_if_c_code_has',
                  'critical_section'):
         new_directives_out.pop(name, None)
-    new_directives_out.update(new_directives)
+    new_directives_out.update(**new_directives)
     return new_directives_out
 
 
@@ -1293,7 +1293,6 @@ class CompilationOptionsDict(TypedDict, total=False):
     """TypedDict representation of CompilationOptions for type checking and serialization."""
     include_path: List[str]
     output_file: Optional[str]
-    embedding_file_name: Optional[str]
     show_version: bool
     use_listing_file: bool
     errors_to_stderr: bool

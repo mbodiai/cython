@@ -120,6 +120,10 @@ def run_distutils(args):
             raise ImportError("'distutils' is not available. Please install 'setuptools' for binary builds.")
 
     base_dir, ext_modules = args
+    if os.environ.get('CYTHON_PATH_DEBUG'):
+        print('[run_distutils] base_dir:', base_dir)
+    from Cython.Distutils import build_ext as cy_build_ext
+
     script_args = ['build_ext', '-i']
     cwd = os.getcwd()
     temp_dir = None
@@ -128,10 +132,21 @@ def run_distutils(args):
             os.chdir(base_dir)
             temp_dir = tempfile.mkdtemp(dir=base_dir)
             script_args.extend(['--build-temp', temp_dir])
+
+        # Ensure that all source paths provided to setup() are relative (setuptools requirement)
+        for _ext in ext_modules:
+            sanitized = []
+            for _src in _ext.sources:
+                if os.path.isabs(_src):
+                    sanitized.append(os.path.relpath(_src, os.getcwd()))
+                else:
+                    sanitized.append(_src)
+            _ext.sources = sanitized
         setup(
             script_name='setup.py',
             script_args=script_args,
             ext_modules=ext_modules,
+            cmdclass={'build_ext': cy_build_ext},
         )
     finally:
         if base_dir:

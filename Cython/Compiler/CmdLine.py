@@ -6,19 +6,12 @@
 from dataclasses import dataclass, field
 import os
 import sys
-import getopt
-from typing import Dict, List, Optional, Tuple, Union, Any, Set, Callable
+from typing import Dict, List, Optional, Tuple, Union, Any
 from argparse import Action, ArgumentParser
-from functools import reduce, partial
 import rich_click as click
-from rich_click import RichCommand, RichGroup
-from rich.console import Console
 import importlib.metadata
-import shlex # For config file parsing
 
 from Cython.Compiler import Options
-from Cython.Compiler import DebugFlags
-from Cython.Shadow import __version__ as cython_version
 
 
 # ANSI color codes for terminal output
@@ -79,7 +72,7 @@ class ParseOptionsAction(Action):
                 for opt in values.split(','):
                     if '=' in opt:
                         n, v = opt.split('=', 1)
-                        v = v.lower() not in ('false', 'f', '0', 'no')
+
                     else:
                         n, v = opt, True
                     options[n] = v
@@ -88,9 +81,8 @@ class ParseOptionsAction(Action):
                     if isinstance(opt, str):
                         if '=' in opt:
                             n, v = opt.split('=', 1)
-                            v = v.lower() not in ('false', 'f', '0', 'no')
                         else:
-                            n, v = opt, True
+                            n, v = opt, opt
                         options[n] = v
         setattr(namespace, self.dest, options)
 
@@ -256,267 +248,82 @@ def print_usage():
     print("  CYTHONRC: path to the Cython configuration file.")
 
 
+# Trimmed handlers: only callbacks actually used by click
 class OptionHandlers:
-    # KEEPING this class for now as it might still be used internally or needed for reference,
-    # but the primary logic should be moving to the click callbacks.
+    """Minimal click callback helpers; extraneous no-op handlers removed."""
 
+    # ---- global helpers ----
     @staticmethod
     def handle_help(options, value):
-        # This handler isn't used by click callback, but might be called elsewhere?
         print_usage()
         sys.exit(0)
-    
+
     @staticmethod
     def handle_version(options, value):
-        # This handler isn't used by click callback, but might be called elsewhere?
         print_version()
         options.show_version = 1
 
-    @staticmethod
-    def handle_listing_file(ctx, param, value):
-        # Flag handled by click
-        pass 
-
-    @staticmethod
-    def handle_include_dir(ctx, param, value):
-        # Value is already processed by click.Path
-        return value 
-
-    @staticmethod
-    def handle_output_file(ctx, param, value):
-        # Click handles Path type
-        return value
-
-    @staticmethod
-    def handle_timestamps(ctx, param, value):
-        # Flag handled by click
-        pass
-
-    @staticmethod
-    def handle_force(ctx, param, value):
-        # Flag handled by click
-        # Logic is handled later in cython_command based on both flags
-        pass
-
-    @staticmethod
-    def handle_verbose(ctx, param, value):
-        # Flag with count=True handled by click
-        pass
-
-    @staticmethod
-    def handle_embed_positions(ctx, param, value):
-        # Flag handled by click
-        pass
-
-    @staticmethod
-    def handle_pre_import(ctx, param, value):
-        # Click handles str type
-        return value
-
-    @staticmethod
-    def handle_no_docstrings(ctx, param, value):
-        # Flag handled by click
-        pass
-
-    @staticmethod
-    def handle_annotate(ctx, param, value):
-        # Flag handled by click
-        pass
-
-    @staticmethod
-    def handle_annotate_fullc(ctx, param, value):
-        # Flag handled by click
-        pass
-
-    @staticmethod
-    def handle_line_directives(ctx, param, value):
-        # Flag handled by click
-        pass
-
+    # ---- option callbacks ----
     @staticmethod
     def handle_directive(ctx, param, value):
         directives = Options.get_directive_defaults().copy()
-        current_directives = ctx.params.get('compiler_directives', {})
-        if current_directives:
-             directives.update(current_directives)
-
-        if not value: return directives
-
+        current = ctx.params.get('compiler_directives', {})
+        if current:
+            directives.update(current)
+        if not value:
+            return directives
         try:
             for directive_str in value:
                 directives = Options.parse_directive_list(
-                    directive_str, relaxed_bool=True, current_settings=directives)
+                    directive_str, relaxed_bool=True, current_settings=directives
+                )
             return directives
         except ValueError as e:
             raise click.BadParameter(f"Error parsing directives (-X): {e}", ctx=ctx, param=param)
 
     @staticmethod
     def handle_compile_time_env(ctx, param, value):
-        env = {}
-        current_env = ctx.params.get('compile_time_env', {})
-        if current_env:
-            env.update(current_env)
-
-        if not value: return env
-
+        env = dict(ctx.params.get('compile_time_env', {}))
+        if not value:
+            return env
         try:
             for env_str in value:
                 env = Options.parse_compile_time_env(env_str, current_settings=env)
             return env
         except ValueError as e:
-            raise click.BadParameter(f"Error parsing compile-time environment (-E): {e}", ctx=ctx, param=param)
-
-    @staticmethod
-    def handle_working_path(ctx, param, value):
-        # Click handles Path type
-        return value
-
-    @staticmethod
-    def handle_module_name(ctx, param, value):
-        # Click handles str type
-        return value
-
-    @staticmethod
-    def handle_depfile(ctx, param, value):
-        # Flag handled by click
-        pass
-
-    @staticmethod
-    def handle_cplus(ctx, param, value):
-        # Flag handled by click
-        pass
-
-    @staticmethod
-    def handle_embed(ctx, param, value):
-        # Click handles str type and flag_value
-        return value
-
-    @staticmethod
-    def handle_embed_with_name(ctx, param, value):
-        # Redundant with handle_embed now?
-        return value
-
-    @staticmethod
-    def handle_py2(ctx, param, value):
-        # Flag handled by click
-        pass
-
-    @staticmethod
-    def handle_py3(ctx, param, value):
-        # Flag handled by click
-        pass
-
-    @staticmethod
-    def handle_lenient(ctx, param, value):
-        # Flag handled by click
-        pass
-
-    @staticmethod
-    def handle_capi_reexport_cincludes(ctx, param, value):
-        # Flag handled by click
-        pass
-
-    @staticmethod
-    def handle_fast_fail(ctx, param, value):
-        # Flag handled by click
-        pass
-
-    @staticmethod
-    def handle_warning_errors(ctx, param, value):
-        # Flag handled by click
-        pass
+            raise click.BadParameter(
+                f"Error parsing compile-time environment (-E): {e}", ctx=ctx, param=param
+            ) from e
 
     @staticmethod
     def handle_warning_extra(ctx, param, value):
-        # Needs to handle the side effect
         if not value or ctx.resilient_parsing:
-             return
+            return
         if 'compiler_directives' not in ctx.params:
             ctx.params['compiler_directives'] = Options.get_directive_defaults().copy()
         ctx.params['compiler_directives'].update(Options.extra_warnings)
-        # No return needed as expose_value=False
-
-    @staticmethod
-    def handle_cache(ctx, param, value):
-        # Flag handled by click
-        pass
-
-    @staticmethod
-    def handle_gdb(ctx, param, value):
-        # Flag handled by click
-        pass
 
     @staticmethod
     def handle_gdb_outdir(ctx, param, value):
-        if value is not None:
-            ctx.params['gdb_debug'] = True # Ensure gdb flag is set
-            try:
-                from pathlib import Path # Ensure Path is available
-                path_obj = Path(value).resolve()
-                os.makedirs(path_obj, exist_ok=True)
-                return str(path_obj) # Return resolved path string
-            except Exception as e:
-                raise click.BadParameter(f"Invalid path for --gdb-outdir: {e}", ctx=ctx, param=param)
-        return None
+        if value is None:
+            return None
+        ctx.params['gdb_debug'] = True
+        from pathlib import Path
+        try:
+            path_obj = Path(value).resolve()
+            os.makedirs(path_obj, exist_ok=True)
+            return str(path_obj)
+        except Exception as e:
+            raise click.BadParameter(f"Invalid path for --gdb-outdir: {e}", ctx=ctx, param=param)
 
     @staticmethod
     def handle_annotate_coverage(ctx, param, value):
         if value is not None:
-            ctx.params['annotate_html'] = True # Ensure annotate flag is set
-            return value # Return the path click gave us
+            ctx.params['annotate_html'] = True
+            return value
         return None
 
-    @staticmethod
-    def handle_no_c_in_traceback(ctx, param, value):
-        # Flag handled by click
-        pass
-
-    @staticmethod
-    def handle_cimport_from_pyx(ctx, param, value):
-        # Flag handled by click
-        pass
-
-    @staticmethod
-    def handle_old_style_globals(ctx, param, value):
-        # Flag handled by click
-        pass
-
-    @staticmethod
-    def handle_convert_range(ctx, param, value):
-        # Flag handled by click
-        pass
-
-    @staticmethod
-    def handle_cleanup(ctx, param, value):
-        # Click handles int type
-        return value
-
-    @staticmethod
-    def handle_generate_shared(ctx, param, value):
-        # Click handles str type
-        return value
-
-    @staticmethod
-    def handle_shared(ctx, param, value):
-        # Click handles str type
-        return value
-
-    @staticmethod
-    def handle_config_file(ctx, param, value):
-        # Logic moved to cython_command function for merging
-        return value
-
-    @staticmethod
-    def handle_output_dir(ctx, param, value):
-        if value:
-            try:
-                from pathlib import Path # Ensure Path is available
-                path_obj = Path(value).resolve()
-                os.makedirs(path_obj, exist_ok=True)
-                return str(path_obj)
-            except Exception as e:
-                 raise click.BadParameter(f"Invalid path for --output-dir: {e}", ctx=ctx, param=param)
-        return None
+# --- legacy handlers kept only for reference; no longer used by click ---
 
 def parse_command_line(args: List[str]) -> Tuple[Options.CompilationOptions, List[str]]:
     """
@@ -557,8 +364,8 @@ def parse_command_line(args: List[str]) -> Tuple[Options.CompilationOptions, Lis
     except click.exceptions.ClickException as e:
         print(Colors.error(f"Error: {e.format_message()}"), file=sys.stderr)
         sys.exit(e.exit_code)
-    except Exception as e:
-        print(Colors.error(f"An unexpected error occurred during command line processing:"), file=sys.stderr)
+    except Exception:
+        print(Colors.error("An unexpected error occurred during command line processing:"), file=sys.stderr)
         import traceback
         traceback.print_exc()
         sys.exit(1)
@@ -807,9 +614,7 @@ def cython_command(ctx: click.Context, sources: Tuple[str, ...], _version_flag_s
          except (ValueError, TypeError):
              Options.verbose = 1 if final_options['verbose'] else 0
     
-    # print(f"Final Compilation Options: {comp_options}") # Debug
-    # print(f"Sources: {list(sources)}") # Debug
-
+  
     ctx.obj = {'options': comp_options, 'sources': list(sources)}
 
 

@@ -134,17 +134,48 @@ class build_ext(_build_ext):
 
         # Ensure paths are relative to the project root directory
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-        relative_sources = []
-        for source in new_ext.sources:
-            abs_source = os.path.abspath(source)
-            # Check if it's already relative or outside the project (unlikely but safe)
-            if not os.path.isabs(source) or not abs_source.startswith(project_root):
-                 relative_sources.append(source)
-            else:
-                 relative_sources.append(os.path.relpath(abs_source, project_root))
-        ext.sources = relative_sources
+        compile_sources: list[str] = []  # paths passed to the C compiler
+        packaging_sources: list[str] = []  # paths stored in metadata (must be relative)
 
-        super().build_extension(ext)
+        for source in new_ext.sources:
+            if os.path.isabs(source):
+                abs_source = source
+            else:
+                # Resolve relative path with respect to the *current* working directory.
+                # run_distutils already chdir()'d into the extension's base_dir, so this will
+                # point at the freshly generated source file (e.g. tests/run/list.c).
+                abs_source = os.path.abspath(source)
+
+            if source.endswith(('.c', '.cpp')):
+                # Generated C/C++ sources: compiler needs absolute, but metadata must be relative
+                compile_sources.append(abs_source)
+                packaging_sources.append(os.path.relpath(abs_source, project_root))
+            else:
+                # Other sources: keep relative where possible; absolute only if outside project tree.
+                rel = os.path.relpath(abs_source, project_root) if abs_source.startswith(project_root) else source
+                compile_sources.append(rel)
+                packaging_sources.append(rel)
+
+        # Use absolute/relative mix for compilation
+        new_ext.sources = compile_sources
+
+        # DEBUG: show source paths to verify they are absolute where needed
+        if self.debug or os.environ.get('CYTHON_PATH_DEBUG'):
+            import inspect
+            print("[build_ext] Module:", inspect.getfile(self.__class__))
+            print("[build_ext] Debug sources for", new_ext.name, ":", new_ext.sources)
+        # Keep the original Extension in sync to avoid further processing errors.
+        # Temporarily point original Extension to compile_sources so Cython"s internal logic (e.g., dependency tracking)
+        # matches what we feed the compiler, then restore relative paths afterwards.
+        ext.sources = compile_sources
+
+        # Build the *cythonized* extension rather than the original one so
+        # that our path fixes actually take effect.
+        super().build_extension(new_ext)
+
+        # After successful compilation, reset both Extension objects to packaging-friendly relative paths
+        ext.sources = packaging_sources
+        new_ext.sources = packaging_sources
 
 # backward compatibility
 new_build_ext = build_ext

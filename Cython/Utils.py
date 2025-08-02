@@ -43,7 +43,30 @@ else:
     from functools import wraps
 
 
-from . import __version__ as cython_version
+# Obtain the Cython version string in a way that works even if the
+# package was first imported from a pre-compiled extension module that
+# lacks the usual ``__version__`` attribute.
+try:
+    from . import __version__ as cython_version  # type: ignore[attr-defined]
+except (ImportError, AttributeError):
+    import importlib
+    _cy_mod = importlib.import_module('Cython')
+    cython_version = getattr(_cy_mod, '__version__', None)
+
+# Fallback: some build environments may import this module before the
+# `Cython.__version__` attribute has been set, resulting in a value of
+# `None`.  Many helper utilities – notably `re.sub` further below – expect
+# `cython_version` to be a string.  Provide a safe default to avoid a
+# TypeError when it is unexpectedly `None`.
+# Coerce to string to ensure regex operations below succeed.
+try:
+    cython_version = str(cython_version)
+except Exception:
+    cython_version = "0.0"
+
+# Historical fallback for very early import timing issues.
+if cython_version in (None, "None"):
+    cython_version = "0.0"
 
 PACKAGE_FILES = ("__init__.py", "__init__.pyc", "__init__.pyx", "__init__.pxd")
 
@@ -309,7 +332,9 @@ _parse_file_version = re.compile(r".*[.]cython-([0-9]+)[.][^./\\]+$").findall
 
 @cached_function
 def find_versioned_file(directory, filename, suffix,
-                        _current_version=int(re.sub(r"^([0-9]+)[.]([0-9]+).*", r"\1\2", cython_version))):
+                        _current_version=int(
+        re.sub(r"^([0-9]+)[.]([0-9]+).*", r"\1\2", str(cython_version or "0"))
+    )):
     """
     Search a directory for versioned pxd files, e.g. "lib.cython-30.pxd" for a Cython 3.0+ version.
 

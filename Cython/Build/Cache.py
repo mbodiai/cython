@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 import sys
 import os
 import hashlib
@@ -75,7 +74,6 @@ def get_cython_cache_dir():
     return os.path.expanduser(join_path("~", ".cython"))
 
 
-@dataclass
 class FingerprintFlags:
     language: str = "c"
     py_limited_api: bool = False

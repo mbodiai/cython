@@ -4,7 +4,9 @@
 __pycache__
 *.so
 *.o
-
+*.cpp
+*.c
+.venv/
 *.egg
 *.egg-info
 .*cache*/

@@ -445,14 +445,14 @@ static PyObject *__Pyx_PyDict_GetItem(PyObject *d, PyObject* key) {
 /////////////// GetItemInt.proto ///////////////
 //@substitute: tempita
 
-#define __Pyx_GetItemInt(o, i, type, is_signed, to_py_func, is_list, wraparound, boundscheck) \
+#define __Pyx_GetItemInt(o, i, type, is_signed, to_py_func, is_list, wraparound, boundscheck, has_gil) \
     (__Pyx_fits_Py_ssize_t(i, type, is_signed) ? \
     __Pyx_GetItemInt_Fast(o, (Py_ssize_t)i, is_list, wraparound, boundscheck) : \
     (is_list ? (PyErr_SetString(PyExc_IndexError, "list index out of range"), (PyObject*)NULL) : \
                __Pyx_GetItemInt_Generic(o, to_py_func(i))))
 
 {{for type in ['List', 'Tuple']}}
-#define __Pyx_GetItemInt_{{type}}(o, i, type, is_signed, to_py_func, is_list, wraparound, boundscheck) \
+#define __Pyx_GetItemInt_{{type}}(o, i, type, is_signed, to_py_func, is_list, wraparound, boundscheck, has_gil) \
     (__Pyx_fits_Py_ssize_t(i, type, is_signed) ? \
     __Pyx_GetItemInt_{{type}}_Fast(o, (Py_ssize_t)i, wraparound, boundscheck) : \
     (PyErr_SetString(PyExc_IndexError, "{{ type.lower() }} index out of range"), (PyObject*)NULL))
@@ -552,7 +552,7 @@ static CYTHON_INLINE PyObject *__Pyx_GetItemInt_Fast(PyObject *o, Py_ssize_t i, 
 
 /////////////// SetItemInt.proto ///////////////
 
-#define __Pyx_SetItemInt(o, i, v, type, is_signed, to_py_func, is_list, wraparound, boundscheck) \
+#define __Pyx_SetItemInt(o, i, v, type, is_signed, to_py_func, is_list, wraparound, boundscheck, has_gil) \
     (__Pyx_fits_Py_ssize_t(i, type, is_signed) ? \
     __Pyx_SetItemInt_Fast(o, (Py_ssize_t)i, v, is_list, wraparound, boundscheck) : \
     (is_list ? (PyErr_SetString(PyExc_IndexError, "list assignment index out of range"), -1) : \
@@ -629,7 +629,7 @@ static CYTHON_INLINE int __Pyx_SetItemInt_Fast(PyObject *o, Py_ssize_t i, PyObje
 
 /////////////// DelItemInt.proto ///////////////
 
-#define __Pyx_DelItemInt(o, i, type, is_signed, to_py_func, is_list, wraparound, boundscheck) \
+#define __Pyx_DelItemInt(o, i, type, is_signed, to_py_func, is_list, wraparound, boundscheck, has_gil) \
     (__Pyx_fits_Py_ssize_t(i, type, is_signed) ? \
     __Pyx_DelItemInt_Fast(o, (Py_ssize_t)i, is_list, wraparound) : \
     (is_list ? (PyErr_SetString(PyExc_IndexError, "list assignment index out of range"), -1) : \
@@ -869,7 +869,7 @@ static CYTHON_INLINE PyObject* __Pyx_PyTuple_GetSlice(PyObject* src, Py_ssize_t 
 
 /////////////// SliceTupleAndList ///////////////
 //@requires: TupleAndListFromArray
-//@requires: ModuleSetupCode.c::CriticalSections
+//@requires: Synchronization.c::CriticalSections
 
 #if CYTHON_COMPILING_IN_CPYTHON
 static CYTHON_INLINE void __Pyx_crop_slice(Py_ssize_t* _start, Py_ssize_t* _stop, Py_ssize_t* _length) {
@@ -1296,7 +1296,9 @@ static CYTHON_INLINE int __Pyx_TypeTest(PyObject *obj, PyTypeObject *type) {
 
 /////////////// CallableCheck.proto ///////////////
 
-#if CYTHON_USE_TYPE_SLOTS
+// PyPy does not set tp_call on classes with metaclass.
+// See https://github.com/cython/cython/issues/6892
+#if CYTHON_USE_TYPE_SLOTS && !CYTHON_COMPILING_IN_PYPY
 #define __Pyx_PyCallable_Check(obj)   (Py_TYPE(obj)->tp_call != NULL)
 #else
 #define __Pyx_PyCallable_Check(obj)   PyCallable_Check(obj)
@@ -1630,14 +1632,22 @@ static CYTHON_INLINE PyObject* __Pyx_PyObject_GetAttrStr(PyObject* obj, PyObject
 }
 #endif
 
+/////////////// PyObjectDelAttr.proto //////////////////
+
+#if CYTHON_COMPILING_IN_LIMITED_API && __PYX_LIMITED_VERSION_HEX < 0x030d0000
+#define __Pyx_PyObject_DelAttr(o, n) PyObject_SetAttr(o, n, NULL)
+#else
+#define __Pyx_PyObject_DelAttr(o, n) PyObject_DelAttr(o, n)
+#endif
 
 /////////////// PyObjectSetAttrStr.proto ///////////////
+//@requires: PyObjectDelAttr
 
 #if CYTHON_USE_TYPE_SLOTS
 #define __Pyx_PyObject_DelAttrStr(o,n) __Pyx_PyObject_SetAttrStr(o, n, NULL)
 static CYTHON_INLINE int __Pyx_PyObject_SetAttrStr(PyObject* obj, PyObject* attr_name, PyObject* value);/*proto*/
 #else
-#define __Pyx_PyObject_DelAttrStr(o,n)   PyObject_DelAttr(o,n)
+#define __Pyx_PyObject_DelAttrStr(o,n)   __Pyx_PyObject_DelAttr(o,n)
 #define __Pyx_PyObject_SetAttrStr(o,n,v) PyObject_SetAttr(o,n,v)
 #endif
 
@@ -1765,7 +1775,7 @@ try_unpack:
 
 
 /////////////// UnpackUnboundCMethod.proto ///////////////
-//@requires:  MemoryView_C.c::Atomics
+//@requires:  Synchronization.c::Atomics
 
 typedef struct {
     PyObject *type;
@@ -1819,6 +1829,13 @@ static PyObject *__Pyx_SelflessCall(PyObject *method, PyObject *args, PyObject *
     result = PyObject_Call(method, selfless_args, kwargs);
     Py_DECREF(selfless_args);
     return result;
+}
+#elif CYTHON_COMPILING_IN_PYPY && PY_VERSION_HEX < 0x03090000
+// PyPy 3.8 does not define 'args' as 'const'.
+// See https://github.com/cython/cython/issues/6867
+static PyObject *__Pyx_SelflessCall(PyObject *method, PyObject **args, Py_ssize_t nargs, PyObject *kwnames) {
+        return _PyObject_Vectorcall
+            (method, args ? args+1 : NULL, nargs ? nargs-1 : 0, kwnames);
 }
 #else
 static PyObject *__Pyx_SelflessCall(PyObject *method, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames) {
@@ -2356,6 +2373,14 @@ static PyObject* __Pyx_PyObject_CallMethod0(PyObject* obj, PyObject* method_name
 //@requires: PyObjectCallNoArg
 
 static PyObject* __Pyx_PyObject_CallMethod0(PyObject* obj, PyObject* method_name) {
+#if CYTHON_VECTORCALL && (__PYX_LIMITED_VERSION_HEX >= 0x030C0000 || (!CYTHON_COMPILING_IN_LIMITED_API && PY_VERSION_HEX >= 0x03090000))
+    PyObject *args[1] = {obj};
+    // avoid unused functions
+    (void) __Pyx_PyObject_GetMethod;
+    (void) __Pyx_PyObject_CallOneArg;
+    (void) __Pyx_PyObject_CallNoArg;
+    return PyObject_VectorcallMethod(method_name, args, 1 | PY_VECTORCALL_ARGUMENTS_OFFSET, NULL);
+#else
     PyObject *method = NULL, *result = NULL;
     int is_method = __Pyx_PyObject_GetMethod(obj, method_name, &method);
     if (likely(is_method)) {
@@ -2368,6 +2393,7 @@ static PyObject* __Pyx_PyObject_CallMethod0(PyObject* obj, PyObject* method_name
     Py_DECREF(method);
 bad:
     return result;
+#endif
 }
 
 
@@ -2380,7 +2406,7 @@ static PyObject* __Pyx_PyObject_CallMethod1(PyObject* obj, PyObject* method_name
 //@requires: PyObjectCallOneArg
 //@requires: PyObjectCall2Args
 
-#if !(CYTHON_VECTORCALL && __PYX_LIMITED_VERSION_HEX >= 0x030C0000)
+#if !(CYTHON_VECTORCALL && (__PYX_LIMITED_VERSION_HEX >= 0x030C0000 || (!CYTHON_COMPILING_IN_LIMITED_API && PY_VERSION_HEX >= 0x03090000)))
 static PyObject* __Pyx__PyObject_CallMethod1(PyObject* method, PyObject* arg) {
     // Separate function to avoid excessive inlining.
     PyObject *result = __Pyx_PyObject_CallOneArg(method, arg);
@@ -2390,7 +2416,7 @@ static PyObject* __Pyx__PyObject_CallMethod1(PyObject* method, PyObject* arg) {
 #endif
 
 static PyObject* __Pyx_PyObject_CallMethod1(PyObject* obj, PyObject* method_name, PyObject* arg) {
-#if CYTHON_VECTORCALL && __PYX_LIMITED_VERSION_HEX >= 0x030C0000
+#if CYTHON_VECTORCALL && (__PYX_LIMITED_VERSION_HEX >= 0x030C0000 || (!CYTHON_COMPILING_IN_LIMITED_API && PY_VERSION_HEX >= 0x03090000))
     PyObject *args[2] = {obj, arg};
     // avoid unused functions
     (void) __Pyx_PyObject_GetMethod;
@@ -2412,21 +2438,9 @@ static PyObject* __Pyx_PyObject_CallMethod1(PyObject* obj, PyObject* method_name
 
 
 /////////////// tp_new.proto ///////////////
-//@requires: ModuleSetupCode.c::GetRuntimeVersion
 
 #define __Pyx_tp_new(type_obj, args) __Pyx_tp_new_kwargs(type_obj, args, NULL)
-#if CYTHON_COMPILING_IN_LIMITED_API && __PYX_LIMITED_VERSION_HEX < 0x030A0000
-static PyObject* __Pyx_tp_new_fallback(PyObject* type_obj, PyObject* args, PyObject* kwargs); /*proto*/
-#endif
-static CYTHON_INLINE PyObject* __Pyx_tp_new_kwargs(PyObject* type_obj, PyObject* args, PyObject* kwargs) {
-    newfunc tp_new = __Pyx_PyType_TryGetSlot((PyTypeObject*)type_obj, tp_new, newfunc);
-#if CYTHON_COMPILING_IN_LIMITED_API && __PYX_LIMITED_VERSION_HEX < 0x030A0000
-    if (!tp_new) return __Pyx_tp_new_fallback(type_obj, args, kwargs);
-#else
-    assert(tp_new != NULL);
-#endif
-    return tp_new((PyTypeObject*)type_obj, args, kwargs);
-}
+static CYTHON_INLINE PyObject* __Pyx_tp_new_kwargs(PyObject* type_obj, PyObject* args, PyObject* kwargs); /*proto*/
 
 /////////////// tp_new ///////////////
 
@@ -2458,6 +2472,17 @@ static PyObject* __Pyx_tp_new_fallback(PyObject* type_obj, PyObject* args, PyObj
     return NULL;
 }
 #endif
+
+static PyObject* __Pyx_tp_new_kwargs(PyObject* type_obj, PyObject* args, PyObject* kwargs) {
+    newfunc tp_new = __Pyx_PyType_TryGetSlot((PyTypeObject*)type_obj, tp_new, newfunc);
+#if CYTHON_COMPILING_IN_LIMITED_API && __PYX_LIMITED_VERSION_HEX < 0x030A0000
+    if (!tp_new) return __Pyx_tp_new_fallback(type_obj, args, kwargs);
+#else
+    assert(tp_new != NULL);
+#endif
+    return tp_new((PyTypeObject*)type_obj, args, kwargs);
+}
+
 
 /////////////// PyObjectCall.proto ///////////////
 
@@ -3223,50 +3248,85 @@ __Pyx_RaiseUnexpectedTypeError(const char *expected, PyObject *obj)
 
 
 /////////////// RaiseUnboundLocalError.proto ///////////////
-static CYTHON_INLINE void __Pyx_RaiseUnboundLocalError(const char *varname);/*proto*/
+static void __Pyx_RaiseUnboundLocalError(const char *varname);/*proto*/
 
 /////////////// RaiseUnboundLocalError ///////////////
-static CYTHON_INLINE void __Pyx_RaiseUnboundLocalError(const char *varname) {
+static void __Pyx_RaiseUnboundLocalError(const char *varname) {
     PyErr_Format(PyExc_UnboundLocalError, "local variable '%s' referenced before assignment", varname);
 }
 
+/////////////// RaiseUnboundLocalErrorNogil.proto ///////////////
+static void __Pyx_RaiseUnboundLocalErrorNogil(const char *varname);/*proto*/
 
-/////////////// RaiseClosureNameError.proto ///////////////
-static CYTHON_INLINE void __Pyx_RaiseClosureNameError(const char *varname);/*proto*/
-
-/////////////// RaiseClosureNameError ///////////////
-static CYTHON_INLINE void __Pyx_RaiseClosureNameError(const char *varname) {
-    PyErr_Format(PyExc_NameError, "free variable '%s' referenced before assignment in enclosing scope", varname);
-}
-
-
-/////////////// RaiseUnboundMemoryviewSliceNogil.proto ///////////////
-static void __Pyx_RaiseUnboundMemoryviewSliceNogil(const char *varname);/*proto*/
-
-/////////////// RaiseUnboundMemoryviewSliceNogil ///////////////
+/////////////// RaiseUnboundLocalErrorNogil ///////////////
 //@requires: RaiseUnboundLocalError
 
 // Don't inline the function, it should really never be called in production
-static void __Pyx_RaiseUnboundMemoryviewSliceNogil(const char *varname) {
+static void __Pyx_RaiseUnboundLocalErrorNogil(const char *varname) {
     PyGILState_STATE gilstate = PyGILState_Ensure();
     __Pyx_RaiseUnboundLocalError(varname);
     PyGILState_Release(gilstate);
 }
 
+
+/////////////// RaiseClosureNameError.proto ///////////////
+static void __Pyx_RaiseClosureNameError(const char *varname);/*proto*/
+
+/////////////// RaiseClosureNameError ///////////////
+static void __Pyx_RaiseClosureNameError(const char *varname) {
+    PyErr_Format(PyExc_NameError, "free variable '%s' referenced before assignment in enclosing scope", varname);
+}
+
+/////////////// RaiseClosureNameErrorNogil.proto ///////////////
+static void __Pyx_RaiseClosureNameErrorNogil(const char *varname);/*proto*/
+
+/////////////// RaiseClosureNameErrorNogil ///////////////
+//@requires: RaiseClosureNameError
+
+static void __Pyx_RaiseClosureNameErrorNogil(const char *varname) {
+    PyGILState_STATE gilstate = PyGILState_Ensure();
+    __Pyx_RaiseClosureNameError(varname);
+    PyGILState_Release(gilstate);
+}
+
 //////////////// RaiseCppGlobalNameError.proto ///////////////////////
-static CYTHON_INLINE void __Pyx_RaiseCppGlobalNameError(const char *varname); /*proto*/
+static void __Pyx_RaiseCppGlobalNameError(const char *varname); /*proto*/
 
 /////////////// RaiseCppGlobalNameError //////////////////////////////
-static CYTHON_INLINE void __Pyx_RaiseCppGlobalNameError(const char *varname) {
+static void __Pyx_RaiseCppGlobalNameError(const char *varname) {
     PyErr_Format(PyExc_NameError, "C++ global '%s' is not initialized", varname);
 }
 
+//////////////// RaiseCppGlobalNameErrorNogil.proto ///////////////////////
+static void __Pyx_RaiseCppGlobalNameErrorNogil(const char *varname); /*proto*/
+
+/////////////// RaiseCppGlobalNameErrorNogil //////////////////////////////
+//@requires: RaiseCppGlobalNameError
+
+static void __Pyx_RaiseCppGlobalNameErrorNogil(const char *varname) {
+    PyGILState_STATE gilstate = PyGILState_Ensure();
+    __Pyx_RaiseCppGlobalNameError(varname);
+    PyGILState_Release(gilstate);
+}
+
 //////////////// RaiseCppAttributeError.proto ///////////////////////
-static CYTHON_INLINE void __Pyx_RaiseCppAttributeError(const char *varname); /*proto*/
+static void __Pyx_RaiseCppAttributeError(const char *varname); /*proto*/
 
 /////////////// RaiseCppAttributeError //////////////////////////////
-static CYTHON_INLINE void __Pyx_RaiseCppAttributeError(const char *varname) {
+static void __Pyx_RaiseCppAttributeError(const char *varname) {
     PyErr_Format(PyExc_AttributeError, "C++ attribute '%s' is not initialized", varname);
+}
+
+//////////////// RaiseCppAttributeErrorNogil.proto ///////////////////////
+static void __Pyx_RaiseCppAttributeErrorNogil(const char *varname); /*proto*/
+
+/////////////// RaiseCppAttributeErrorNogil //////////////////////////////
+//@requires: RaiseCppGlobalNameError
+
+static void __Pyx_RaiseCppAttributeErrorNogil(const char *varname) {
+    PyGILState_STATE gilstate = PyGILState_Ensure();
+    __Pyx_RaiseCppAttributeError(varname);
+    PyGILState_Release(gilstate);
 }
 
 /////////////// ListPack.proto //////////////////////////////////////

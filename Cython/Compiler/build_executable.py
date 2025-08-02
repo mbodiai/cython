@@ -11,24 +11,16 @@ from typing_extensions import TypedDict, Unpack
 
 from mbcore.display import safe_print
 
-# Version check
-if sys.version_info[:2] < (2, 7) or (3, 0) <= sys.version_info[:2] < (3, 3):
-    sys.stderr.write(
-        "Sorry, Cython requires Python 2.7 or 3.3+, found %d.%d\n" %
-        tuple(sys.version_info[:2]))
-    sys.exit(1)
 
-try:
-    from __builtin__ import basestring
-except ImportError:
-    basestring = str
+
+
 
 # --- Original Imports ---
 import contextlib
 
 from Cython import Utils
 from Cython.Compiler import Errors, Options
-from Cython.Compiler.CmdLine import parse_command_line
+
 from Cython.Compiler.Errors import CompileError, PyrexError, error, warning
 from Cython.Compiler.Lexicon import (
     unicode_continuation_ch_any,
@@ -65,48 +57,102 @@ standard_include_path = os.path.abspath(
 
 
 def find_python_library() -> str | None:
-    """Find the correct Python shared library.
+    """Return absolute path to the host CPython shared library.
 
-    If sysconfig returns only the filename (e.g. "libpython3.12.dylib"),
-    search candidate directories (using sys.base_prefix) to get the absolute path.
+    The search strategy is intentionally exhaustive because *uv*-managed
+    virtual-envs on macOS/Homebrew often break the usual sysconfig hints.
+    Logic adapted from ``mb.build`` so that both build helpers rely on the
+    same robust implementation.
     """
+    import ctypes.util
+    import platform
+    import subprocess
 
-    def check_path(path):
+    def check_path(path: str | os.PathLike) -> str | None:
         p = Path(path)
         return str(p.resolve()) if p.exists() else None
 
+    # 1. Direct hint from sysconfig (works on most Linux distros)
     lib_name = sysconfig.get_config_var("LDLIBRARY") or ""
-    lib_dir = sysconfig.get_config_var("LIBDIR") or ""
+    lib_dir = Path(sysconfig.get_config_var("LIBDIR") or "")
     if lib_name:
-        shared_lib = check_path(Path(lib_dir) / lib_name)
-        if shared_lib:
-            return shared_lib
+        lib = check_path(lib_dir / lib_name)
+        if lib:
+            return lib
 
-    import ctypes.util
-
+    # 2. ctypes based lookup (cross-platform)
     found = ctypes.util.find_library(
         f"python{sys.version_info[0]}.{sys.version_info[1]}")
     if found:
-        shared_lib = check_path(found)
-        if shared_lib:
-            return shared_lib
+        found_lib = check_path(found)
+        if found_lib:
+            return found_lib
 
-    candidate_dirs = [
+    # 3. macOS: try `otool -L` and framework paths
+    if sys.platform == "darwin":
+        try:
+            output = subprocess.check_output(["otool", "-L", sys.executable], text=True)
+            for line in output.splitlines():
+                if "libpython" in line:
+                    lib = check_path(line.split()[0])
+                    if lib:
+                        return lib
+        except Exception:
+            pass  # otool not available or unexpected output
+        # Homebrew installs keep the shared library either directly inside the
+        # framework directory (…/Versions/<X.Y>/Python) **or** in the sibling
+        # ``lib`` sub-directory (…/Versions/<X.Y>/lib/libpythonX.Y.dylib).  Try
+        # both locations.
+        version_dir = f"{sys.version_info.major}.{sys.version_info.minor}"
+        # Determine framework root e.g. /opt/homebrew/opt/python@3.11/Frameworks/Python.framework
+        framework_root = Path(sys.base_prefix).parents[1]  # strip .../Versions/<X.Y>
+        # ❶ <framework>/Versions/<X.Y>/Python
+        framework_lib = framework_root / "Versions" / version_dir / "Python"
+        lib = check_path(framework_lib)
+        if lib:
+            return lib
+        # ❷ <framework>/Versions/<X.Y>/lib/libpythonX.Y.dylib
+        framework_lib_dylib = Path(sys.base_prefix) / "Python.framework/Versions" / version_dir / "lib" / f"libpython{version_dir}.dylib"
+        lib = check_path(framework_lib_dylib)
+        if lib:
+            return lib
+
+    # 4. Linux: parse `ldd` on the running interpreter
+    if sys.platform.startswith("linux"):
+        try:
+            output = subprocess.check_output(["ldd", sys.executable], text=True)
+            for line in output.splitlines():
+                if "libpython" in line:
+                    lib = check_path(line.split()[0])
+                    if lib:
+                        return lib
+        except Exception:
+            pass
+
+    # 5. Windows: common DLL locations
+    if sys.platform == "win32":
+        py_ver = platform.python_version_tuple()
+        for candidate in (
+            f"C:\\Windows\\System32\\python{py_ver[0]}{py_ver[1]}.dll",
+            f"C:\\Windows\\SysWOW64\\python{py_ver[0]}{py_ver[1]}.dll",
+        ):
+            lib = check_path(candidate)
+            if lib:
+                return lib
+
+    # 6. Fallback: scan common lib directories
+    common_dirs = [
         Path(getattr(sys, "base_prefix", sys.prefix)) / "lib",
         Path(sys.prefix) / "lib",
         Path("/usr/lib"),
         Path("/usr/local/lib"),
         Path("/opt/homebrew/lib"),
     ]
-    for d in candidate_dirs:
-        candidate = d / lib_name
-        if DEBUG:
-            pass
-        if candidate.exists():
-            resolved_candidate = candidate.resolve()
-            if DEBUG:
-                pass
-            return str(resolved_candidate)
+    for d in common_dirs:
+        lib = check_path(d / lib_name)
+        if lib:
+            return lib
+
     return None
 
 
@@ -248,22 +294,137 @@ def _parse_args(args):
 
 def runcmd(cmd, shell=False):
     """Run a shell command safely."""
+    import subprocess
+    
     cmd_str = " ".join(cmd) if isinstance(cmd, list) else cmd
     _debug(f"🔥 Running: {cmd_str}")
 
-    from mbpy.cmd import run_command
+    try:
+        result = subprocess.run(
+            cmd,
+            shell=shell,
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        
+        if result.stdout:
+            safe_print(result.stdout, end="")
+        
+        if result.returncode != 0:
+            _debug(f"🚨 ERROR: Command failed with exit code {result.returncode}")
+            if result.stderr:
+                _debug(f"❌ STDERR:\n{result.stderr}")
+            sys.exit(result.returncode)
+        
+        return result.stdout.strip() if result.stdout else ""
+    except Exception as e:
+        _debug(f"🚨 ERROR: Failed to run command: {e}")
+        sys.exit(1)
 
-    command = run_command(cmd_str)
-    for line in command:
-        safe_print(line, end="")
-    result = command.process
 
-    if result.returncode != 0:
-        _debug(f"🚨 ERROR: Command failed with exit code {result.returncode}")
-        _debug(f"❌ STDERR:\n{result.stderr}")
-        sys.exit(result.returncode)
+def compile_shared(
+    cpp_path: Path,
+    *,
+    install_dir: Path | None = None,
+    lib_dir: Path | None = None,
+    force: bool = False,
+) -> int:
+    """Compile *cpp_path* into a shared library (.so/.dylib/.pyd).
 
-    return result.stdout.strip()
+    Mirrors the original helper in ``mb.build`` so that both call sites use a
+    single implementation. The output path preserves the package directory
+    layout when *install_dir*/*lib_dir* are supplied, matching the previous
+    behaviour.
+    
+    Note: cpp_path can be either a .py file (will look for corresponding .cpp)
+    or a .cpp file directly.
+    """
+    include_dir = Path(sysconfig.get_paths()["include"])
+    from mbcore.log import error
+    python_lib = Path(find_python_library() or "")
+    if not python_lib.exists():
+        error("⚠️ Could not locate libpython; aborting shared compilation")
+        return 1
+
+    # Handle case where we're passed a .py file instead of .cpp
+    actual_cpp_path = cpp_path
+    if cpp_path.suffix == ".py":
+        # Look for corresponding .cpp file in the same directory
+        potential_cpp = cpp_path.with_suffix(".cpp")
+        if potential_cpp.exists():
+            actual_cpp_path = potential_cpp
+        else:
+            error(f"⚠️ No corresponding .cpp file found for {cpp_path}")
+            return 1
+    
+    ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
+
+    if install_dir and lib_dir:
+        # Use original cpp_path for relative path calculation
+        output_so = Path(lib_dir) / cpp_path.relative_to(install_dir).with_suffix(ext_suffix)
+    else:
+        output_so = cpp_path.with_suffix(ext_suffix)
+
+    output_so.parent.mkdir(parents=True, exist_ok=True)
+
+    # Skip up-to-date files unless forced
+    if (
+        output_so.exists()
+        and actual_cpp_path.stat().st_mtime <= output_so.stat().st_mtime
+        and not force
+    ):
+        _debug("[SKIP] %s is up-to-date", output_so)
+        return 0
+
+    if sys.platform == "darwin":
+        compiler = "clang++"
+        lib_path = python_lib
+        lib_dir_path = lib_path.parent
+        # For framework Python, link directly to the framework binary
+        cmd = [
+            compiler,
+            "-shared",
+            "-o",
+            str(output_so),
+            str(actual_cpp_path),
+            f"-I{include_dir}",
+            str(lib_path),  # Link directly to the framework Python binary
+            "-fPIC",
+            f"-Wl,-rpath,{lib_dir_path}",
+        ]
+        runcmd(cmd)
+
+        # Fix install_name on macOS so the library uses an absolute path
+        try:
+            fix_cmd = [
+                "install_name_tool",
+                "-change",
+                "/install/lib/libpython3.12.dylib",
+                str(lib_path),
+                str(output_so),
+            ]
+            runcmd(fix_cmd)
+        except Exception:
+            # Non-fatal; continue
+            _debug("install_name_tool failed – continuing")
+            pass
+    else:
+        compiler = "g++"
+        cmd = [
+            compiler,
+            "-shared",
+            "-o",
+            str(output_so),
+            str(actual_cpp_path),
+            f"-I{include_dir}",
+            f"-L{python_lib.parent}",
+            f"-l{python_lib.stem.replace('lib', '')}",
+            "-fPIC",
+        ]
+        runcmd(cmd)
+
+    return 0
 
 
 def clink(basename) -> None:
@@ -1219,7 +1380,7 @@ def compile(
     **kwds,
 ) -> CompilationResult | CompilationResultSet:
     options = CompilationOptions(defaults=options, **kwds)
-    if isinstance(source, basestring):
+    if isinstance(source, str):
         if not options.timestamps:
             return compile_single(source, options, full_module_name)
         source = [source]
@@ -1296,7 +1457,8 @@ def main(command_line=0) -> None:
     any_failures = 0
     if command_line:
         try:
-            options, sources = parse_command_line(args)
+            from Cython.Compiler import CmdLine
+            options, sources = CmdLine.parse_command_line(args)
         except OSError as e:
             import errno
 
