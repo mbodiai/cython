@@ -4,7 +4,6 @@
 #
 
 
-from cython.Cython.Compiler.Options import DirectivesDict
 from . import Naming
 from . import PyrexTypes
 from .Errors import error, warn_once
@@ -458,7 +457,7 @@ class ConstructorSlot(InternalMethodSlot):
         if (scope.parent_type.base_type
                 and not scope.has_pyobject_attrs
                 and not scope.has_memoryview_attrs
-                and not scope.has_cpp_constructable_attrs
+                and not scope.has_explicitly_constructable_attrs
                 and not (self.slot_name == 'tp_new' and scope.parent_type.vtabslot_cname)):
             entry = scope.lookup_here(self.method) if self.method else None
             if not (entry and entry.is_special):
@@ -1159,7 +1158,7 @@ def get_slot_table(compiler_directives):
         # fetch default directives here since the builtin type classes don't have
         # directives set
         from .Options import get_directive_defaults
-        compiler_directives: DirectivesDict = get_directive_defaults()
+        compiler_directives = get_directive_defaults()
 
     old_binops = compiler_directives['c_api_binop_methods']
     key = (old_binops,)

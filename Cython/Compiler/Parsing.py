@@ -960,7 +960,7 @@ def p_cat_string_literal(s: PyrexScanner) -> tuple:
     # join and rewrap the partial literals
     if kind in ('b', 'c', '') or kind == 'u' and None not in bstrings:
         # Py3 enforced unicode literals are parsed as bytes/unicode combination
-        bytes_value = bytes_literal(StringEncoding.join_bytes(bstrings), s.source_encoding)
+        bytes_value = bytes_literal(b''.join(bstrings), s.source_encoding)
     if kind in ('u', ''):
         unicode_value = EncodedString(''.join([u for u in ustrings if u is not None]))
     if kind == 'f':
@@ -4201,14 +4201,6 @@ def p_module(s: PyrexScanner, pxd, full_module_name, ctx=Ctx):
 
     if s.context.language_level is None:
         s.context.set_language_level('3')
-        if pos[0].filename:
-            import warnings
-            warnings.warn(
-                "Cython directive 'language_level' not set, using '3' (Py3). "
-                "This has changed from earlier releases! File: %s" % pos[0].filename,
-                FutureWarning,
-                stacklevel=1 if cython.compiled else 2,
-            )
 
     level = 'module_pxd' if pxd else 'module'
     doc = p_doc_string(s)

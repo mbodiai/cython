@@ -236,29 +236,6 @@ static PyObject* __Pyx_PyDict_GetItemDefault(PyObject* d, PyObject* key, PyObjec
 }
 
 
-/////////////// dict_setdefault.proto ///////////////
-
-static CYTHON_INLINE PyObject *__Pyx_PyDict_SetDefault(PyObject *d, PyObject *key, PyObject *default_value, int is_safe_type); /*proto*/
-
-/////////////// dict_setdefault ///////////////
-
-static CYTHON_INLINE PyObject *__Pyx_PyDict_SetDefault(PyObject *d, PyObject *key, PyObject *default_value,
-                                                       int is_safe_type) {
-    PyObject* value;
-    CYTHON_MAYBE_UNUSED_VAR(is_safe_type);
-#if CYTHON_COMPILING_IN_LIMITED_API
-    value = PyObject_CallMethod(d, "setdefault", "OO", key, default_value);
-#elif PY_VERSION_HEX >= 0x030d0000
-    PyDict_SetDefaultRef(d, key, default_value, &value);
-#else
-    value = PyDict_SetDefault(d, key, default_value);
-    if (unlikely(!value)) return NULL;
-    Py_INCREF(value);
-#endif
-    return value;
-}
-
-
 /////////////// py_dict_clear.proto ///////////////
 
 #define __Pyx_PyDict_Clear(d) (PyDict_Clear(d), 0)
@@ -389,7 +366,7 @@ static CYTHON_INLINE PyObject* __Pyx_dict_iterator(PyObject* iterable, int is_di
 }
 
 
-#if !CYTHON_COMPILING_IN_PYPY
+#if !CYTHON_AVOID_BORROWED_REFS
 static CYTHON_INLINE int __Pyx_dict_iter_next_source_is_dict(
         PyObject* iter_obj, CYTHON_NCP_UNUSED Py_ssize_t orig_length, CYTHON_NCP_UNUSED Py_ssize_t* ppos,
         PyObject** pkey, PyObject** pvalue, PyObject** pitem) {
@@ -443,7 +420,7 @@ static CYTHON_INLINE int __Pyx_dict_iter_next(
         PyObject* iter_obj, CYTHON_NCP_UNUSED Py_ssize_t orig_length, CYTHON_NCP_UNUSED Py_ssize_t* ppos,
         PyObject** pkey, PyObject** pvalue, PyObject** pitem, int source_is_dict) {
     PyObject* next_item;
-#if !CYTHON_COMPILING_IN_PYPY
+#if !CYTHON_AVOID_BORROWED_REFS
     if (source_is_dict) {
         int result;
 #if PY_VERSION_HEX >= 0x030d0000 && !CYTHON_COMPILING_IN_LIMITED_API

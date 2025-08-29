@@ -4,15 +4,15 @@
 
 //////////////////// AsyncGenerator.module_state_decls ////////////////////
 
-PyTypeObject *__pyx__PyAsyncGenWrappedValueType;
-PyTypeObject *__pyx__PyAsyncGenASendType;
-PyTypeObject *__pyx__PyAsyncGenAThrowType;
-PyTypeObject *__pyx_AsyncGenType;
-
 // Freelists boost performance 6-10%; they also reduce memory
 // fragmentation, as _PyAsyncGenWrappedValue and PyAsyncGenASend
 // are short-living objects that are instantiated for every
 // __anext__ call.
+
+PyTypeObject *__pyx__PyAsyncGenWrappedValueType;
+PyTypeObject *__pyx__PyAsyncGenASendType;
+PyTypeObject *__pyx__PyAsyncGenAThrowType;
+PyTypeObject *__pyx_AsyncGenType;
 
 #if CYTHON_USE_FREELISTS
 struct __pyx__PyAsyncGenWrappedValue *__Pyx_ag_value_freelist[_PyAsyncGen_MAXFREELIST];
@@ -21,6 +21,25 @@ int __Pyx_ag_value_freelist_free;
 struct __pyx_PyAsyncGenASend *__Pyx_ag_asend_freelist[_PyAsyncGen_MAXFREELIST];
 int __Pyx_ag_asend_freelist_free;
 #endif
+
+//////////////////// AsyncGenerator.module_state_traverse ////////////////////
+
+Py_VISIT(traverse_module_state->__pyx__PyAsyncGenWrappedValueType);
+Py_VISIT(traverse_module_state->__pyx__PyAsyncGenASendType);
+Py_VISIT(traverse_module_state->__pyx__PyAsyncGenAThrowType);
+Py_VISIT(traverse_module_state->__pyx_AsyncGenType);
+
+//////////////////// AsyncGenerator.module_state_traverse ////////////////////
+
+Py_CLEAR(clear_module_state->__pyx__PyAsyncGenWrappedValueType);
+Py_CLEAR(clear_module_state->__pyx__PyAsyncGenASendType);
+Py_CLEAR(clear_module_state->__pyx__PyAsyncGenAThrowType);
+Py_CLEAR(clear_module_state->__pyx_AsyncGenType);
+
+//////////////////// AsyncGenerator.init //////////////////
+//@substitute: naming
+
+if (likely(__pyx_AsyncGen_init($module_cname) == 0)); else
 
 //////////////////// AsyncGenerator.proto ////////////////////
 //@requires: Coroutine.c::Coroutine
@@ -345,7 +364,9 @@ static PyMemberDef __Pyx_async_gen_memberlist[] = {
     {"ag_await", T_OBJECT, offsetof(__pyx_CoroutineObject, yieldfrom), READONLY,
      PyDoc_STR("object being awaited on, or None")},
     {"__module__", T_OBJECT, offsetof(__pyx_CoroutineObject, gi_modulename), 0, 0},
+#if PY_VERSION_HEX < 0x030C0000 || CYTHON_COMPILING_IN_LIMITED_API
     {"__weaklistoffset__", T_PYSSIZET, offsetof(__pyx_CoroutineObject, gi_weakreflist), READONLY, 0},
+#endif
     {0, 0, 0, 0, 0}      /* Sentinel */
 };
 
@@ -397,6 +418,9 @@ static PyType_Spec __pyx_AsyncGenType_spec = {
     0,
 #if PY_VERSION_HEX >= 0x030A0000
     Py_TPFLAGS_IMMUTABLETYPE |
+#endif
+#if PY_VERSION_HEX >= 0x030C0000 && !CYTHON_COMPILING_IN_LIMITED_API
+    Py_TPFLAGS_MANAGED_WEAKREF |
 #endif
     Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_HAVE_FINALIZE, /*tp_flags*/
     __pyx_AsyncGenType_slots

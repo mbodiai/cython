@@ -306,9 +306,9 @@ class Context:
 
     def search_include_directories(self, qualified_name,
                                    suffix=None, source_pos=None, include=False, sys_path=False, source_file_path=None):
-        include_dirs = list(self.include_directories)
+        include_dirs = self.include_directories
         if sys_path:
-            include_dirs.extend(sys.path)
+            include_dirs = include_dirs + sys.path
         # include_dirs must be hashable for caching in @cached_function
         include_dirs = tuple(include_dirs + [standard_include_path])
         return search_include_directories(
@@ -714,7 +714,7 @@ def compile(source, options = None, full_module_name = None, **kwds):
     checking is requested, a CompilationResult is returned, otherwise a
     CompilationResultSet is returned.
     """
-    options = CompilationOptions(**options.as_dict(), **kwds) # type: ignore
+    options = CompilationOptions(defaults = options, **kwds)
 
     # cache is enabled when:
     # * options.cache is True (the default path to the cache base dir is used)

@@ -108,6 +108,7 @@ class Entry:
     # in_subscope      boolean    Belongs to a generator expression scope
     # is_readonly      boolean    Can't be assigned to
     # func_cname       string     C func implementing Python func
+    # wrapperbase_cname [string]  C wrapperbase object name
     # func_modifiers   [string]   C function modifiers ('inline')
     # pos              position   Source position where declared
     # namespace_cname  string     If is_pyglobal, the C variable
@@ -155,6 +156,7 @@ class Entry:
     #                             Used for identifying imports from typing/dataclasses etc
     # pytyping_modifiers          Python type modifiers like "typing.ClassVar" but also "dataclasses.InitVar"
     # enum_int_value  None or int  If known, the int that corresponds to this enum value
+    # specialiser  function or None  Callable to specialise a function to specific C arguments.
 
     # TODO: utility_code and utility_code_definition serves the same purpose...
 
@@ -213,6 +215,7 @@ class Entry:
     is_implemented = 0
     api = 0
     utility_code = None
+    specialiser = None
     is_overridable = 0
     buffer_aux = None
     prev_entry = None
@@ -268,6 +271,20 @@ class Entry:
 
     def all_alternatives(self):
         return [self] + self.overloaded_alternatives
+
+    def best_function_match(self, scope, arg_types, fail_if_empty=False, arg_is_lvalue_array=None):
+        func_entry = None
+        if self.specialiser is not None:
+            func_entry = self.specialiser(scope, arg_types)
+        if func_entry is None:
+            if self.type.is_fused:
+                functypes = self.type.get_all_specialized_function_types()
+                alternatives = [f.entry for f in functypes]
+            else:
+                alternatives = self.all_alternatives()
+            func_entry = PyrexTypes.best_match(
+                arg_types, alternatives, fail_if_empty=fail_if_empty, arg_is_lvalue_array=arg_is_lvalue_array)
+        return func_entry
 
     def all_entries(self):
         return [self] + self.inner_entries
@@ -946,6 +963,8 @@ class Scope:
                     if can_override:
                         temp = self.add_cfunction(name, type, pos, cname, visibility, modifiers)
                         temp.overloaded_alternatives = entry.all_alternatives()
+                        if entry.specialiser is not None:
+                            temp.specialiser = entry.specialiser
                         entry = temp
                     else:
                         warning(pos, "Function signature does not match previous declaration", 1)
@@ -1217,6 +1236,24 @@ class Scope:
         # e.g. slot, function, method
         return f"{Naming.modulestateglobal_cname}->{cname}"
 
+    def find_shared_usages_of_type(self, type_check_predicate, _seen_scopes=None):
+        if _seen_scopes is None:
+            _seen_scopes = set()
+        include_all_entries = not self.is_module_scope
+        for entry in self.entries.values():
+            if not (include_all_entries or entry.defined_in_pxd or entry.visibility == "public" or entry.api):
+                continue
+            entry_subtypes = PyrexTypes.get_all_subtypes(entry.type)
+            if any(type_check_predicate(sub_tp) for sub_tp in entry_subtypes):
+                return True
+            type_scope = getattr(entry.type, "scope", None)
+            if type_scope is None or type_scope in _seen_scopes:
+                continue
+            _seen_scopes.add(type_scope)
+            if type_scope.find_shared_usages_of_type(type_check_predicate, _seen_scopes):
+                return True
+        return False
+
 
 class PreImportScope(Scope):
 
@@ -1244,10 +1281,6 @@ class BuiltinScope(Scope):
             Scope.__init__(self, "__builtin__", PreImportScope(), None)
         self.type_names = {}
 
-        # Most entries are initialized in init_builtins, except for "bool"
-        # which is apparently a special case because it conflicts with C++ bool
-        self.declare_var("bool", py_object_type, None, "((PyObject*)&PyBool_Type)")
-
     def lookup(self, name, language_level=None):
         # 'language_level' is passed by ModuleScope
         if name == 'unicode' or name == 'basestring':
@@ -1268,11 +1301,13 @@ class BuiltinScope(Scope):
                 else:
                     warning(pos, "undeclared name not builtin: %s" % name, 2)
 
-    def declare_builtin_cfunction(self, name, type, cname, python_equiv=None, utility_code=None):
+    def declare_builtin_cfunction(self, name, type, cname, python_equiv=None, utility_code=None, specialiser=None):
         # If python_equiv == "*", the Python equivalent has the same name
         # as the entry, otherwise it has the name specified by python_equiv.
         name = EncodedString(name)
         entry = self.declare_cfunction(name, type, None, cname, visibility='extern', utility_code=utility_code)
+        if specialiser is not None:
+            entry.specialiser = specialiser
         if python_equiv:
             if python_equiv == "*":
                 python_equiv = name
@@ -1287,18 +1322,22 @@ class BuiltinScope(Scope):
             entry.as_variable = var_entry
         return entry
 
-    def declare_builtin_type(self, name, cname, utility_code=None,
-                             objstruct_cname=None, type_class=PyrexTypes.BuiltinObjectType):
+    def declare_builtin_type(self, name, cname,
+                             objstruct_cname=None, type_class=PyrexTypes.BuiltinObjectType,
+                             utility_code=None):
         name = EncodedString(name)
         type = type_class(name, cname, objstruct_cname)
         scope = CClassScope(name, outer_scope=None, visibility='extern', parent_type=type)
         scope.directives = {}
-        if name == 'bool':
-            type.is_final_type = True
         type.set_scope(scope)
         self.type_names[name] = 1
+
         entry = self.declare_type(name, type, None, visibility='extern')
-        entry.utility_code = utility_code
+        if utility_code:
+            entry.utility_code = utility_code
+        if name == 'range' and 'xrange' not in self.entries:
+            # Keep supporting legacy Py2 'xrange' because it's still in use.
+            self.entries['xrange'] = entry
 
         var_entry = Entry(
             name=entry.name,
@@ -1311,10 +1350,11 @@ class BuiltinScope(Scope):
         var_entry.is_cglobal = 1
         var_entry.is_readonly = 1
         var_entry.is_builtin = 1
-        var_entry.utility_code = utility_code
         var_entry.scope = self
         if Options.cache_builtins:
             var_entry.is_const = True
+        if utility_code:
+            var_entry.utility_code = utility_code
         entry.as_variable = var_entry
 
         return type
@@ -1452,10 +1492,11 @@ class ModuleScope(Scope):
         scope.is_defaults_class_scope = True
 
         # zero pad the argument number so they can be sorted
-        num_zeros = math.floor(math.log10(len(components)))
-        format_str = "arg{0:0%dd}" % num_zeros
+        num_zeros = len(str(len(components)))
+        build_argname = ("arg{:0>%dd}" % num_zeros).format
         for n, type_ in enumerate(components):
-            scope.declare_var(EncodedString(format_str.format(n)), type_, None, is_cdef = True)
+            arg_name = EncodedString(build_argname(n))
+            scope.declare_var(arg_name, type_, pos=None, is_cdef=True)
         return entry
 
     def declare_builtin(self, name, pos):
@@ -2372,7 +2413,8 @@ class CClassScope(ClassScope):
     #  getset_table_cname    string
     #  has_pyobject_attrs    boolean  Any PyObject attributes?
     #  has_memoryview_attrs  boolean  Any memory view attributes?
-    #  has_cpp_class_attrs   boolean  Any (non-pointer) C++ attributes?
+    #  has_explicitly_constructable_class_attrs   boolean  Any attributes that
+    #                               need an explicit constructor (e.g. C++ class non-pointers)?
     #  has_cyclic_pyobject_attrs    boolean  Any PyObject attributes that may need GC?
     #  property_entries      [Entry]
     #  defined               boolean  Defined in .pxd file
@@ -2385,7 +2427,7 @@ class CClassScope(ClassScope):
 
     has_pyobject_attrs = False
     has_memoryview_attrs = False
-    has_cpp_constructable_attrs = False
+    has_explicitly_constructable_attrs = False
     has_cyclic_pyobject_attrs = False
     defined = False
     implemented = False
@@ -2525,9 +2567,8 @@ class CClassScope(ClassScope):
                     type.check_nullary_constructor(pos)
             if type.is_memoryviewslice:
                 self.has_memoryview_attrs = True
-            elif type.needs_cpp_construction:
-                self.use_utility_code(Code.UtilityCode("#include <new>"))
-                self.has_cpp_constructable_attrs = True
+            elif type.needs_explicit_construction(self):
+                self.has_explicitly_constructable_attrs = True
             elif type.is_pyobject and (self.is_closure_class_scope or name != '__weakref__'):
                 self.has_pyobject_attrs = True
                 if (not type.is_builtin_type

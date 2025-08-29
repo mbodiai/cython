@@ -1,5 +1,5 @@
 # distutils: language = c++
-from cpython cimport Py_buffer
+from cpython.array cimport array
 from libcpp.vector cimport vector
 
 
