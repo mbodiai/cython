@@ -1,4 +1,4 @@
-# cython: language_level=3, auto_pickle=False, freethreading_compatible=True
+# cython: language_level=3, auto_pickle=False
 
 from cpython.ref cimport PyObject, Py_INCREF, Py_CLEAR, Py_XDECREF, Py_XINCREF
 from cpython.exc cimport PyErr_Fetch, PyErr_Restore

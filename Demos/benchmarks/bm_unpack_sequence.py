@@ -1,9 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 
 """Microbenchmark for Python's sequence unpacking."""
 
 # Python imports
-import collections
 import optparse
 import time
 
@@ -91,17 +90,17 @@ def do_unpacking(repeat: cython.long, iterations: cython.long, to_unpack, timer=
     return times
 
 
-def bm_tuple_unpacking(repeat: cython.int, iterations: cython.int, timer=DEFAULT_TIMER):
+def test_tuple_unpacking(repeat: cython.int, iterations: cython.int, timer=DEFAULT_TIMER):
     x = tuple(range(10))
     return do_unpacking(repeat, iterations, x, timer)
 
 
-def bm_list_unpacking(repeat: cython.int, iterations: cython.int, timer=DEFAULT_TIMER):
+def test_list_unpacking(repeat: cython.int, iterations: cython.int, timer=DEFAULT_TIMER):
     x = list(range(10))
     return do_unpacking(repeat, iterations, x, timer)
 
 
-def bm_iter_unpacking(repeat: cython.int, iterations: cython.int, timer=DEFAULT_TIMER):
+def test_iter_unpacking(repeat: cython.int, iterations: cython.int, timer=DEFAULT_TIMER):
     x = list(range(10))
     _iter = iter
     class Iterable(object):
@@ -110,21 +109,14 @@ def bm_iter_unpacking(repeat: cython.int, iterations: cython.int, timer=DEFAULT_
     return do_unpacking(repeat, iterations, Iterable(), timer)
 
 
-def test_all(repeat, iterations, timer=DEFAULT_TIMER):
-    tuple_timings = bm_tuple_unpacking(repeat, iterations, timer)
-    list_timings = bm_list_unpacking(repeat, iterations, timer)
+def test_all(repeat, iterations, timer=time.perf_counter):
+    tuple_timings = test_tuple_unpacking(repeat, iterations, timer)
+    list_timings = test_list_unpacking(repeat, iterations, timer)
     return [x + y for (x, y) in zip(tuple_timings, list_timings)]
 
 
-def run_benchmark(repeat: cython.int = 10, number=20_000, timer=DEFAULT_TIMER):
-    collected_timings = collections.defaultdict(list)
-
-    for name, func in globals().items():
-        if name.startswith('bm_'):
-            collected_timings[name] = func(repeat, number, timer)
-
-    for name, timings in collected_timings.items():
-        print(f"{name}: {timings}")
+def run_benchmark(repeat=10, scale=20_000, timer=DEFAULT_TIMER):
+    return test_all(repeat, scale, timer)
 
 
 if __name__ == "__main__":
@@ -135,7 +127,7 @@ if __name__ == "__main__":
     util.add_standard_options_to(parser)
     options, args = parser.parse_args()
 
-    tests = {"tuple": bm_tuple_unpacking, "list": bm_list_unpacking}
+    tests = {"tuple": test_tuple_unpacking, "list": test_list_unpacking}
 
     if len(args) > 1:
         parser.error("Can only specify one test")

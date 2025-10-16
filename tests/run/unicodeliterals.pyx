@@ -61,8 +61,10 @@ __doc__ = br"""
     1
     >>> sys.maxunicode >= 65535
     True
-    >>> len(wide_literal)
+    >>> sys.maxunicode == 65535 and 1 or len(wide_literal) # test for wide build
     1
+    >>> sys.maxunicode > 65535 and 2 or len(wide_literal)  # test for narrow build
+    2
 """.decode("ASCII") + u"""
     >>> ua ==  'abc'
     True
@@ -84,7 +86,7 @@ __doc__ = br"""
     True
     >>> h ==  '\\ud800' # unescaped by Python (required by doctest)
     True
-    >>> p == u'\\ud800\\udc00'  or  p  # unescaped by Python (required by doctest)
+    >>> p == (u'\\ud800\\udc00' if sys.maxunicode == 1114111 else  '\\U00010000')  or  p  # unescaped by Python (required by doctest)
     True
     >>> q ==  '\\udc00\\ud800'  or  q  # unescaped by Python (required by doctest)
     True

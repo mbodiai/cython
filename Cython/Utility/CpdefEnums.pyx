@@ -18,6 +18,7 @@ from enum import IntFlag as __Pyx_FlagBase
 cdef extern from *:
     object {{enum_to_pyint_func}}({{name}} value)
 
+cdef dict __Pyx_globals = globals()
 # create new IntFlag() - the assumption is that C enums are sufficiently commonly
 # used as flags that this is the most appropriate base class
 {{name}} = __Pyx_FlagBase('{{name}}', [
@@ -25,7 +26,7 @@ cdef extern from *:
     ('{{item}}', {{enum_to_pyint_func}}({{item}})),
     {{endfor}}
     # Try to look up the module name dynamically if possible
-], module=globals().get("__module__", '{{static_modname}}'))
+], module=__Pyx_globals.get("__module__", '{{static_modname}}'))
 
 if PY_VERSION_HEX >= 0x030B0000:
     # Python 3.11 starts making the behaviour of flags stricter
@@ -37,6 +38,10 @@ if PY_VERSION_HEX >= 0x030B0000:
 {{if enum_doc is not None}}
 {{name}}.__doc__ = {{ repr(enum_doc) }}
 {{endif}}
+
+{{for item in items}}
+__Pyx_globals['{{item}}'] = {{name}}.{{item}}
+{{endfor}}
 
 
 #################### CppScopedEnumType ####################

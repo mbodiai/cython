@@ -1213,7 +1213,7 @@ def basic_struct(MyStruct[:] buf):
     >>> basic_struct(MyStructMockBuffer(None, [(1, 2, 3, 4, 5)], format="ccqii"))
     1 2 3 4 5
     """
-    print buf[0].a, buf[0].b, buf[0].c, buf[0].d, buf[0].e
+    print(buf[0].a, buf[0].b, buf[0].c, buf[0].d, buf[0].e)
 
 @testcase
 def const_struct(const MyStruct[:] buf):
@@ -1225,7 +1225,7 @@ def const_struct(const MyStruct[:] buf):
     >>> const_struct(MyStructMockBuffer(None, [(1, 2, 3, 4, 5)], format="ccqii", writable=False))
     1 2 3 4 5
     """
-    print buf[0].a, buf[0].b, buf[0].c, buf[0].d, buf[0].e
+    print(buf[0].a, buf[0].b, buf[0].c, buf[0].d, buf[0].e)
 
 @testcase
 def nested_struct(NestedStruct[:] buf):
@@ -1249,7 +1249,7 @@ def const_nested_struct(const NestedStruct[:] buf):
     >>> const_nested_struct(NestedStructMockBuffer(None, [(1, 2, 3, 4, 5)], format="T{ii}T{2i}i", writable=False))
     1 2 3 4 5
     """
-    print buf[0].x.a, buf[0].x.b, buf[0].y.a, buf[0].y.b, buf[0].z
+    print(buf[0].x.a, buf[0].x.b, buf[0].y.a, buf[0].y.b, buf[0].z)
 
 @testcase
 def packed_struct(PackedStruct[:] buf):
@@ -1264,7 +1264,7 @@ def packed_struct(PackedStruct[:] buf):
     1 2
 
     """
-    print buf[0].a, buf[0].b
+    print(buf[0].a, buf[0].b)
 
 @testcase
 def const_packed_struct(const PackedStruct[:] buf):
@@ -1279,7 +1279,7 @@ def const_packed_struct(const PackedStruct[:] buf):
     1 2
 
     """
-    print buf[0].a, buf[0].b
+    print(buf[0].a, buf[0].b)
 
 @testcase
 def nested_packed_struct(NestedPackedStruct[:] buf):
@@ -1293,7 +1293,7 @@ def nested_packed_struct(NestedPackedStruct[:] buf):
     >>> nested_packed_struct(NestedPackedStructMockBuffer(None, [(1, 2, 3, 4, 5)], format="^c@i^ci@i"))
     1 2 3 4 5
     """
-    print buf[0].a, buf[0].b, buf[0].sub.a, buf[0].sub.b, buf[0].c
+    print(buf[0].a, buf[0].b, buf[0].sub.a, buf[0].sub.b, buf[0].c)
 
 
 @testcase
@@ -1308,7 +1308,7 @@ def const_nested_packed_struct(const NestedPackedStruct[:] buf):
     >>> const_nested_packed_struct(NestedPackedStructMockBuffer(None, [(1, 2, 3, 4, 5)], format="^c@i^ci@i", writable=False))
     1 2 3 4 5
     """
-    print buf[0].a, buf[0].b, buf[0].sub.a, buf[0].sub.b, buf[0].c
+    print(buf[0].a, buf[0].b, buf[0].sub.a, buf[0].sub.b, buf[0].c)
 
 
 @testcase
@@ -1317,7 +1317,7 @@ def complex_dtype(long double complex[:] buf):
     >>> complex_dtype(LongComplexMockBuffer(None, [(0, -1)]))  # , writable=False))
     -1j
     """
-    print buf[0]
+    print(buf[0])
 
 @testcase
 def complex_inplace(long double complex[:] buf):
@@ -1326,7 +1326,7 @@ def complex_inplace(long double complex[:] buf):
     (1+1j)
     """
     buf[0] = buf[0] + 1 + 2j
-    print buf[0]
+    print(buf[0])
 
 @testcase
 def complex_struct_dtype(LongComplex[:] buf):
@@ -1336,7 +1336,7 @@ def complex_struct_dtype(LongComplex[:] buf):
     >>> complex_struct_dtype(LongComplexMockBuffer(None, [(0, -1)]))  # , writable=False))
     0.0 -1.0
     """
-    print buf[0].real, buf[0].imag
+    print(buf[0].real, buf[0].imag)
 
 @testcase
 def complex_struct_inplace(LongComplex[:] buf):
@@ -1346,7 +1346,7 @@ def complex_struct_inplace(LongComplex[:] buf):
     """
     buf[0].real += 1
     buf[0].imag += 2
-    print buf[0].real, buf[0].imag
+    print(buf[0].real, buf[0].imag)
 
 #
 # Nogil

@@ -373,15 +373,15 @@ cdef inline int datetime_fold(object o) noexcept:
 
 # Get days of timedelta
 cdef inline int timedelta_days(object o) noexcept:
-    return PyDateTime_DELTA_GET_DAYS(o)
+    return (<PyDateTime_Delta*>o).days
 
 # Get seconds of timedelta
 cdef inline int timedelta_seconds(object o) noexcept:
-    return PyDateTime_DELTA_GET_SECONDS(o)
+    return (<PyDateTime_Delta*>o).seconds
 
 # Get microseconds of timedelta
 cdef inline int timedelta_microseconds(object o) noexcept:
-    return PyDateTime_DELTA_GET_MICROSECONDS(o)
+    return (<PyDateTime_Delta*>o).microseconds
 
 cdef inline double total_seconds(timedelta obj) noexcept:
     # Mirrors the "timedelta.total_seconds()" method.

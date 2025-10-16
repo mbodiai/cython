@@ -63,10 +63,10 @@ try:
     from sys import getrefcount
 except ImportError:
     from cpython.ref cimport PyObject, Py_REFCNT
-    def getrefcount(obj, _exec=exec):
+    def getrefcount(obj):
         gc.collect()
         # PyPy needs to execute a bytecode to run the finalizers
-        _exec('', {}, {})
+        exec('', {}, {})
         return Py_REFCNT(obj)
 
 
@@ -78,17 +78,16 @@ def no_pypy(f):
 
 # compiled exec()
 def exec(code_string, l, g):
-    from Cython.Build.Inline import cython_inline
-    from io import StringIO
+    from Cython.Shadow import inline
+    try:
+        from StringIO import StringIO
+    except ImportError:
+        from io import StringIO
 
     old_stderr = sys.stderr
     try:
         sys.stderr = StringIO()
-        ns = cython_inline(
-            code_string, locals=l, globals=g,
-            lib_dir=os.path.dirname(__file__),
-            language_level=3,
-        )
+        ns = inline(code_string, locals=l, globals=g, lib_dir=os.path.dirname(__file__), language_level=3)
     finally:
         sys.stderr = old_stderr
     g.update(ns)
@@ -761,7 +760,6 @@ class AsyncBadSyntaxTest(unittest.TestCase):
 
 class TokenizerRegrTest(unittest.TestCase):
 
-    @unittest.skip("Very slow C code compilation.")
     def test_oneline_defs(self):
         buf = []
         for i in range(500):

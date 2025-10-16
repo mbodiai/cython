@@ -2,25 +2,17 @@
 
 The current Cython documentation is hosted at [cython.readthedocs.io](https://cython.readthedocs.io/)
 
-The main documentation files are located in the `cython/docs/src` folder
-and the code that is used in those documents is located in `cython/docs/examples`
+The main documentation files are located in the `cython/docs/src` folder and the code that is used in those documents is located in the `cython/docs/examples`
 
-Before building, you need to install the Python dependencies from `doc-requirements.txt`.
-On Linux you will also need: `make`, `texlive` (texlive-formats-extra on Debian, only for PDFs),
-GCC (cc on Debian), C++ compiler (g++ on Debian).
+Before building, you need to install `doc-requirements.txt` (and `make` on Linux).
 
-Debian install command:
-```shell
-sudo apt update && sudo apt install make texlive-formats-extra cc g++
-```
-
-To install from `doc-requirements.txt`, run in the root folder of the repository
+To install `doc-requirements.txt` run in the root folder
 
 ```shell
 pip install -r doc-requirements.txt
 ```
 
-To build the documentation, go into the `docs` folder and run
+To build the documentation go into `docs` folder and run
 
 ```shell
 make html

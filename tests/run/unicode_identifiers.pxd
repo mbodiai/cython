@@ -8,4 +8,3 @@ cdef class Γναμε2:
     cdef εxciting_cdef(self)
     cpdef boring_cpdef(self)
     cpdef εxciting_cpdef(self)
-    cpdef cpdef_with_exciting_arg(self, ααα)

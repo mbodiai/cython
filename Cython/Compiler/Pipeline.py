@@ -1,5 +1,6 @@
 import itertools
 from time import time
+from typing import TYPE_CHECKING
 
 from . import Errors
 from . import DebugFlags
@@ -7,6 +8,9 @@ from . import Options
 from .Errors import CompileError, InternalError, AbortError
 from . import Naming
 
+if TYPE_CHECKING:
+    from .UtilityCode import CythonUtilityCode
+    from .ModuleNode import ModuleNode
 #
 # Really small pipeline stages
 #
@@ -89,12 +93,9 @@ def use_utility_code_definitions(scope, target, seen=None):
 
 def sorted_utility_codes_and_deps(utilcodes):
     ranks = {}
-    get_rank = ranks.get
-
-    def calculate_rank(utilcode):
-        rank = get_rank(utilcode)
-        if rank is None:
-            ranks[utilcode] = 0  # prevent infinite recursion on circular dependencies
+    def calculate_rank(utilcode:"CythonUtilityCode"):
+        rank = ranks.setdefault(utilcode, 0)
+        if rank == 0:
             original_order = len(ranks)
             rank = ranks[utilcode] = 1 + (
                 min([calculate_rank(dep) for dep in utilcode.requires]) if utilcode.requires else -1
@@ -104,8 +105,7 @@ def sorted_utility_codes_and_deps(utilcodes):
     for utilcode in utilcodes:
         calculate_rank(utilcode)
 
-    # include all recursively collected dependencies
-    return sorted(ranks, key=get_rank)
+    return sorted(ranks, key=ranks.__getitem__)
 
 
 def normalize_deps(utilcodes):
@@ -114,8 +114,8 @@ def normalize_deps(utilcodes):
         utilcode.requires = [deps.setdefault(dep, dep) for dep in utilcode.requires or ()]
 
 
-def inject_utility_code_stage_factory(context, internalise_c_class_entries=True):
-    def inject_utility_code_stage(module_node):
+def inject_utility_code_stage_factory(context:"Context", internalise_c_class_entries=True):
+    def inject_utility_code_stage(module_node:"ModuleNode"):
         module_node.prepare_utility_code()
         use_utility_code_definitions(context.cython_scope, module_node.scope)
 

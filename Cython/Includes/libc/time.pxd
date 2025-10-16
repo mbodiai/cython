@@ -8,7 +8,6 @@ cdef extern from "<time.h>" nogil:
     struct timespec:
         time_t tv_sec
         long tv_nsec
-    enum: TIME_UTC
 
     enum: CLOCKS_PER_SEC
     clock_t clock()             # CPU time

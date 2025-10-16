@@ -433,8 +433,8 @@ def acquire_release_cycle(obj):
     gc.collect()
 
 cdef packed struct StructArray:
-    int a[4]
-    signed char b[5]
+    int[4] a
+    signed char[5] b
 
 def test_memslice_structarray(data, dtype):
     """
@@ -486,8 +486,8 @@ def test_memslice_structarray(data, dtype):
     cdef int i, j
     for i in range(3):
         for j in range(4):
-            print myslice[i].a[j]
-        print myslice[i].b.decode('ASCII')
+            print(myslice[i].a[j])
+        print(myslice[i].b.decode('ASCII'))
 
 def test_structarray_errors(StructArray[:] a):
     """
@@ -525,9 +525,9 @@ def test_structarray_errors(StructArray[:] a):
     """
 
 cdef struct StringStruct:
-    signed char c[4][4]
+    signed char[4][4] c
 
-ctypedef signed char String[4][4]
+ctypedef signed char[4][4] String
 
 def stringstructtest(StringStruct[:] view):
     pass
@@ -569,9 +569,9 @@ def test_struct_attributes():
     myslice[0].attrib3.c[0][0] = 'c'
 
     array = np.asarray(myslice)
-    print array[0]['attrib1']
-    print array[0]['attrib2']
-    print chr(array[0]['attrib3']['c'][0][0])
+    print(array[0]['attrib1'])
+    print(array[0]['attrib2'])
+    print(chr(array[0]['attrib3']['c'][0][0]))
 
 #
 ### Test for NULL strides (C contiguous buffers)
@@ -698,8 +698,8 @@ def test_boundscheck_and_wraparound(double[:, :] x):
 
 
 ctypedef struct SameTypeAfterArraysStructSimple:
-    double a[16]
-    double b[16]
+    double[16] a
+    double[16] b
     double c
 
 def same_type_after_arrays_simple():

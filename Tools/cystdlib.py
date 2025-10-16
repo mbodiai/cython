@@ -14,7 +14,10 @@ Usage example::
 
 import os
 import sys
-from distutils.core import setup
+try:
+    from distutils.core import setup # type: ignore
+except ImportError:
+    from setuptools import setup
 from Cython.Build import cythonize
 from Cython.Compiler import Options
 
@@ -78,7 +81,7 @@ special_directives = [
       'getopt.py',
       'os.py',
       'types.py',
-     ], dict(auto_cpdef=False)),
+     ], dict(auto_cpdef=True)),
 ]
 del special_directives[:]  # currently unused
 
@@ -86,7 +89,7 @@ def build_extensions(includes='**/*.py',
                      excludes=None,
                      special_directives=special_directives,
                      language_level=sys.version_info[0],
-                     parallel=None):
+                     parallel: int | None = None):
     if isinstance(includes, str):
         includes = [includes]
     excludes = list(excludes or exclude_patterns) + broken
@@ -159,6 +162,7 @@ if __name__ == '__main__':
     if options.current_python:
         # assume that the stdlib is where the "os" module lives
         os.chdir(os.path.dirname(os.__file__))
+        print(f"Compiling files to {os.getcwd()}")
     else:
         os.chdir(args[0])
 

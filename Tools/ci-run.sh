@@ -92,25 +92,26 @@ echo "===================="
 echo "Installing requirements [python]"
 if [[ $PYTHON_VERSION == "3.1"[2-9]* ]]; then
   python -m pip install -U pip wheel setuptools || exit 1
+  if [[ $PYTHON_VERSION == "3.12"* ]]; then
+    python -m pip install --pre -r test-requirements-312.txt || exit 1
+  else
+    # Install packages one by one, allowing failures due to missing recent wheels.
+    cat test-requirements-312.txt | while read package; do python -m pip install --pre --only-binary ":all:" "$package" || true; done
+  fi
+  if [[ $PYTHON_VERSION == "3.13"* ]]; then
+    python -m pip install --pre -r test-requirements-313.txt || exit 1
+  fi
 else
-  # Drop dependencies cryptography and nh3 (purely from twine) when removing support for PyPy3.8.
-  python -m pip install -U pip "setuptools<60" wheel twine "cryptography<42" "nh3<0.2.19" || exit 1
-fi
-if [[ $PYTHON_VERSION != *"t" && $PYTHON_VERSION != *"t-dev" ]]; then
-  # twine is not installable on freethreaded Python due to cryptography requirement
-  python -m pip install -U twine || exit 1
-fi
-if [[ $PYTHON_VERSION != *"-dev" ]]; then
-  python -m pip install --pre -r test-requirements.txt || exit 1
-else
-  # Install packages one by one, allowing failures due to missing recent wheels.
-  cat test-requirements.txt | while read package; do python -m pip install --pre --only-binary ":all:" "$package" || true; done
-fi
-if [[ $PYTHON_VERSION == "3.13"* ]]; then
-  python -m pip install --pre -r test-requirements-313.txt || exit 1
-fi
-if [[ $PYTHON_VERSION != "pypy"* && $PYTHON_VERSION != "graalpy"* ]]; then
-  python -m pip install -r test-requirements-cpython.txt || exit 1
+  python -m pip install -U pip "setuptools<60" wheel || exit 1
+
+  if [[ $PYTHON_VERSION != *"-dev" || $COVERAGE == "1" ]]; then
+    python -m pip install -r test-requirements.txt || exit 1
+    if [[ $PYTHON_VERSION != "pypy"* && $PYTHON_VERSION != "graalpy"* && $PYTHON_VERSION != "3."[1]* ]]; then
+      python -m pip install -r test-requirements-cpython.txt || exit 1
+    elif [[ $PYTHON_VERSION == "pypy-2.7" ]]; then
+      python -m pip install -r test-requirements-pypy27.txt || exit 1
+    fi
+  fi
 fi
 
 if [[ $TEST_CODE_STYLE == "1" ]]; then
@@ -146,10 +147,8 @@ if [[ $OSTYPE == "msys" ]]; then  # for MSVC cl
   # (off by default) 5045 warns that the compiler will insert Spectre mitigations for memory load if the /Qspectre switch is specified
   # (off by default) 4820 warns about the code in Python\3.9.6\x64\include ...
   CFLAGS="-Od /Z7 /MP /W4 /wd4711 /wd4127 /wd5045 /wd4820"
-elif [[ $OSTYPE == "darwin"* ]]; then
-  CFLAGS="-O0 -g2 -Wall -Wextra -Wcast-qual -Wconversion -Wdeprecated -Wunused-result"
 else
-  CFLAGS="-Og -g2 -Wall -Wextra -Wcast-qual -Wconversion -Wdeprecated -Wunused-result"
+  CFLAGS="-O0 -ggdb -Wall -Wextra -Wcast-qual -Wconversion -Wdeprecated -Wunused-result"
 fi
 # Trying to cover debug assertions in the CI without adding
 # extra jobs. Therefore, odd-numbered minor versions of Python
@@ -199,12 +198,6 @@ if [[ $NO_CYTHON_COMPILE != "1" && $PYTHON_VERSION != "pypy"* ]]; then
         $LIMITED_API == "" && $EXTRA_CFLAGS == "" ]]; then
     python setup.py bdist_wheel || exit 1
     ls -l dist/ || true
-
-    # Check for changelog entry in wheel metadata.
-    fgrep -q '=======' $( [ -d ?ython-*.dist-info/ ] && echo "?ython-*.dist-info/METADATA" || echo "?ython*.egg-info/PKG-INFO" ) || {
-        echo "ERROR: wheel METADATA lacks changelog - did you add a version entry?" ; exit 1; }
-
-    if $( twine --version ); then twine check dist/*.whl; fi
   fi
 
   echo "Extension modules created during the build:"
@@ -226,7 +219,7 @@ fi
 
 RUNTESTS_ARGS=""
 if [[ $COVERAGE == "1" ]]; then
-  RUNTESTS_ARGS="$RUNTESTS_ARGS --coverage --coverage-html --coverage-md --cython-only"
+  RUNTESTS_ARGS="$RUNTESTS_ARGS --coverage --coverage-html --cython-only"
 fi
 if [[ $TEST_CODE_STYLE != "1" ]]; then
   RUNTESTS_ARGS="$RUNTESTS_ARGS -j7"

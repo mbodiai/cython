@@ -1,7 +1,7 @@
 # cython.* namespace for pure mode.
 
 # Possible version formats: "3.1.0", "3.1.0a1", "3.1.0a1.dev0"
-__version__ = "3.2.0a0"
+__version__ = "3.1.0b1"
 
 
 # BEGIN shameless copy from Cython/minivect/minitypes.py
@@ -109,7 +109,7 @@ annotation_typing = returns = wraparound = boundscheck = initializedcheck = \
     auto_cpdef = c_api_binop_methods = \
     allow_none_for_extension_args = callspec = show_performance_hints = \
     cpp_locals = py2_import = iterable_coroutine = remove_unreachable = \
-    overflowcheck = test_body_needs_exception_handling = \
+    overflowcheck = \
         lambda _: _EmptyDecoratorAndManager()
 
 # Note that fast_getattr is untested and undocumented!
@@ -669,22 +669,3 @@ sys.modules['cython.cimports'] = CythonCImports('cython.cimports', libc=sys.modu
 # shadow the standard library ones (if they are available)
 dataclasses = sys.modules['cython.dataclasses'] = CythonDotImportedFromElsewhere('dataclasses')
 del math, sys
-
-class pymutex:
-    def __init__(self):
-        import threading
-        self._l = threading.Lock()
-
-    def acquire(self):
-        return self._l.acquire()
-
-    def release(self):
-        return self._l.release()
-
-    def __enter__(self):
-        return self._l.__enter__()
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        return self._l.__exit__(exc_type, exc_value, traceback)
-
-pythread_type_lock = pymutex

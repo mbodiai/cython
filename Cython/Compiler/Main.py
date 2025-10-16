@@ -306,9 +306,9 @@ class Context:
 
     def search_include_directories(self, qualified_name,
                                    suffix=None, source_pos=None, include=False, sys_path=False, source_file_path=None):
-        include_dirs = self.include_directories
+        include_dirs = list(self.include_directories)
         if sys_path:
-            include_dirs = include_dirs + sys.path
+            include_dirs.extend(sys.path)
         # include_dirs must be hashable for caching in @cached_function
         include_dirs = tuple(include_dirs + [standard_include_path])
         return search_include_directories(
@@ -635,17 +635,17 @@ class CompilationResultSet(dict):
 
 
 def get_fingerprint(cache, source, options):
-    from ..Build.Dependencies import create_dependency_tree
-    from ..Build.Cache import FingerprintFlags
-    context = Context.from_options(options)
-    dependencies = create_dependency_tree(context)
-    return cache.transitive_fingerprint(
-            source, dependencies.all_dependencies(source), options,
-            FingerprintFlags(
-                'c++' if options.cplus else 'c',
-                np_pythran=options.np_pythran
-            )
-    )
+        from ..Build.Dependencies import create_dependency_tree
+        from ..Build.Cache import FingerprintFlags
+        context = Context.from_options(options)
+        dependencies = create_dependency_tree(context)
+        return cache.transitive_fingerprint(
+                source, dependencies.all_dependencies(source), options,
+                FingerprintFlags(
+                    'c++' if options.cplus else 'c',
+                    np_pythran=options.np_pythran
+                )
+        )
 
 
 def compile_single(source, options, full_module_name, cache=None, context=None, fingerprint=None):
@@ -714,7 +714,7 @@ def compile(source, options = None, full_module_name = None, **kwds):
     checking is requested, a CompilationResult is returned, otherwise a
     CompilationResultSet is returned.
     """
-    options = CompilationOptions(defaults = options, **kwds)
+    options = CompilationOptions(**options.as_dict(), **kwds) # type: ignore
 
     # cache is enabled when:
     # * options.cache is True (the default path to the cache base dir is used)

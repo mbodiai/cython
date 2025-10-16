@@ -268,23 +268,6 @@ Declaring an enum as ``cpdef`` will create a :pep:`435`-style Python wrapper::
         soft = 2
         runny = 3
 
-Up to Cython version 3.0.x, this used to copy all item names into the global
-module namespace, so that they were available both as attributes of the Python
-enum type (``CheseState`` above) and as global constants.
-This was changed in Cython 3.1 to distinguish between anonymous cpdef enums,
-which only create global Python constants for their items, and named cpdef enums,
-where the items live only in the namespace of the enum type and do not create
-global Python constants.
-
-To create global constants also for the items of a declared named enum type,
-you can copy the enum items into the global Python module namespace manually.
-In Cython before 3.1, this will simply overwrite the global names with
-their own value, which makes it backwards compatible.
-
-::
-
-    globals().update(getattr(CheeseState, '__members__'))
-
 There is currently no special syntax for defining a constant, but you can use
 an anonymous :keyword:`enum` declaration for this purpose, for example,::
 
@@ -408,9 +391,6 @@ This requires an *exact* match of the class, it does not allow subclasses.
 This allows Cython to optimize code by accessing internals of the builtin class,
 which is the main reason for declaring builtin types in the first place.
 
-Since Cython 3.1, builtin *exception* types generally no longer fall under the "exact type" restriction.
-Thus, declarations like ``exc: BaseException`` accept all exception objects, as they probably intend.
-
 For declared builtin types, Cython uses internally a C variable of type :c:expr:`PyObject*`.
 
 .. note:: The Python types ``int``, ``long``, and ``float`` are not available for static
@@ -497,11 +477,11 @@ Similar to pointers Cython supports shortcut types that can be used in pure pyth
 
 For full list of shortcut types see the ``Shadow.pyi`` file.
 
-The ``const`` qualifier supports declaration of global constants::
+``const`` qualifier supports declaration of global constants::
 
     cdef const int i = 5
 
-    # constant pointers are defined as pointer to a constant value.
+    # constant pointers are defined as pointer to constant value.
     cdef const char *msg = "Dummy string"
     msg = "Another dummy string"
 

@@ -1,11 +1,15 @@
+from dataclasses import dataclass, field
 import os
 import shutil
 import tempfile
 from collections import defaultdict
+from typing import Dict, List, Optional, Union
+from typing_extensions import Literal
 
 from .Dependencies import cythonize, extended_iglob
 from ..Utils import is_package_dir
 from ..Compiler import Options
+from ..Compiler.Options import CompilationOptions
 
 try:
     import multiprocessing
@@ -38,13 +42,15 @@ def find_package_base(path):
     return base_dir, package_path
 
 
-def cython_compile(path_pattern, options):
+def cython_compile(path_pattern, options: "CythonizeOptions") -> None:
+    """Compile a pattern of files using Cython and build if requested."""
     all_paths = map(os.path.abspath, extended_iglob(path_pattern))
     ext_modules_by_basedir = _cython_compile_files(all_paths, options)
     _build(list(ext_modules_by_basedir.items()), options.parallel)
 
 
-def _cython_compile_files(all_paths, options) -> dict:
+def _cython_compile_files(all_paths, options: "CythonizeOptions") -> Dict:
+    """Compile Cython files and return modules to build by directory."""
     ext_modules_to_build = defaultdict(list)
 
     for path in all_paths:
@@ -114,6 +120,10 @@ def run_distutils(args):
             raise ImportError("'distutils' is not available. Please install 'setuptools' for binary builds.")
 
     base_dir, ext_modules = args
+    if os.environ.get('CYTHON_PATH_DEBUG'):
+        print('[run_distutils] base_dir:', base_dir)
+    from Cython.Distutils import build_ext as cy_build_ext
+
     script_args = ['build_ext', '-i']
     cwd = os.getcwd()
     temp_dir = None
@@ -122,16 +132,50 @@ def run_distutils(args):
             os.chdir(base_dir)
             temp_dir = tempfile.mkdtemp(dir=base_dir)
             script_args.extend(['--build-temp', temp_dir])
+
+        # Ensure that all source paths provided to setup() are relative (setuptools requirement)
+        for _ext in ext_modules:
+            sanitized = []
+            for _src in _ext.sources:
+                if os.path.isabs(_src):
+                    sanitized.append(os.path.relpath(_src, os.getcwd()))
+                else:
+                    sanitized.append(_src)
+            _ext.sources = sanitized
         setup(
             script_name='setup.py',
             script_args=script_args,
             ext_modules=ext_modules,
+            cmdclass={'build_ext': cy_build_ext},
         )
     finally:
         if base_dir:
             os.chdir(cwd)
             if temp_dir and os.path.isdir(temp_dir):
                 shutil.rmtree(temp_dir)
+
+@dataclass
+class CythonizeOptions(dict):
+    directives: Dict[str, str] = field(default_factory=dict)
+    compile_time_env: Dict[str, str] = field(default_factory=dict)
+    options: CompilationOptions = field(default_factory=lambda: CompilationOptions())
+    language_level: int = 3
+    language: Optional[Literal["c", "c++"]] = None
+    annotate: Optional[Literal["default", "fullc"]] = None
+    excludes: List[str] = field(default_factory=list)
+    build: bool = False
+    build_inplace: bool = False
+    parallel: int = parallel_compiles
+    force: bool = False
+    quiet: bool = False
+    lenient: bool = False
+    keep_going: bool = False
+    no_docstrings: bool = False
+    sources: List[str] = field(default_factory=list)
+    depfile: bool = False
+    benchmark: Optional[str] = None  # Added attribute for benchmark
+    benchmark_setup: Optional[str] = None  # Added attribute for benchmark setup
+
 
 
 def benchmark(code, setup_code=None, import_module=None, directives=None):
@@ -238,7 +282,9 @@ Environment variables:
 
 
 def parse_args_raw(parser, args):
-    options, unknown = parser.parse_known_args(args)
+    opts, unk = parser.parse_known_args(args)
+    options: CythonizeOptions = CythonizeOptions(**vars(opts))
+    unknown: list[str] = unk
     sources = options.sources
     # if positional arguments were interspersed
     # some of them are in unknown

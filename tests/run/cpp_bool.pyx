@@ -3,8 +3,6 @@
 
 from libcpp cimport bool
 
-from typing import Optional
-
 def test_bool(bool a):
     """
     >>> test_bool(True)
@@ -41,11 +39,3 @@ def test_may_raise_exception(bool value, exception=None):
     RuntimeError
     """
     return may_raise_exception(value, exception)
-
-def test_as_annotation(value: Optional[bool]):
-    """
-    >>> test_as_annotation(True)
-    True
-    >>> test_as_annotation(None)
-    """
-    return value

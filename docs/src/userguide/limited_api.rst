@@ -9,25 +9,12 @@ get a forward-compatibility guarantee (the Stable ABI) which means that the exte
 be used with any future version of Python, without recompilation.
 
 Cython is able to compile extension modules in Limited API mode from Cython 3.1 onwards
-(Cython 3.0 had some support, but not enough to be practically useful).  The Limited API
-implementation in Cython 3.1 is close to feature-complete and successfully runs the majority of
-Cython's own test-suite. However, you may still encounter bugs and missing features (even
-beyond the known missing features described below).
+(Cython 3.0 had some support, but not enough to be practically useful).  Note that this is still
+experimental - a lot of code is known to work but testing is currently incomplete so you may well
+encounter bugs and missing features.
 
 From a user's point of view, the main benefit is that you only need to compile your Cython module
-once and it will support a range of Python versions.  Be aware that forward compatibility isn't
-necessarily perfect:
-
-* The behaviour of some of the Limited API functions in the Python runtime has changed from
-  version-to-version.
-* in some cases Cython just uses an unstable Python API instead of an unstable C API, which
-  may just move any incompatibility from compile-time to runtime.
-* Cython itself does not test forward compatibility extensively. There is a
-  prohibilitively large 3D tensor (header version, ``Py_LIMITED_API`` value, runtime version)
-  of combinations to test.
-
-Therefore you should be sure to test your own extensions on all the versions of Python that
-you claim to support.
+once and it will support a range of Python versions.
 
 Limitations
 ===========
@@ -75,7 +62,7 @@ Cython's usage of the Limited API is controlled by setting the ``Py_LIMITED_API`
 when running the C compiler.  This macro should be set to the version-hex for the
 minimum Python version that you want to support.  Useful version-hexes are:
 
-* ``0x03080000`` - Python 3.8 - the minimum version that Cython supports.
+* ``0x03070000`` - Python 3.7 - the minimum version that Cython supports.
 * ``0x030B0000`` - Python 3.11 - the first version to support typed memoryviews.
 * ``0x030C0000`` - Python 3.12 - the first version to support vectorcall (performance
   improvement).
@@ -102,7 +89,7 @@ documentation)::
                 name="cy_code",
                 sources=["cy_code.pyx"],
                 define_macros=[
-                    ("Py_LIMITED_API", 0x030A0000),
+                    ("Py_LIMITED_API", 0x03070000),
                 ],
                 py_limited_api=True
             ),
@@ -126,7 +113,7 @@ Scikit-build
     add_library(cy_code MODULE ${cy_code})
     python_extension_module(cy_code)
     
-    target_compile_definitions(cy_code PUBLIC -DPy_LIMITED_API=0x030A0000)
+    target_compile_definitions(cy_code PUBLIC -DPy_LIMITED_API=0x03070000)
     set_target_properties(cy_code PROPERTIES SUFFIX .abi3.so)
     
     install(TARGETS cy_code LIBRARY DESTINATION .)
@@ -155,10 +142,10 @@ to generate Python modules::
     py.extension_module(
         'cy_code',
         'cy_code.pyx',
-        limited_api: '3.10'
+        limited_api: '3.7'
     )
     
 Again, this example is adapted from
 `the Meson documentation <https://mesonbuild.com/Cython.html#cython>`_ and more complete
-details are available there.  The Limited API modification is the argument ``limited_api: '3.10'``,
+details are available there.  The Limited API modification is the argument ``limited_api: '3.7'``,
 which both sets the version hex and names the generated module correctly.

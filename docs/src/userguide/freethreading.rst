@@ -70,9 +70,7 @@ syntax::
     with cython.critical_section(o):
       ...
 
-Critical sections can take either one or two Python objects as arguments, or take one or
-two ``cython.pymutex`` arguments (for convenience you can pass either the mutexes or
-pointers to the mutexes).  You are required to
+Critical sections can take one or two Python objects as arguments.  You are required to
 hold the GIL on entry to a critical section (you can release the GIL inside the critical
 section but that also temporarily releases the critical section so is unlikely to be
 a useful thing to do).
@@ -87,10 +85,7 @@ We suggest reading the Python documentation to understand how critical sections 
   critical section in favour of a critical section based on that object.
 
 On non-freethreading builds ``cython.critical_section`` does nothing - you get the
-same guarantees simply from the fact you hold the GIL.  Our current experience is
-that this provides slightly less thread-safety than you get in freethreading builds
-simply because Python releases the GIL more readily than it releases a critical
-section.
+same guarantees simply from the fact you hold the GIL.
 
 As an alternative syntax, ``cython.critical_section`` can be used as a decorator
 or a function taking at least one argument.  In this case the critical section
@@ -109,45 +104,6 @@ lasts the duration of the function and locks on the first argument::
 
 Our expectation is that this will be most useful for locking on the ``self`` argument
 of methods in C classes.
-
-
-Locks
------
-
-Cython provides ``cython.pymutex`` as a more robust lock type.  Unlike
-``cython.critical_section`` this will never release the lock unless you explicitly
-ask it to (at the cost of losing ``critical_section``'s inbuilt protection against
-deadlocks).
-
-``cython.pymutex`` supports two operations: ``acquire`` and ``release``.
-``cython.pymutex`` can also be used in a ``with`` statement::
-
-  cdef cython.pymutex l
-  with l:
-      ...  # perform operations with the lock
-
-  # or manually
-  l.acquire()
-  ...  # perform operations with the lock
-  l.release()
-
-``acquire`` will avoid deadlocks if the GIL is held (only relevant in
-non-freethreading versions of Python).  However, you are at risk of deadlock
-if you attempt to acquire the GIL while holding a ``cython.pymutex`` lock.
-Be aware that it is also possible for Cython to acquire the GIL implicitly
-(for example by raising an exception) and this is also a deadlock risk.
-
-On Python 3.13+, ``cython.pymutex`` is just a
-`PyMutex <https://docs.python.org/3.13/c-api/init.html#synchronization-primitives>`_
-and so is very low-cost.  On earlier versions of Python, it uses the
-(undocumented) ``PyThread_type_lock``.
-
-``cython.pythread_type_lock`` exposes the same interface but always
-uses ``PyThread_type_lock``.  It is intended for sharing locks between
-modules with the Limited API (since ``PyMutex`` is unavailable in the
-Limited API).  Note that unlike the "raw" ``PyThread_type_lock`` our
-wrapping will avoid deadlocks with the GIL.
-
 
 Pitfalls
 ========
@@ -361,16 +317,9 @@ need to heap-allocate them::
 
   l = new latch(2)
   try:
-    with nogil:  # avoid deadlocks!
-      ...  # use the latch
+    ...  # use the latch
   finally:
     del l
-
-Be careful not to hold the GIL while performing blocking operations with the C or C++ standard
-library threading tools. Unlike the Python standard library, they are not aware of the
-GIL/Python thread state. Therefore you have a very high probability of deadlock (even
-on free-threaded builds, which do occasionally switch to a GIL-locked mode when running
-certain operations).
 
 It is also possible to use C++ to create new threads (for example, using the ``std::jthread``
 class).  This works, but we generally recommend creating threads through Python
@@ -379,62 +328,6 @@ by calling ``with gil:`` before using any Python objects and this will not work 
 with multiple subinterpreters - this recommendation is therefore mainly to future-proof
 your code and not restrict where it can be used from.  It is a fairly soft suggestion though,
 so feel free to ignore it if you have good reason to.
-
-Available library facilities include:
-
-* spawning threads (both C and C++, as of Cython 3.1 only the C version is wrapped),
-
-* atomic numeric types (both C and C++, wrapped for C++ in Cython 3 and C for Cython 3.1)
-
-* mutexes (regular, timed and recursive) (both C and C++, wrapped in Cython 3.1+),
-
-* shared mutexes providing many threads with read access or a single thread with write access
-  (C++, wrapped in Cython 3.1+),
-
-* condition variables, allowing one thread to wait until a condition is met (C and C++,
-  C version wrapped in Cython 3.1, C++ version in Cython 3.2),
-
-* ``call_once`` allowing an initialization function to be called safely from many threads
-  (C and C++, wrapped in Cython 3.1+),
-
-* semaphores, representing a way of counting resource ownership (C++ only, wrapped in
-  Cython 3.1+),
-
-* barriers and latches, which mark points where threads wait for each other (C++ only,
-  wrapped in Cython 3.1+),
-
-* promises and futures - a way of transmitting a single "result" between threads
-  (C++ only, wrapped in Cython 3.1+),
-
-* stop tokens, a convenient way of signaling a request to stop work (C++ only,
-  wrapped in Cython 3.1+).
-
-This list of non-exhaustive. And you can also use third-party libraries outside
-the language standard libraries for more options.
-
-In addition to the plain standard library features, Cython (3.2) also produces "py_safe" versions
-of some of these features (e.g. ``call_once``, mutex, ``lock``, ``condition_variable``).
-These ensure
-
-* The Python thread-state is released (if held) while blocking and then restored
-  to its initial state after the call.
-
-* Acquiring and releasing the Python thread-state does not deadlock with any C/C++ locks
-  used in the operation.
-
-* Any callbacks (e.g. the functions passed to ``call_once`` or the predicates passed to
-  ``condition_variable``) are called with the Python thread-state held).
-
-* Python exceptions from callbacks are handled.
-
-* For the C++ versions, you can use a callable Python object as a callback (where
-  applicable).  
-
-The "py_safe" functions are only effective if you use
-them consistently every time you try to acquire the lock while you might be holding the Python
-thread-state.  This means you should use the "py_safe" versions even in a function labelled
-as ``nogil`` - remember that this says that a function *may* be called without an attached
-Python thread-state rather than ensuring that it definitely is.
 
 ``cython.critical_section`` vs GIL
 ----------------------------------

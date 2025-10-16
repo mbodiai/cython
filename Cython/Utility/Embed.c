@@ -4,13 +4,8 @@
 #include <floatingpoint.h>
 #endif
 
-
-{{for mname in embed_modules}}
-    __Pyx_PyMODINIT_FUNC PyInit_{{mname}}(void) CYTHON_SMALL_CODE; /*proto*/
-{{endfor}}
-
 #if defined(_WIN32) || defined(WIN32) || defined(MS_WINDOWS)
-int {{wmain_method}}(int argc, wchar_t **argv)
+int %(wmain_method)s(int argc, wchar_t **argv)
 #else
 static int __Pyx_main(int argc, wchar_t **argv)
 #endif
@@ -26,13 +21,21 @@ static int __Pyx_main(int argc, wchar_t **argv)
     m = fpgetmask();
     fpsetmask(m & ~FP_X_OFL);
 #endif
+#if PY_VERSION_HEX < 0x03080000
+    if (argc && argv)
+        Py_SetProgramName(argv[0]);
+#endif
 
-    {{for mname in (module_name,) + embed_modules}}
-    if (PyImport_AppendInittab("{{mname}}", PyInit_{{mname}}) < 0) return 1;
-    {{endfor}}
+    if (PyImport_AppendInittab("%(module_name)s", PyInit_%(module_name)s) < 0) return 1;
 
+#if PY_VERSION_HEX < 0x03080000
+    Py_Initialize();
+    if (argc && argv)
+        PySys_SetArgv(argc, argv);
+#else
     {
         PyStatus status;
+
         PyConfig config;
         PyConfig_InitPythonConfig(&config);
         // Disable parsing command line arguments
@@ -60,11 +63,12 @@ static int __Pyx_main(int argc, wchar_t **argv)
 
         PyConfig_Clear(&config);
     }
+#endif
 
-    { /* init module '{{module_name}}' as '__main__' */
+    { /* init module '%(module_name)s' as '__main__' */
       PyObject* m = NULL;
-      {{module_is_main}} = 1;
-      m = PyImport_ImportModule("{{module_name}}");
+      %(module_is_main)s = 1;
+      m = PyImport_ImportModule("%(module_name)s");
 
       if (!m && PyErr_Occurred()) {
           PyErr_Print(); /* This exits with the right code if SystemExit. */
@@ -82,7 +86,7 @@ static int __Pyx_main(int argc, wchar_t **argv)
 #include <locale.h>
 
 int
-{{main_method}}(int argc, char **argv)
+%(main_method)s(int argc, char **argv)
 {
     if (!argc) {
         return __Pyx_main(0, NULL);

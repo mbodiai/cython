@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python
 # micro benchmarks for generators
 
 COUNT = 20_000

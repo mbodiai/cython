@@ -1,8 +1,8 @@
 # distutils: language = c++
 from cython.cimports.cpython import Py_buffer
 from cython.cimports.libcpp.vector import vector
-
-@cython.cclass
+from cython import cclass
+@cclass
 class Matrix:
     ncols: cython.Py_ssize_t
     shape: cython.Py_ssize_t[2]
@@ -26,9 +26,10 @@ class Matrix:
         # this is the distance between two adjacent items in the vector.
         # Stride 0 is the distance between the first elements of adjacent rows.
         self.strides[1] = cython.cast(cython.Py_ssize_t, (
-              cython.cast(cython.p_char, cython.address(self.v[1]))
-            - cython.cast(cython.p_char, cython.address(self.v[0]))
-        ))
+             cython.cast(cython.p_char, cython.address(self.v[1]))
+           - cython.cast(cython.p_char, cython.address(self.v[0]))
+           )
+       )
         self.strides[0] = self.ncols * self.strides[1]
 
         buffer.buf = cython.cast(cython.p_char, cython.address(self.v[0]))

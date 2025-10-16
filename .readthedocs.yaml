@@ -13,7 +13,7 @@ build:
 python:
   install:
     - requirements: doc-requirements.txt
-    - method: pip
+    - method: setuptools  # runs setup.py
       path: .
 
 sphinx:
