@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "wheel","rich_click"]
+requires = ["setuptools", "wheel","rich_click","mbcore"]
 
 [tool.cibuildwheel]
 build-verbosity = 2
@@ -15,8 +15,7 @@ CFLAGS = "-O3 -g0 -pipe -fPIC -march=core2"
 AR = "gcc-ar"
 NM = "gcc-nm"
 RANLIB = "gcc-ranlib"
-# [tool.pyright]
-# extraPaths = ["../mbnew/tmp/mbodiai/mbcore/src","../mbnew"]
+
 [[tool.cibuildwheel.overrides]]
 select = "*aarch64"
 environment = {CFLAGS = "-O3 -g0 -pipe -fPIC -march=armv8-a -mtune=cortex-a72", AR = "gcc-ar", NM = "gcc-nm", RANLIB = "gcc-ranlib" }
@@ -32,18 +31,17 @@ archs = ["AMD64", "x86"]
 archs = ["x86_64", "arm64"]
 
 
-[project]
-name = "cython"
-dynamic = ["scripts", "urls", "version", "classifiers", "authors", "readme", "license", "requires-python", "description"]
 
-
-
+[tool.pyright]
+venvPath = ".venv"
+extraPaths = ["Users/sebastian/corp/projects/embodied-data-corp"]
 
 [tool.cyright]
 license = "Apache-2.0"
+venvPath = ".venv"
 
 [tool.ruff]
-target-version = "py37"
+target-version = "py311"
 line-length = 100
 select = ["E", "F", "B"]
 extend-ignore = ["E401", "E402"]

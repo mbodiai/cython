@@ -3,6 +3,7 @@
 #
 
 
+from typing import Any, TYPE_CHECKING
 import cython
 cython.declare(Naming=object, Options=object, PyrexTypes=object, TypeSlots=object,
                error=object, warning=object, py_object_type=object, UtilityCode=object,
@@ -34,6 +35,9 @@ from .Code import UtilityCode, IncludeCode, TempitaUtilityCode
 from .StringEncoding import EncodedString, encoded_string_or_bytes_literal
 from .Pythran import has_np_pythran
 
+if TYPE_CHECKING:
+    from .Symtab import ModuleScope
+    from .Options import GlobalDirectives
 
 def replace_suffix_encoded(path, newsuf):
     # calls replace suffix and returns a EncodedString or BytesLiteral with the encoding set
@@ -46,7 +50,7 @@ def as_encoded_filename(path):
     return encoded_string_or_bytes_literal(path, sys.getfilesystemencoding())
 
 
-def check_c_declarations_pxd(module_node):
+def check_c_declarations_pxd(module_node: "ModuleNode"):
     module_node.scope.check_c_classes_pxd()
     return module_node
 
@@ -120,10 +124,12 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
     #  directives           Top-level compiler directives
 
     child_attrs = ["body"]
-    directives = None
+    directives: "GlobalDirectives"
+    scope: "ModuleScope"
+    body: Nodes.StatListNode
     # internal - used in merging
-    pxd_stats = None
-    utility_code_stats = None
+    pxd_stats: Nodes.StatListNode
+    utility_code_stats: Nodes.StatListNode
 
     @property
     def local_scope(self):
@@ -580,7 +586,9 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         else:
             coverage_xml = None
 
-        rootwriter.save_annotation(result.main_source_file, result.c_file, coverage_xml=coverage_xml)
+        c_file_for_annotation = None if options.annotate_no_c_link else result.c_file
+        # Default to Markdown annotation output
+        rootwriter.save_annotation_md(result.main_source_file, c_file_for_annotation, coverage_xml=coverage_xml)
 
         # if we included files, additionally generate one annotation file for each
         if not self.scope.included_files:
@@ -604,7 +612,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
                     import errno
                     if e.errno != errno.EEXIST:
                         raise
-            rootwriter.save_annotation(source_file, target_file, coverage_xml=coverage_xml)
+            rootwriter.save_annotation_md(source_file, target_file, coverage_xml=coverage_xml)
 
     def _serialize_lineno_map(self, env, ccodewriter):
         tb = env.context.gdb_debug_outputwriter
@@ -3107,6 +3115,11 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         code.put_error_if_neg(
             self.pos,
             f"__Pyx_CreateCodeObjects({Naming.modulestatevalue_cname})")
+
+        # Try to set up a global C-level dispatcher, if provided by mbcore.
+        code.globalstate.use_utility_code(UtilityCode.load_cached("DispatchProbe", "Dispatch.c"))
+        code.putln("/* Attempt to import and register a global C dispatcher (optional) */")
+        code.putln("__Pyx_TrySetupCDispatcher();")
 
         code.putln("/*--- Global type/function init code ---*/")
 

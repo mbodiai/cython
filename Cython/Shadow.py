@@ -510,6 +510,9 @@ other_types = [
     'bint',
     'void',
     'Py_tss_t',
+    # Opaque lock-like types exposed in cython scope
+    'pymutex',
+    'pythread_type_lock',
 ]
 
 to_repr = {
@@ -542,6 +545,9 @@ del name, reprname
 bint = typedef(bool, "bint")
 void = typedef(None, "void")
 Py_tss_t = typedef(None, "Py_tss_t")
+# Locks are opaque C types in Cython; represent them as opaque in pure mode too.
+pymutex = typedef(None, "pymutex")
+pythread_type_lock = typedef(None, "pythread_type_lock")
 
 # Generate const types.
 for t in int_types + float_types + complex_types + other_types:

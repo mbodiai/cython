@@ -18,7 +18,6 @@ def validate_file(filename):
     c_file = splitext(filename)[0] + '.c'
 
     options = CompilationOptions(
-        default_options,
         language_level="3",
         evaluate_tree_assertions=True,
     )

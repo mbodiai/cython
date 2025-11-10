@@ -8,8 +8,10 @@ from io import StringIO
 from os.path import relpath as _relpath
 from .Cache import Cache, FingerprintFlags
 
-from collections.abc import Iterable
 
+
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Unpack
 try:
     import pythran
 except:
@@ -21,13 +23,18 @@ from ..Utils import (cached_function, cached_method, path_exists,
 from ..Compiler import Errors
 from ..Compiler.Main import Context
 from ..Compiler import Options
-from ..Compiler.Options import (CompilationOptions, default_options,
+from ..Compiler.Options import (CompilationOptions, CompilationOptionsKwargs, default_options,
     get_directive_defaults)
 
 join_path = cached_function(os.path.join)
 copy_once_if_newer = cached_function(copy_file_to_dir_if_newer)
 safe_makedirs_once = cached_function(safe_makedirs)
 
+if TYPE_CHECKING:
+    from distutils.extension import Extension
+    from typing import Any
+    from ..Compiler.Main import Context
+    from ..Compiler.Options import CompilationOptionsDict
 
 def _make_relative(file_paths, base=None):
     if not base:
@@ -691,7 +698,7 @@ def create_dependency_tree(ctx=None, quiet=False):
     if _dep_tree is None:
         if ctx is None:
             ctx = Context(["."], get_directive_defaults(),
-                          options=CompilationOptions(default_options))
+                          options=CompilationOptions(**default_options))
         _dep_tree = DependencyTree(ctx, quiet=quiet)
     return _dep_tree
 
@@ -713,8 +720,8 @@ def default_create_extension(template, kwds):
 
 
 # This may be useful for advanced users?
-def create_extension_list(patterns, exclude=None, ctx=None, aliases=None, quiet=False, language=None,
-                          exclude_failures=False):
+def create_extension_list(patterns:"list[str] | list[Extension]", exclude: "list[str] | None"=None, ctx: "Context | None"=None, aliases: "dict[str, str] | None"=None, quiet: bool=False, language: "str | None"=None,
+                          exclude_failures=False)->"tuple[list[Extension], dict[str, Any]]":
     if language is not None:
         print('Warning: passing language={0!r} to cythonize() is deprecated. '
               'Instead, put "# distutils: language={0}" in your .pyx or .pxd file(s)'.format(language))
@@ -726,6 +733,7 @@ def create_extension_list(patterns, exclude=None, ctx=None, aliases=None, quiet=
         patterns = [patterns]
 
     from distutils.extension import Extension
+    extension_classes: "tuple[type[Extension],type[Extension],type[Extension]]|tuple[type[Extension]]"
     if 'setuptools' in sys.modules:
         # Support setuptools Extension instances as well.
         extension_classes = (
@@ -849,8 +857,8 @@ def create_extension_list(patterns, exclude=None, ctx=None, aliases=None, quiet=
 
 
 # This is the user-exposed entry point.
-def cythonize(module_list, exclude=None, nthreads=0, aliases=None, quiet=False, force=None, language=None,
-              exclude_failures=False, show_all_warnings=False, **options):
+def cythonize(module_list:"list[str] | list[Extension]|str", exclude: "list[str] | None"=None, nthreads=0, aliases:"dict[str, str] | None"=None, force=None, language:"str | None"=None,
+              exclude_failures=False, show_all_warnings=False, **options: "Unpack[CompilationOptionsKwargs]"):
     """
     Compile a set of source modules into C/C++ files and return a list of distutils
     Extension objects for them.
@@ -929,10 +937,10 @@ def cythonize(module_list, exclude=None, nthreads=0, aliases=None, quiet=False, 
                   then the directory is used to cache generated ``.c``/``.cpp`` files. By default cache is disabled.
                   See :ref:`cython-cache`.
     """
-    if exclude is None:
-        exclude = []
-    if 'include_path' not in options:
-        options['include_path'] = ['.']
+    exclude = exclude or []
+    # Ensure include path default
+    compile_options = CompilationOptions(**options)
+    quiet = compile_options.quiet
     if 'common_utility_include_dir' in options:
         safe_makedirs(options['common_utility_include_dir'])
 
@@ -941,7 +949,7 @@ def cythonize(module_list, exclude=None, nthreads=0, aliases=None, quiet=False, 
     if pythran is None:
         pythran_options = None
     else:
-        pythran_options = CompilationOptions(**options)
+        pythran_options = CompilationOptions(**compile_options)
         pythran_options.cplus = True
         pythran_options.np_pythran = True
 
@@ -951,9 +959,9 @@ def cythonize(module_list, exclude=None, nthreads=0, aliases=None, quiet=False, 
     c_options = CompilationOptions(**options)
     cpp_options = CompilationOptions(**options); cpp_options.cplus = True
     ctx = Context.from_options(c_options)
-    options = c_options
+    compile_options = c_options
     module_list, module_metadata = create_extension_list(
-        module_list,
+        module_list if isinstance(module_list, list) else [module_list],
         exclude=exclude,
         ctx=ctx,
         quiet=quiet,
@@ -964,18 +972,19 @@ def cythonize(module_list, exclude=None, nthreads=0, aliases=None, quiet=False, 
     fix_windows_unicode_modules(module_list)
 
     deps = create_dependency_tree(ctx, quiet=quiet)
-    build_dir = getattr(options, 'build_dir', None)
-    if options.cache and not (options.annotate or Options.annotate):
+    build_dir = compile_options.build_dir
+    if compile_options.cache and not (compile_options.annotate or Options.annotate):
         # cache is enabled when:
         # * options.cache is True (the default path to the cache base dir is used)
         # * options.cache is the explicit path to the cache base dir
         # * annotations are not generated
-        cache_path = None if options.cache is True else options.cache
-        cache = Cache(cache_path, getattr(options, 'cache_size', None))
+        cache_path = None if compile_options.cache is True else compile_options.cache
+        cache = Cache(cache_path, compile_options.cache_size)
     else:
         cache = None
 
-    def copy_to_build_dir(filepath, root=os.getcwd()):
+    def copy_to_build_dir(filepath, root=None):
+        root = root or os.getcwd()
         filepath_abs = os.path.abspath(filepath)
         if os.path.isabs(filepath):
             filepath = filepath_abs
@@ -1008,10 +1017,10 @@ def cythonize(module_list, exclude=None, nthreads=0, aliases=None, quiet=False, 
             if ext in ('.pyx', '.py'):
                 if m.np_pythran:
                     c_file = base + '.cpp'
-                    options = pythran_options
+                    compile_options = pythran_options
                 elif m.language == 'c++':
                     c_file = base + '.cpp'
-                    options = cpp_options
+                    compile_options = cpp_options
                 else:
                     c_file = base + '.c'
 
@@ -1075,7 +1084,7 @@ def cythonize(module_list, exclude=None, nthreads=0, aliases=None, quiet=False, 
                         fingerprint = None
                     to_compile.append((
                         priority, source, c_file, fingerprint, cache, quiet,
-                        options, not exclude_failures, module_metadata.get(m.name),
+                        compile_options, not exclude_failures, module_metadata.get(m.name),
                         full_module_name, show_all_warnings))
                 new_sources.append(c_file)
                 modules_by_cfile[c_file].append(m)
@@ -1217,11 +1226,11 @@ else:
 
 # TODO: Share context? Issue: pyx processing leaks into pxd module
 @record_results
-def cythonize_one(pyx_file, c_file, fingerprint, cache, quiet, options=None,
-                  raise_on_failure=True, embedded_metadata=None,
-                  full_module_name=None, show_all_warnings=False,
-                  progress=""):
-    from ..Compiler.Main import compile_single, default_options
+def cythonize_one(pyx_file: "str", c_file: "str", fingerprint: "str", cache: "Cache", quiet: "bool", options: "CompilationOptions | None"=None,
+                  raise_on_failure: "bool"=True, embedded_metadata: "dict[str, Any] | None"=None,
+                  full_module_name: "str | None"=None, show_all_warnings: "bool"=False,
+                  progress: "str"=""):
+    from ..Compiler.Main import compile_single
     from ..Compiler.Errors import CompileError, PyrexError
 
     if not quiet:
@@ -1229,10 +1238,9 @@ def cythonize_one(pyx_file, c_file, fingerprint, cache, quiet, options=None,
             print(f"{progress}Found compiled {pyx_file} in cache")
         else:
             print(f"{progress}Cythonizing {Utils.decode_filename(pyx_file)}")
-    if options is None:
-        options = CompilationOptions(default_options)
+    options = options or CompilationOptions()
     options.output_file = c_file
-    options.embedded_metadata = embedded_metadata
+    options.embedded_metadata = embedded_metadata or {}
 
     old_warning_level = Errors.LEVEL
     if show_all_warnings:

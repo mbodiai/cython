@@ -7,10 +7,7 @@ __author__ = "collinwinter@google.com (Collin Winter)"
 import math
 import operator
 
-try:
-    reduce
-except NameError:
-    from functools import reduce
+from functools import reduce
 
 def run_benchmark(options, num_runs, bench_func, *args):
     """Run the given benchmark, print results to stdout.

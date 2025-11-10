@@ -81,3 +81,5 @@ newstuff
 # File patterns from tmp branch
 **/*.zip
 **/*.python-version
+# Cython inline build artifacts
+/generated/

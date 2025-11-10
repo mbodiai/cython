@@ -4194,9 +4194,14 @@ def p_module(s: PyrexScanner, pxd, full_module_name, ctx=Ctx):
     if s.sy != 'EOF':
         s.error("Syntax error in statement [%s,%s]" % (
             repr(s.sy), repr(s.systring)))
-    return ModuleNode(pos, doc = doc, body = body,
-                      full_module_name = full_module_name,
-                      directive_comments = directive_comments)
+    return ModuleNode(
+        pos,
+        doc = doc,
+        body = body,
+        full_module_name = full_module_name,
+        directive_comments = directive_comments,
+        directives = Options.get_directive_defaults(),
+    )
 
 
 @cython.cfunc

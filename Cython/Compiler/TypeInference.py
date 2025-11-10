@@ -1,14 +1,17 @@
+from typing import TYPE_CHECKING
 from .Errors import error, message
 from . import ExprNodes
 from . import Nodes
 from . import Builtin
 from . import PyrexTypes
+from . import Options
 from .. import Utils
 from .PyrexTypes import py_object_type, unspecified_type
 from .Visitor import CythonTransform, EnvTransform
 
 from functools import reduce
-
+if TYPE_CHECKING:
+    from .Symtab import Scope
 
 class TypedExprNode(ExprNodes.ExprNode):
     # Used for declaring assignments of a specified type without a known entry.
@@ -370,9 +373,19 @@ class SimpleAssignmentTypeInferer:
                 else:
                     e.type.check_nullary_constructor(entry.pos)
 
-    def infer_types(self, scope):
-        enabled = scope.directives['infer_types']
-        verbose = scope.directives['infer_types.verbose']
+    def infer_types(self, scope: "Scope"):
+        directives = scope.directives
+        if not isinstance(directives, Options.Directives):
+            normalized = Options.Directives()
+            normalized.update(directives)
+            directives = normalized
+            scope.directives = directives
+
+        enabled = directives['infer_types']
+        try:
+            verbose = directives['infer_types.verbose']
+        except KeyError:
+            verbose = False
 
         if enabled == True:
             spanning_type = aggressive_spanning_type

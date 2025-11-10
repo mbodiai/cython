@@ -520,6 +520,20 @@ static int __Pyx_ParseKeywordDict(
         #if __PYX_LIMITED_VERSION_HEX >= 0x030d0000
         found = PyDict_GetItemRef(kwds, key, &value);
         #else
+        #if CYTHON_COMPILING_IN_CPYTHON && PY_VERSION_HEX >= 0x030A0000 && !CYTHON_COMPILING_IN_LIMITED_API
+        {
+            extern PyObject* _PyDict_GetItem_KnownHash(PyObject*, PyObject*, Py_hash_t);
+            Py_hash_t __pyx_hash = PyObject_Hash(key);
+            if (unlikely(__pyx_hash == -1)) goto bad;
+            value = _PyDict_GetItem_KnownHash(kwds, key, __pyx_hash);
+            if (value) {
+                Py_INCREF(value);
+                found = 1;
+            } else {
+                if (unlikely(PyErr_Occurred())) goto bad;
+            }
+        }
+        #else
         value = PyDict_GetItemWithError(kwds, key);
         if (value) {
             Py_INCREF(value);
@@ -527,6 +541,7 @@ static int __Pyx_ParseKeywordDict(
         } else {
             if (unlikely(PyErr_Occurred())) goto bad;
         }
+        #endif
         #endif
 
         if (found) {
@@ -671,7 +686,16 @@ static int __Pyx_ParseKeywordsTuple(
                 if (unlikely(cmp == -1)) goto bad;
                 if (kwds2) {
                     PyObject *value = kwvalues[pos];
+                    #if CYTHON_COMPILING_IN_CPYTHON && PY_VERSION_HEX >= 0x030A0000 && !CYTHON_COMPILING_IN_LIMITED_API
+                    {
+                        extern int _PyDict_SetItem_KnownHash(PyObject*, PyObject*, PyObject*, Py_hash_t);
+                        Py_hash_t __pyx_hash = PyObject_Hash(key);
+                        if (unlikely(__pyx_hash == -1)) goto bad;
+                        if (unlikely(_PyDict_SetItem_KnownHash(kwds2, key, value, __pyx_hash) < 0)) goto bad;
+                    }
+                    #else
                     if (unlikely(PyDict_SetItem(kwds2, key, value))) goto bad;
+                    #endif
                 } else if (!ignore_unknown_kwargs) {
                     goto invalid_keyword;
                 }
@@ -816,12 +840,28 @@ static int __Pyx_MergeKeywords_any(PyObject *kwdict, PyObject *source_mapping) {
             }
         }
     #else
+        #if CYTHON_COMPILING_IN_CPYTHON && PY_VERSION_HEX >= 0x030A0000 && !CYTHON_COMPILING_IN_LIMITED_API
+        {
+            extern PyObject* _PyDict_GetItem_KnownHash(PyObject*, PyObject*, Py_hash_t);
+            extern int _PyDict_SetItem_KnownHash(PyObject*, PyObject*, PyObject*, Py_hash_t);
+            Py_hash_t __pyx_hash = PyObject_Hash(key);
+            if (unlikely(__pyx_hash == -1)) {
+                result = -1;
+            } else if (_PyDict_GetItem_KnownHash(kwdict, key, __pyx_hash)) {
+                __Pyx_RaiseDoubleKeywordsError("function", key);
+                result = -1;
+            } else {
+                result = _PyDict_SetItem_KnownHash(kwdict, key, value, __pyx_hash);
+            }
+        }
+        #else
         if (unlikely(PyDict_Contains(kwdict, key))) {
             __Pyx_RaiseDoubleKeywordsError("function", key);
             result = -1;
         } else {
             result = PyDict_SetItem(kwdict, key, value);
         }
+        #endif
     #endif
 
         Py_DECREF(key);
@@ -957,8 +997,16 @@ CYTHON_UNUSED static PyObject *__Pyx_KwargsAsDict_FASTCALL(PyObject *kwnames, Py
 #else
         PyObject *key = PyTuple_GET_ITEM(kwnames, i);
 #endif
-        if (unlikely(PyDict_SetItem(dict, key, kwvalues[i]) < 0))
-            goto bad;
+        #if CYTHON_COMPILING_IN_CPYTHON && PY_VERSION_HEX >= 0x030A0000 && !CYTHON_COMPILING_IN_LIMITED_API
+        {
+            extern int _PyDict_SetItem_KnownHash(PyObject*, PyObject*, PyObject*, Py_hash_t);
+            Py_hash_t __pyx_hash = PyObject_Hash(key);
+            if (unlikely(__pyx_hash == -1)) goto bad;
+            if (unlikely(_PyDict_SetItem_KnownHash(dict, key, kwvalues[i], __pyx_hash) < 0)) goto bad;
+        }
+        #else
+        if (unlikely(PyDict_SetItem(dict, key, kwvalues[i]) < 0)) goto bad;
+        #endif
     }
     return dict;
 

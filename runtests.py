@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 import traceback
+from typing import TYPE_CHECKING
 import unittest
 import warnings
 import zlib
@@ -74,6 +75,9 @@ try:
     import setuptools
 except ImportError:
     pass
+
+if TYPE_CHECKING:
+    from Cython.Compiler.Options import DirectivesDict
 
 from distutils.command.build_ext import build_ext as _build_ext
 from distutils import sysconfig
@@ -1239,12 +1243,11 @@ class CythonCompileTestCase(unittest.TestCase):
             from Cython.Compiler.Main import compile as cython_compile
         common_utility_include_dir = self.common_utility_dir
 
-        compiler_directives = {
+        compiler_directives: "DirectivesDict" = {
             'autotestdict': False,
             **self.extra_directives,
         }
         options = CompilationOptions(
-            pyrex_default_options,
             include_path = include_dirs,
             output_file = target,
             annotate = annotate,

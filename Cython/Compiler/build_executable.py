@@ -1469,7 +1469,7 @@ def main(command_line=0) -> None:
                 file=sys.stderr)
             sys.exit(1)
     else:
-        options = CompilationOptions(default_options)
+        options = CompilationOptions(**default_options)
         sources = args
     if options.show_version:
         Utils.print_version()

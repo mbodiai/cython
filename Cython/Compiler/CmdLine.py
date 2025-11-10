@@ -9,8 +9,8 @@ import sys
 from typing import Dict, List, Optional, Tuple, Union, Any
 from argparse import Action, ArgumentParser
 import rich_click as click
-import importlib.metadata
 
+from Cython import Utils
 from Cython.Compiler import Options
 
 
@@ -54,45 +54,8 @@ class Colors:
         return Colors.format(text, Colors.BOLD)
 
 
-# Keep these action classes for backward compatibility with other modules
-class ParseDirectivesAction(Action):
-    def __call__(self, parser, namespace, values, option_string=None):
-        old_directives = dict(getattr(namespace, self.dest,
-                                      Options.get_directive_defaults()))
-        directives = Options.parse_directive_list(
-            values, relaxed_bool=True, current_settings=old_directives)
-        setattr(namespace, self.dest, directives)
 
 
-class ParseOptionsAction(Action):
-    def __call__(self, parser, namespace, values, option_string=None):
-        options = dict(getattr(namespace, self.dest, {}))
-        if values is not None:
-            if isinstance(values, str):
-                for opt in values.split(','):
-                    if '=' in opt:
-                        n, v = opt.split('=', 1)
-
-                    else:
-                        n, v = opt, True
-                    options[n] = v
-            elif hasattr(values, '__iter__'):
-                for opt in values:
-                    if isinstance(opt, str):
-                        if '=' in opt:
-                            n, v = opt.split('=', 1)
-                        else:
-                            n, v = opt, opt
-                        options[n] = v
-        setattr(namespace, self.dest, options)
-
-
-class ParseCompileTimeEnvAction(Action):
-    def __call__(self, parser, namespace, values, option_string=None):
-        old_env = dict(getattr(namespace, self.dest, {}))
-        if values is not None and isinstance(values, str):
-            new_env = Options.parse_compile_time_env(values, current_settings=old_env)
-            setattr(namespace, self.dest, new_env)
 
 # Simple configuration dataclass (May be removable if fully replaced by click)
 @dataclass
@@ -135,78 +98,9 @@ class CmdLineOptions:
     shared_utility_qualified_name: Optional[str] = None
     config_file: Optional[str] = None
 
-# Get version information
-def print_version():
-    """Print the Cython version"""
-    version = "unknown"
-    try:
-        version = importlib.metadata.version("cython")
-    except (ImportError, importlib.metadata.PackageNotFoundError):
-        try:
-            if hasattr(sys.modules.get('Cython', None), '__version__'):
-                version = sys.modules['Cython'].__version__
-            else:
-                try:
-                    from .. import __version__
-                    version = __version__
-                except (ImportError, ValueError):
-                    pass
-        except ImportError:
-            pass
-    print(Colors.header(f"Cython version {version}"))
-
-def get_option_help() -> Dict[str, str]:
-    """Generate option help text dictionary."""
-    # ... (content unchanged) ...
-    option_mappings = [
-        ("V", "Display version number of cython compiler"),
-        ("l", "Write error messages to a listing file"),
-        ("I", "Search for include files in named directory (multiple include directories are allowed)"),
-        ("o", "Specify name of generated C file"),
-        ("t", "Only compile newer source files"),
-        ("f", "Compile all source files (overrides implied -t)"),
-        ("v", "Be verbose, print file names on multiple compilation"),
-        ("p", "Embed positions in docstrings"),
-        ("z", "Pre-import module"),
-        ("D", "Strip docstrings from the compiled module"),
-        ("a", "Produce a colorized HTML version of the source"),
-        ("annotate-fullc", "Produce a colorized HTML version of source with full C code"),
-        ("line-directives", "Produce #line directives pointing to the .pyx source"),
-        ("+", "Output a C++ rather than C file"),
-        ("2", "Compile based on Python 2 syntax and semantics"),
-        ("3", "Compile based on Python 3 syntax and semantics"),
-        ("3str", "Compile based on Python 3 syntax and semantics (same as -3)"),
-        ("lenient", "Change some compile time errors to runtime errors to improve Python compatibility"),
-        ("capi-reexport-cincludes", "Add cincluded headers to any auto-generated header files"),
-        ("fast-fail", "Abort the compilation on the first error"),
-        ("warning-errors", "Make all warnings into errors"),
-        ("warning-extra", "Enable extra warnings"),
-        ("X", "Override a compiler directive"),
-        ("E", "Set compile-time environment variable"),
-        ("working", "Sets the working directory for Cython"),
-        ("module-name", "Fully qualified module name"),
-        ("M", "Produce depfiles for the sources"),
-        ("cache", "Enable Cython compilation cache"),
-        ("depfile", "Produce depfiles for the sources"),
-        ("embed", "Generate a main() function that embeds the Python interpreter"),
-        ("gdb", "Output debug information for cygdb"),
-        ("gdb-outdir", "Specify gdb debug information output directory"),
-        ("annotate-coverage", "Annotate and include coverage information from cov.xml"),
-        ("no-c-in-traceback", "Do not include C-level traceback in exceptions"),
-        ("cimport-from-pyx", "Allow cimporting from pyx files"),
-        ("old-style-globals", "Use old-style globals lookup"),
-        ("convert-range", "Convert range checks to conditional checks"),
-        ("generate-shared", "Generate shared module with specified name"),
-        ("shared", "Import utility code from shared module"),
-        ("config-file", "Specify a configuration file to load options from"),
-        ("output-dir", "Specify the directory for generated C/C++ files")
-    ]
-    return dict(option_mappings)
 
 def print_usage():
     """Print usage information with color formatting."""
-    # ... (content unchanged) ...
-    option_help = get_option_help()
     print(Colors.header("Cython Compiler"))
     print(Colors.info("Usage:"))
     print("  cython [options] [source_files]")
@@ -265,21 +159,8 @@ class OptionHandlers:
 
     # ---- option callbacks ----
     @staticmethod
-    def handle_directive(ctx, param, value):
-        directives = Options.get_directive_defaults().copy()
-        current = ctx.params.get('compiler_directives', {})
-        if current:
-            directives.update(current)
-        if not value:
-            return directives
-        try:
-            for directive_str in value:
-                directives = Options.parse_directive_list(
-                    directive_str, relaxed_bool=True, current_settings=directives
-                )
-            return directives
-        except ValueError as e:
-            raise click.BadParameter(f"Error parsing directives (-X): {e}", ctx=ctx, param=param)
+    def handle_directive(ctx, param:click.Parameter, value:str):
+        return Options.parse_directive_list(value, relaxed_bool=True, current_settings=ctx.params.get('compiler_directives', {}))
 
     @staticmethod
     def handle_compile_time_env(ctx, param, value):
@@ -323,52 +204,174 @@ class OptionHandlers:
             return value
         return None
 
-# --- legacy handlers kept only for reference; no longer used by click ---
+class ParseDirectivesAction(Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        base = getattr(namespace, self.dest, None) or Options.get_directive_defaults().copy()
+        parsed = Options.parse_directive_list(values, relaxed_bool=True, current_settings=base)
+        setattr(namespace, self.dest, parsed)
 
-def parse_command_line(args: List[str]) -> Tuple[Options.CompilationOptions, List[str]]:
-    """
-    Parses command line arguments using click and returns results
-    in the format expected by Cython.Compiler.Main.
-    Uses custom error handling and help via print_usage.
-    """
-    # print(f"Compatibility parse_command_line received args: {args}") # Debug
-    try:
-        prog_name = os.path.basename(sys.argv[0]) if sys.argv else 'cython'
-        context = cython_command.make_context(info_name=prog_name, args=args)
 
-        if '--help' in args or '-h' in args:
-             print_usage()
-             sys.exit(0)
+class ParseCompileTimeEnvAction(Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        base = getattr(namespace, self.dest, None) or {}
+        parsed = Options.parse_compile_time_env(values, current_settings=base)
+        setattr(namespace, self.dest, parsed)
 
-        with context:
-            cython_command.invoke(context)
 
-        if context.obj and 'options' in context.obj and 'sources' in context.obj:
-            comp_options = context.obj['options']
-            sources_list = context.obj['sources']
-            if not isinstance(comp_options, Options.CompilationOptions):
-                 print(Colors.error(f"Error: Internal context object has incorrect type for options: {type(comp_options)}"))
-                 sys.exit(1)
-            return comp_options, sources_list
-        else:
-            if '--version' in args or '-V' in args:
-                 sys.exit(0)
-            print(Colors.error("Error: Failed to retrieve parsed options from context after command invocation."))
-            sys.exit(1)
+class ParseOptionsAction(Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        opts = getattr(namespace, self.dest, None) or {}
+        if '=' not in values:
+            raise ValueError('Expected "=" in option "%s"' % values)
+        name, value = [s.strip() for s in values.split('=', 1)]
+        opts[name] = value
+        setattr(namespace, self.dest, opts)
 
-    except click.exceptions.Exit as e:
-        sys.exit(e)
-    except click.exceptions.UsageError as e:
-        print(e.format_message(), file=sys.stderr)
-        sys.exit(e.exit_code)
-    except click.exceptions.ClickException as e:
-        print(Colors.error(f"Error: {e.format_message()}"), file=sys.stderr)
-        sys.exit(e.exit_code)
-    except Exception:
-        print(Colors.error("An unexpected error occurred during command line processing:"), file=sys.stderr)
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+
+@click.command(
+    name='cython',
+    context_settings=dict(help_option_names=['-h', '--help']),
+    epilog="Environment variables: …",
+)
+@click.option('-V', '--version', '_version_flag_set', is_flag=True, is_eager=True, expose_value=True,
+              help='Display version number and exit.')
+@click.option('-l', '--create-listing', 'use_listing_file', is_flag=True, default=False)
+@click.option('-I', '--include-dir', 'include_path', multiple=True, type=click.Path(exists=True, file_okay=False, resolve_path=True))
+@click.option('-o', '--output-file', type=click.Path(dir_okay=False, writable=True, resolve_path=True))
+@click.option('-t', '--timestamps', 'use_timestamps', is_flag=True, default=True)
+@click.option('-f', '--force', 'force_compile', is_flag=True, default=False)
+@click.option('-v', '--verbose', count=True)
+@click.option('-p', '--embed-positions', 'embed_pos_in_docstring', is_flag=True, default=False)
+@click.option('-z', '--pre-import', type=str, default=None)
+@click.option('-D', '--no-docstrings', 'strip_docstrings', is_flag=True, default=False)
+@click.option('-a', '--annotate', 'annotate_html', is_flag=True, default=False)
+@click.option('--annotate-fullc', is_flag=True, default=False)
+@click.option('--line-directives', 'emit_linenums', is_flag=True, default=False)
+@click.option('-+', '--cplus', is_flag=True, default=False)
+@click.option('-2', 'lang_level_2', is_flag=True, default=False)
+@click.option('-3', 'lang_level_3', is_flag=True, default=False)
+@click.option('--3str', 'lang_level_3str', is_flag=True, default=False)
+@click.option('--lenient', is_flag=True, default=False)
+@click.option('--capi-reexport-cincludes', 'capi_reexport_cincludes', is_flag=True, default=False)
+@click.option('--fast-fail', 'fast_fail', is_flag=True, default=False)
+@click.option('-Werror', '--warning-errors', 'warning_errors', is_flag=True, default=False)
+@click.option('-Wextra', '--warning-extra', is_flag=True, default=False, callback=OptionHandlers.handle_warning_extra, expose_value=False)
+@click.option('-X', '--directive', 'compiler_directives', multiple=True, callback=OptionHandlers.handle_directive, metavar='NAME=VALUE,...')
+@click.option('-E', '--compile-time-env', multiple=True, callback=OptionHandlers.handle_compile_time_env, metavar='NAME=VALUE,...')
+@click.option('-w', '--working', 'working_path', type=click.Path(exists=True, file_okay=False, resolve_path=True))
+@click.option('--module-name', type=str, default=None)
+@click.option('-M', '--depfile', 'make_depfile', is_flag=True, default=False)
+@click.option('--cache', is_flag=True, default=False)
+@click.option('--embed', type=str, default=None, is_flag=True, flag_value='main', metavar='[FUNC_NAME]')
+@click.option('--gdb', 'gdb_debug', is_flag=True, default=False)
+@click.option('--gdb-outdir', type=click.Path(file_okay=False, writable=True, resolve_path=True), callback=OptionHandlers.handle_gdb_outdir)
+@click.option('--annotate-coverage', type=click.Path(exists=True, dir_okay=False), callback=OptionHandlers.handle_annotate_coverage)
+@click.option('--no-c-in-traceback', 'c_line_in_traceback', is_flag=True, default=True)
+@click.option('--cimport-from-pyx', is_flag=True, default=False)
+@click.option('--old-style-globals', is_flag=True, default=False)
+@click.option('--convert-range', is_flag=True, default=False)
+@click.option('--cleanup', 'generate_cleanup_code', type=int, default=None)
+@click.option('--generate-shared', 'shared_c_file_path', type=str, default=None)
+@click.option('--shared', 'shared_utility_qualified_name', type=str, default=None)
+@click.option('--config-file', type=click.Path(exists=True, dir_okay=False, resolve_path=True))
+@click.option('--output-dir', type=click.Path(file_okay=False, writable=True, resolve_path=True), default=None)
+@click.argument('sources', nargs=-1, type=click.Path(exists=True, dir_okay=False, resolve_path=True))
+@click.pass_context
+def cython_command(ctx: click.Context, sources, _version_flag_set, **kw):
+    if _version_flag_set:
+        Utils.print_version()
+        opts = Options.default_options
+        opts.show_version = True
+        ctx.obj = {'options': opts, 'sources': list(sources)}
+        return
+    opts = Options.default_options
+    opts.use_listing_file = kw.get('use_listing_file') or False
+    includes = list(kw.get('include_path') or [])
+    if includes:
+        opts.include_path = list(includes)
+    out_file = kw.get('output_file')
+    if out_file:
+        opts.output_file = out_file
+    force = kw.get('force_compile') or False
+    use_ts = kw.get('use_timestamps') if 'use_timestamps' in kw else True
+    opts.timestamps = bool(use_ts and not force)
+    opts.verbose = int(kw.get('verbose') or 0)
+    if kw.get('embed_pos_in_docstring'):
+        Options.embed_pos_in_docstring = True
+    preimp = kw.get('pre_import')
+    if preimp is not None:
+        Options.pre_import = preimp
+    if kw.get('strip_docstrings'):
+        Options.docstrings = False
+    if kw.get('annotate_html'):
+        Options.annotate = 'default'
+    if kw.get('annotate_fullc'):
+        Options.annotate = 'fullc'
+    opts.emit_linenums = bool(kw.get('emit_linenums'))
+    opts.cplus = bool(kw.get('cplus'))
+    if kw.get('lang_level_2'):
+        opts.language_level = 2
+    if kw.get('lang_level_3'):
+        opts.language_level = 3
+    if kw.get('lang_level_3str'):
+        opts.language_level = '3'
+    if kw.get('lenient'):
+        Options.error_on_unknown_names = False
+        Options.error_on_uninitialized = False
+    if kw.get('capi_reexport_cincludes'):
+        opts.capi_reexport_cincludes = True
+    if kw.get('fast_fail'):
+        Options.fast_fail = True
+    if kw.get('warning_errors'):
+        Options.warning_errors = True
+    directives = kw.get('compiler_directives')
+    if isinstance(directives, dict):
+        opts.compiler_directives = directives
+    env = kw.get('compile_time_env')
+    if isinstance(env, dict):
+        opts.compile_time_env = env
+    work = kw.get('working_path')
+    if work:
+        opts.working_path = work
+    modname = kw.get('module_name')
+    if modname:
+        opts.module_name = modname
+    if kw.get('make_depfile'):
+        opts.make_depfile = True
+    if kw.get('cache'):
+        opts.cache = True
+    embed = kw.get('embed')
+    if embed is not None:
+        Options.embed = embed
+    if kw.get('gdb_debug'):
+        opts.gdb_debug = True
+    outdir = kw.get('output_dir')
+    if outdir:
+        opts.output_dir = outdir
+    if kw.get('c_line_in_traceback') is False:
+        opts.c_line_in_traceback = False
+    if kw.get('cimport_from_pyx'):
+        Options.cimport_from_pyx = True
+    if kw.get('old_style_globals'):
+        Options.old_style_globals = True
+    if kw.get('convert_range'):
+        Options.convert_range = True
+    cleanup = kw.get('generate_cleanup_code')
+    if cleanup is not None:
+        Options.generate_cleanup_code = cleanup
+    shared_c = kw.get('shared_c_file_path')
+    if shared_c:
+        opts.shared_c_file_path = shared_c
+    shared_qual = kw.get('shared_utility_qualified_name')
+    if shared_qual:
+        opts.shared_utility_qualified_name = shared_qual
+    cfg = kw.get('config_file')
+    if cfg:
+        opts.config_file = cfg
+    if kw.get('gdb_debug') and not opts.output_dir:
+        opts.output_dir = os.curdir
+    ctx.obj = {'options': opts, 'sources': list(sources)}
+
 
 def create_cython_argparser() -> ArgumentParser:
     """
@@ -392,232 +395,82 @@ def create_cython_argparser() -> ArgumentParser:
 
     return parser
 
+def comma_list(string):
+    return string.split(',')
 
-# --- Main Click Command Definition ---
-@click.command(
-    name='cython',
-    context_settings=dict(help_option_names=['-h', '--help']),
-    add_help_option=False,
-    epilog="Environment variables: ..."
-)
-@click.option('-V', '--version', '_version_flag_set', is_flag=True, is_eager=True, expose_value=True,
-              help='Display version number and exit.')
-@click.option('-h', '--help', 'show_help', is_flag=True, is_eager=True, expose_value=False,
-              callback=lambda ctx, param, value: ctx.exit(print_usage()) if value else None,
-              help='Show this message and exit.')
-@click.option('-l', '--create-listing', 'use_listing_file', is_flag=True, default=False, help='Write error messages to a listing file.')
-@click.option('-I', '--include-dir', 'include_path', multiple=True, type=click.Path(exists=True, file_okay=False, resolve_path=True), help='Search for include files in named directory (repeatable).')
-@click.option('-o', '--output-file', type=click.Path(dir_okay=False, writable=True, resolve_path=True), help='Specify name of generated C/C++ file.')
-@click.option('-t', '--timestamps', 'use_timestamps', is_flag=True, default=True, help='Only compile newer source files (default).')
-@click.option('-f', '--force', 'force_compile', is_flag=True, default=False, help='Compile all source files (overrides -t).')
-@click.option('-v', '--verbose', count=True, help='Be verbose (-vv for more). repeatable')
-@click.option('-p', '--embed-positions', 'embed_pos_in_docstring', is_flag=True, default=False, help='Embed source code positions in docstrings.')
-@click.option('-z', '--pre-import', type=str, default=None, help='Pre-import a module.')
-@click.option('-D', '--no-docstrings', 'docstrings', is_flag=True, default=True, help='Strip docstrings (flag means \'strip\', so default is True=keep).')
-@click.option('-a', '--annotate', 'annotate_html', is_flag=True, default=False, help='Produce a colorized HTML version of the source.')
-@click.option('--annotate-fullc', is_flag=True, default=False, help='Produce HTML including C/C++ code.')
-@click.option('--line-directives', 'emit_linenums', is_flag=True, default=False, help='Produce #line directives pointing to the .pyx source.')
-@click.option('-+', '--cplus', is_flag=True, default=False, help='Output a C++ rather than C file.')
-@click.option('-2', 'lang_level_2', is_flag=True, default=False, help='Compile using Python 2 syntax and semantics.')
-@click.option('-3', 'lang_level_3', is_flag=True, default=False, help='Compile using Python 3 syntax and semantics.')
-@click.option('--3str', 'lang_level_3str', is_flag=True, default=False, help='Compile using Python 3 syntax and semantics (same as -3).')
-@click.option('--lenient', is_flag=True, default=False, help='Change some compile time errors to runtime errors.')
-@click.option('--capi-reexport-cincludes', 'capi_reexport_cincludes', is_flag=True, default=False, help='Add cincluded headers to auto-generated header files.')
-@click.option('--fast-fail', 'fast_fail', is_flag=True, default=False, help='Abort the compilation on the first error.')
-@click.option('-Werror', '--warning-errors', 'warning_errors', is_flag=True, default=False, help='Make all warnings into errors.')
-@click.option('-Wextra', '--warning-extra', is_flag=True, default=False, callback=OptionHandlers.handle_warning_extra, expose_value=False, help='Enable extra warnings.')
-@click.option('-X', '--directive', 'compiler_directives', multiple=True, callback=OptionHandlers.handle_directive, help='Override compiler directive (e.g., -X boundscheck=False). Repeatable.', metavar='NAME=VALUE,...')
-@click.option('-E', '--compile-time-env', multiple=True, callback=OptionHandlers.handle_compile_time_env, help='Set compile-time environment variable (e.g., -E DEBUG=True). Repeatable.', metavar='NAME=VALUE,...')
-@click.option('-w', '--working', 'working_path', type=click.Path(exists=True, file_okay=False, resolve_path=True), help='Sets the working directory for Cython.')
-@click.option('--module-name', type=str, default=None, help='Fully qualified module name.')
-@click.option('-M', '--depfile', 'make_depfile', is_flag=True, default=False, help='Produce depfiles for the sources.')
-@click.option('--cache', is_flag=True, default=False, help='Enable Cython compilation cache.')
-@click.option('--embed', type=str, default=None, is_flag=True, flag_value='main', help='Generate main() embedding Python. Optional value=FUNC_NAME.', metavar='[FUNC_NAME]')
-@click.option('--gdb', 'gdb_debug', is_flag=True, default=False, help='Output debug information for cygdb.')
-@click.option('--gdb-outdir', type=click.Path(file_okay=False, writable=True, resolve_path=True), callback=OptionHandlers.handle_gdb_outdir, help='Specify gdb debug output directory (implies --gdb).')
-@click.option('--annotate-coverage', type=click.Path(exists=True, dir_okay=False), callback=OptionHandlers.handle_annotate_coverage, help='Annotate using coverage.xml (implies -a).')
-@click.option('--no-c-in-traceback', 'c_line_in_traceback', is_flag=True, default=True, help='Do not include C source info in tracebacks (flag=True means no C).')
-@click.option('--cimport-from-pyx', is_flag=True, default=False, help='Allow cimporting from .pyx files.')
-@click.option('--old-style-globals', is_flag=True, default=False, help='Use old-style globals lookup.')
-@click.option('--convert-range', is_flag=True, default=False, help='Convert range() loops to C loops.')
-@click.option('--cleanup', 'generate_cleanup_code', type=int, default=None, help='Release interned objects on Python exit (level indicates aggressiveness).')
-@click.option('--generate-shared', 'shared_c_file_path', type=str, default=None, help='Generate shared C utility code file.')
-@click.option('--shared', 'shared_utility_qualified_name', type=str, default=None, help='Import utility code from shared module (fully qualified name).')
-@click.option('--config-file', type=click.Path(exists=True, dir_okay=False, resolve_path=True), help='Specify a configuration file to load options from.')
-@click.option('--output-dir', type=click.Path(file_okay=False, writable=True, resolve_path=True), default=None, help='Specify the directory for generated C/C++ files.')
+def parse_command_line_raw(parser, args):
+    # special handling for --embed and --embed=xxxx as they aren't correctly parsed
+    def filter_out_embed_options(args):
+        with_embed, without_embed = [], []
+        for x in args:
+            if x == '--embed' or x.startswith('--embed='):
+                with_embed.append(x)
+            else:
+                without_embed.append(x)
+        return with_embed, without_embed
 
-@click.argument('sources', nargs=-1, type=click.Path(exists=True, dir_okay=False, resolve_path=True))
+    with_embed, args_without_embed = filter_out_embed_options(args)
 
-@click.pass_context
-def cython_command(ctx: click.Context, sources: Tuple[str, ...], _version_flag_set: bool, **kwargs):
-    """The main function that processes options and prepares for compilation."""
+    arguments, unknown = parser.parse_known_args(args_without_embed)
 
-    if _version_flag_set:
-        print_version()
-        ctx.exit()
+    sources = arguments.sources
+    del arguments.sources
 
-    # Fail fast if the user did not supply any sources.  Historically the
-    # compiler would happily exit with success in that case, which is usually
-    # an error due to a mis-typed option (e.g. ``--embed`` eating the first
-    # filename).  We treat *zero* sources as a usage error unless a specialised
-    # action (such as ``--shared``) explicitly allows it.
-    if not sources:
-        print(Colors.error("Error: No source files supplied."), file=sys.stderr)
-        ctx.exit(1)
+    # unknown can be either debug, embed or input files or really unknown
+    for option in unknown:
+        if option.startswith('-'):
+            parser.error("unknown option " + option)
+        else:
+            sources.append(option)
 
-    # print(Colors.info("Processing options...")) # Debug
-    final_options = {}
-    config_options = {}
-    # Prioritize command line, then env var, then default path?
-    config_file_path = kwargs.get('config_file') or os.environ.get('CYTHONRC') # .cythonrc in cwd?
-    # TODO: Add default config file lookup logic (.cythonrc in cwd or home?)
+    # embed-stuff must be handled extra:
+    for x in with_embed:
+        if x == '--embed':
+            name = 'main'  # default value
+        else:
+            name = x[len('--embed='):]
+        setattr(arguments, 'embed', name)
 
-    # Define load_config_file locally or ensure it's imported/available
-    def load_config_file(path):
-        # Dummy implementation - replace with actual logic if needed here
-        # Or ensure it's defined globally
-        print(f"DEBUG: Trying to load config: {path}")
-        if not path or not os.path.exists(path):
-             return {}
-        # Actual loading logic...
-        loaded_cfg = {}
-        try:
-             with open(path, 'r') as f:
-                  lines = f.readlines()
-                  valid_lines = filter(lambda l: l.strip() and not l.strip().startswith('#'), lines)
-                  config_items = [l.strip().split('=', 1) for l in valid_lines if '=' in l]
-                  loaded_cfg = {k.strip().replace('-', '_'): v.strip() for k, v in config_items}
-                  print(f"DEBUG: Loaded config file {path}: {loaded_cfg}")
-        except Exception as e:
-             print(Colors.warning(f"Warning: Error reading config file '{path}': {e}"))
-        return loaded_cfg
-
-    if config_file_path:
-        config_options = load_config_file(config_file_path)
-
-    processed_config = {}
-    for key, value in config_options.items():
-         param = next((p for p in ctx.command.params if p.name == key), None)
-         if param:
-             try:
-                 if isinstance(param.type, click.types.BoolParamType) or getattr(param,'is_flag', False):
-                      processed_config[key] = str(value).lower() in ('true', '1', 'yes', 'on')
-                 elif isinstance(param.type, click.types.IntParamType):
-                      processed_config[key] = int(value)
-                 elif isinstance(param.type, click.types.Path):
-                      # Use the param's own converter
-                      processed_config[key] = param.type.convert(value, param, ctx)
-                 elif key in ('compiler_directives', 'compile_time_env'):
-                      # Assume callback handles parsing string list/dict
-                      # Call the handler directly to parse the config value string
-                      handler = getattr(OptionHandlers, f"handle_{key}", None)
-                      if handler:
-                          # Handler expects (ctx, param, value_tuple) - fake it for config string
-                          # We need to pass the *parsed* value from config, not the string itself
-                          # Re-evaluate how config directives/env are handled
-                          # Let's just store the raw string for now and parse later
-                          processed_config[key] = value
-                      else:
-                          processed_config[key] = value
-                 else:
-                      processed_config[key] = value
-             except Exception as e:
-                  print(Colors.warning(f"Warning: Could not convert config value for '{key}': {e}"))
-                  processed_config[key] = value
-         else:
-              processed_config[key] = value
-
-    final_options.update(processed_config)
-    cmd_line_options = {k: v for k, v in kwargs.items() if v is not None and k not in ('_version_flag_set', 'show_help', 'config_file')}
-    final_options.update(cmd_line_options)
-
-    # print(f"Final combined options before processing: {final_options}") # Debug
-
-    # --- Prepare Cython CompilationOptions ---
-    comp_options = Options.CompilationOptions(**Options.default_options)
-
-    comp_env = {}
-    # Parse compile_time_env from config string if present
-    if 'compile_time_env' in final_options and isinstance(final_options['compile_time_env'], str):
-        try:
-            comp_env.update(Options.parse_compile_time_env(final_options['compile_time_env']))
-        except ValueError as e:
-            print(Colors.warning(f"Warning: Invalid compile_time_env in config: {e}"))
-    # Update/overwrite with cmd line env if provided (already parsed by callback)
-    if 'compile_time_env' in cmd_line_options and isinstance(cmd_line_options['compile_time_env'], dict):
-         comp_env.update(cmd_line_options['compile_time_env'])
-
-    merged_directives = Options.get_directive_defaults().copy()
-    # Parse directives from config string if present
-    if 'compiler_directives' in final_options and isinstance(final_options['compiler_directives'], str):
-        try:
-            merged_directives.update(Options.parse_directive_list(final_options['compiler_directives'], relaxed_bool=True))
-        except ValueError as e:
-             print(Colors.warning(f"Warning: Invalid compiler_directives in config: {e}"))
-    # Update/overwrite with cmd line directives if provided (already parsed by callback)
-    if 'compiler_directives' in cmd_line_options and isinstance(cmd_line_options['compiler_directives'], dict):
-         merged_directives.update(cmd_line_options['compiler_directives'])
-    # Apply Wextra if flag was set (check original kwargs as callback has expose_value=False)
-    if kwargs.get('warning_extra'):
-         merged_directives.update(Options.extra_warnings)
-
-    # Map processed options to CompilationOptions
-    direct_copy_attrs = [
-        'use_listing_file', 'include_path', 'output_file', 'verbose',
-        'embed_pos_in_docstring', 'generate_cleanup_code', 'cache',
-        'working_path', 'gdb_debug', 'annotate_coverage_xml',
-        'emit_linenums', 'cplus', 'error_on_unknown_names',
-        'error_on_uninitialized', 'capi_reexport_cincludes', 'fast_fail',
-        'warning_errors', 'module_name', 'make_depfile',
-        'pre_import', 'convert_range', 'cimport_from_pyx', 'old_style_globals',
-        'shared_c_file_path', 'shared_utility_qualified_name', 'output_dir'
-    ]
-
-    for attr in direct_copy_attrs:
-        if attr in final_options:
-             # Handle gdb_debug implicitly set by gdb_outdir callback
-             if attr == 'gdb_debug' and 'gdb_outdir' in final_options and final_options['gdb_outdir'] is not None:
-                 setattr(comp_options, attr, True)
-             else:
-                 setattr(comp_options, attr, final_options[attr])
-
-    comp_options.compiler_directives = merged_directives
-    comp_options.compile_time_env = comp_env
-    comp_options.timestamps = not final_options.get('force_compile', False)
-    # Determine language level
-    comp_options.language_level = Options.default_options['language_level']
-    if final_options.get('lang_level_2'):
-        comp_options.language_level = 2
-    elif final_options.get('lang_level_3') or final_options.get('lang_level_3str'):
-        comp_options.language_level = 3
-    # Determine annotation level
-    annotate = None
-    if final_options.get('annotate_fullc'):
-        annotate = 'fullc'
-    elif final_options.get('annotate_html') or final_options.get('annotate_coverage_xml'):
-        annotate = 'default'
-    comp_options.annotate = annotate
-    comp_options.docstrings = final_options.get('docstrings', True)
-    comp_options.c_line_in_traceback = final_options.get('c_line_in_traceback', True)
-
-    comp_options.embed = final_options.get('embed')
-    Options.embed = comp_options.embed
-
-    if final_options.get('lenient', False):
-        comp_options.error_on_unknown_names = False
-        comp_options.error_on_uninitialized = False
-
-    if 'verbose' in final_options:
-         # Assuming Options.verbose is intended to be a global setting
-         try:
-             Options.verbose = int(final_options['verbose'])
-         except (ValueError, TypeError):
-             Options.verbose = 1 if final_options['verbose'] else 0
+    return arguments, sources
 
 
-    ctx.obj = {'options': comp_options, 'sources': list(sources)}
+def parse_command_line(args):
+    parser = create_cython_argparser()
+    arguments, sources = parse_command_line_raw(parser, args)
 
+    work_dir = getattr(arguments, 'working_path', '')
+    for source in sources:
+        if work_dir and not os.path.isabs(source):
+            source = os.path.join(work_dir, source)
+        if not os.path.exists(source):
+            import errno
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), source)
 
-if __name__ == "__main__":
-    # print(Colors.info("Running CmdLine.py directly via __main__..."))
-    cython_command()
+    options = Options.CompilationOptions(**Options.default_options)
+    for name, value in vars(arguments).items():
+        if name.startswith('debug'):
+            from . import DebugFlags
+            if name in dir(DebugFlags):
+                setattr(DebugFlags, name, value)
+            else:
+                parser.error("Unknown debug flag: %s\n" % name)
+        elif hasattr(Options, name):
+            setattr(Options, name, value)
+        else:
+            setattr(options, name, value)
+
+    if options.use_listing_file and len(sources) > 1:
+        parser.error("cython: Only one source file allowed when using -o\n")
+    if options.shared_c_file_path:
+        if len(sources) > 0:
+            parser.error("cython: Source file not allowed when using --generate-shared\n")
+    elif len(sources) == 0 and not options.show_version:
+        parser.error("cython: Need at least one source file\n")
+    if Options.embed and len(sources) > 1:
+        parser.error("cython: Only one source file allowed when using --embed\n")
+    if options.module_name:
+        if options.timestamps:
+            parser.error("cython: Cannot use --module-name with --timestamps\n")
+        if len(sources) > 1:
+            parser.error("cython: Only one source file allowed when using --module-name\n")
+    return options, sources

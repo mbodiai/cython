@@ -4,20 +4,28 @@ Python Lexical Analyser
 Scanning an input stream
 """
 
+from typing import TYPE_CHECKING, Any
+
 import cython
 
 cython.declare(BOL=object, EOL=object, EOF=object, NOT_FOUND=object)  # noqa:E402
 
 from . import Errors
-from .Regexps import BOL, EOL, EOF
+from .Regexps import BOL, EOF, EOL
 
+if TYPE_CHECKING:
+    from .Lexicons import Lexicon
+    from typing import IO
+    from .Compiler.Scanning import SourceDescriptor
+else:
+    Lexicon = object
+    IO = object
+    SourceDescriptor = object
 NOT_FOUND = object()
 
 
 class Scanner:
-    """
-    A Scanner is used to read tokens from a stream of characters
-    using the token set specified by a Plex.Lexicon.
+    """A Scanner is used to read tokens from a stream of characters using the token set specified by a Plex.Lexicon.
 
     Constructor:
 
@@ -26,7 +34,6 @@ class Scanner:
         See the docstring of the __init__ method for details.
 
     Methods:
-
       See the docstrings of the individual methods for more
       information.
 
@@ -70,10 +77,28 @@ class Scanner:
     #  state_name = ''       # Name of initial state
     #  queue = None          # list of tokens and positions to be returned
     #  trace = 0
-
-    def __init__(self, lexicon, stream, name='', initial_pos=None):
-        """
-        Scanner(lexicon, stream, name = '')
+    lexicon:"Lexicon"
+    stream:"IO"
+    name:"str|SourceDescriptor"
+    initial_pos:tuple[int, int, int]|None
+    trace:int
+    buffer:str
+    buf_start_pos:int
+    next_pos:int
+    cur_pos:int
+    cur_line:int
+    start_pos:int
+    current_scanner_position_tuple:tuple[str, int, int]
+    last_token_position_tuple:tuple[str, int, int]
+    text:str|None
+    initial_state:dict|None
+    state_name:str|None
+    queue:list[tuple[tuple[Any, str], tuple[str, int, int]]]
+    input_state:int
+    cur_char:str
+    cur_line_start:int
+    def __init__(self, lexicon:"Lexicon", stream:"IO", name:"str|SourceDescriptor"='', initial_pos:tuple[int, int, int]=None):
+        """Scanner constructor.
 
           |lexicon| is a Plex.Lexicon instance specifying the lexical tokens
           to be recognised.
@@ -101,7 +126,7 @@ class Scanner:
         self.stream = stream
         self.name = name
         self.queue = []
-        self.initial_state = None
+        self.initial_state= None
         self.begin('')
         self.next_pos = 0
         self.cur_pos = 0
@@ -112,12 +137,11 @@ class Scanner:
             self.cur_line, self.cur_line_start = initial_pos[1], -initial_pos[2]
 
     def read(self):
-        """
-        Read the next lexical token from the stream and return a
+        """Read the next lexical token from the stream and return a
         tuple (value, text), where |value| is the value associated with
         the token as specified by the Lexicon, and |text| is the actual
         string read from the stream. Returns (None, '') on end of file.
-        """
+        """  # noqa: D205
         queue = self.queue
         while not queue:
             self.text, action = self.scan_a_token()
@@ -158,11 +182,10 @@ class Scanner:
                 self.start_pos - self.buf_start_pos:
                 self.cur_pos - self.buf_start_pos]
             return (text, action)
-        else:
-            if self.cur_pos == self.start_pos:
-                if self.cur_char is None or self.cur_char is EOF:
-                    return ('', None)
-            raise Errors.UnrecognizedInput(self, self.state_name)
+
+        if self.cur_pos == self.start_pos and (self.cur_char is None or self.cur_char is EOF):
+            return ('', None)
+        raise Errors.UnrecognizedInput(self, self.state_name)
 
     @cython.final
     def run_machine_inlined(self):

@@ -53,10 +53,19 @@ def format_position(position):
     return ''
 
 def format_error(message, position):
+    """Format a compiler error with a clickable filename:lineno:col prefix.
+
+    Historically Cython printed a context block first. To make error
+    navigation in IDEs and terminals easier, emit a one-line summary in
+    ``file:line:col: message`` form before the context while keeping the
+    existing detailed block for readability.
+    """
     if position:
         pos_str = format_position(position)
         cont = context(position)
-        message = '\nError compiling Cython file:\n%s%s%s' % (cont, pos_str, message or '')
+        # Summary first for editor integration; keep detailed block below.
+        summary = f"{pos_str}{message or ''}"
+        message = f"{summary}\nError compiling Cython file:\n{cont}{pos_str}{message or ''}"
     return message
 
 class CompileError(PyrexError):

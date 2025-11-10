@@ -7,6 +7,7 @@ cython.declare(PyrexTypes=object, Naming=object, ExprNodes=object, Nodes=object,
 
 import copy
 import hashlib
+import itertools
 import sys
 from operator import itemgetter
 
@@ -202,7 +203,6 @@ class PostParse(ScopeTrackingTransform):
             body=body, doc=None)
         self.visitchildren(node)
         return node
-
     def visit_GeneratorExpressionNode(self, node):
         # unpack a generator expression into the corresponding DefNode
         collector = YieldNodeCollector()
@@ -411,6 +411,257 @@ class PostParse(ScopeTrackingTransform):
             return None  # drop the node - the arguments are invalid for a def node
         return self.visit_FuncDefNode(node)
 
+
+
+class LoopLoweringTransform(CythonTransform, SkipDeclarations):
+    """
+    Lower selected pure-Python iteration patterns (`enumerate`, `zip`) into
+    range-based loops early in the pipeline so later optimisation passes
+    (AnalyseExpressions, IterationTransform, etc.) can reason about them
+    using native Cython nodes.
+    """
+
+    def __init__(self, context):
+        super().__init__(context)
+        self._counter = itertools.count()
+
+    # -- helpers -----------------------------------------------------------------
+
+    @staticmethod
+    def _clone_expr(node):
+        if node is None:
+            return None
+        if hasattr(node, "clone_node"):
+            return node.clone_node()
+        return copy.deepcopy(node)
+
+    @staticmethod
+    def _ensure_statlist(body):
+        if isinstance(body, Nodes.StatListNode):
+            return body
+        return Nodes.StatListNode(body.pos, stats=[body])
+
+    @staticmethod
+    def _builtin_name(pos, name):
+        entry = None
+        if Builtin.builtin_scope is not None:
+            entry = Builtin.builtin_scope.lookup(name)
+        return ExprNodes.NameNode(pos, name=name, entry=entry)
+
+    def _fresh_name(self, prefix: str) -> str:
+        return f"__mb_{prefix}_{next(self._counter)}"
+
+    def _name_expr(self, pos, name, *, inferred_type=None):
+        node = ExprNodes.NameNode(pos, name=name)
+        if inferred_type is not None:
+            node.inferred_type = inferred_type
+        return node
+
+    def _c_index_name(self, pos, name):
+        return self._name_expr(pos, name, inferred_type=PyrexTypes.c_py_ssize_t_type)
+
+    def _len_call(self, pos, seq_name: str):
+        return ExprNodes.SimpleCallNode(
+            pos,
+            function=self._builtin_name(pos, "len"),
+            args=[self._name_expr(pos, seq_name)],
+        )
+
+    def _range_call(self, pos, arg_nodes):
+        return ExprNodes.SimpleCallNode(
+            pos,
+            function=self._builtin_name(pos, "range"),
+            args=arg_nodes,
+        )
+
+    # -- transform entries -------------------------------------------------------
+
+    def visit_ForInStatNode(self, node):
+        # First recurse into existing children so nested structures get processed
+        process_children = getattr(super(), "_process_children", None)
+        if process_children is not None:
+            process_children(node)
+        else:
+            self.visitchildren(node)
+
+        lowered = self._lower_enumerate_loop(node)
+        if lowered is not None:
+            return lowered
+
+        lowered = self._lower_zip_loop(node)
+        if lowered is not None:
+            return lowered
+
+        return node
+
+    def visit_ComprehensionNode(self, node):
+        # Comprehension lowering is not supported yet; leave as-is.
+        return node
+
+    # -- enumerate lowering ------------------------------------------------------
+
+    def _lower_enumerate_loop(self, node):
+        if node.is_async:
+            return None
+        iterator = node.iterator
+        call = getattr(iterator, "sequence", None)
+        if not isinstance(call, ExprNodes.SimpleCallNode):
+            return None
+        func = call.function
+        if not isinstance(func, ExprNodes.NameNode) or func.name != "enumerate":
+            return None
+
+        args = list(call.args or [])
+        if not args:
+            return None
+
+        target = node.target
+        if not isinstance(target, ExprNodes.TupleNode):
+            return None
+        if len(target.args) != 2:
+            return None
+
+        idx_target, value_target = target.args
+        if not (idx_target.is_name and value_target.is_name):
+            return None
+
+        seq_expr = args[0]
+        start_expr = args[1] if len(args) > 1 else None
+
+        seq_temp_name = self._fresh_name("seq")
+        seq_assign = Nodes.SingleAssignmentNode(
+            seq_expr.pos,
+            lhs=self._name_expr(seq_expr.pos, seq_temp_name),
+            rhs=seq_expr,
+        )
+
+        # Loop index (Py_ssize_t) so downstream transforms treat the loop as C-integral
+        loop_index_name = self._fresh_name("idx")
+        loop_index_node = self._c_index_name(node.pos, loop_index_name)
+        node.target = loop_index_node
+
+        len_call = self._len_call(node.pos, seq_temp_name)
+        range_args = [len_call]
+        iterator.sequence = self._range_call(node.pos, range_args)
+
+        idx_rhs = self._name_expr(node.pos, loop_index_name)
+        if start_expr is not None:
+            idx_rhs = ExprNodes.binop_node(
+                node.pos,
+                '+',
+                self._name_expr(node.pos, loop_index_name),
+                self._clone_expr(start_expr),
+            )
+
+        idx_assign = Nodes.SingleAssignmentNode(
+            idx_target.pos,
+            lhs=self._clone_expr(idx_target),
+            rhs=idx_rhs,
+        )
+
+        value_rhs = ExprNodes.IndexNode(
+            value_target.pos,
+            base=self._name_expr(value_target.pos, seq_temp_name),
+            index=self._name_expr(value_target.pos, loop_index_name),
+        )
+        value_assign = Nodes.SingleAssignmentNode(
+            value_target.pos,
+            lhs=self._clone_expr(value_target),
+            rhs=value_rhs,
+        )
+
+        body = self._ensure_statlist(node.body)
+        # Insert in reverse order so idx_assign runs before value_assign
+        body.stats.insert(0, value_assign)
+        body.stats.insert(0, idx_assign)
+        node.body = body
+        node.iterator = iterator
+
+        return [seq_assign, node]
+
+    # -- zip lowering ------------------------------------------------------------
+
+    def _lower_zip_loop(self, node):
+        if node.is_async:
+            return None
+
+        iterator = node.iterator
+        call = getattr(iterator, "sequence", None)
+
+        if not isinstance(call, ExprNodes.SimpleCallNode):
+            return None
+
+        func = call.function
+        args = list(call.args or [])
+
+        if not isinstance(func, ExprNodes.NameNode) or func.name != "zip":
+            return None
+
+        if len(args) < 2:
+            return None
+
+        target = node.target
+        if not isinstance(target, ExprNodes.TupleNode):
+            return None
+        if len(target.args) != len(args):
+            return None
+        if not all(item.is_name for item in target.args):
+            return None
+
+        # Hoist each argument into a temporary so it is evaluated once.
+        seq_temp_names = []
+        seq_assignments = []
+        len_exprs = []
+        for arg in args:
+            temp_name = self._fresh_name("zip_seq")
+            seq_temp_names.append(temp_name)
+            seq_assignments.append(
+                Nodes.SingleAssignmentNode(
+                    arg.pos,
+                    lhs=self._name_expr(arg.pos, temp_name),
+                    rhs=arg,
+                )
+            )
+            len_exprs.append(self._len_call(node.pos, temp_name))
+
+        if len(len_exprs) == 1:
+            length_expr = len_exprs[0]
+        else:
+            length_expr = ExprNodes.SimpleCallNode(
+                node.pos,
+                function=self._builtin_name(node.pos, "min"),
+                args=len_exprs,
+            )
+
+        loop_index_name = self._fresh_name("zip_idx")
+        loop_index_node = self._c_index_name(node.pos, loop_index_name)
+        node.target = loop_index_node
+
+        iterator.sequence = self._range_call(node.pos, [length_expr])
+
+        body = self._ensure_statlist(node.body)
+        assignments = []
+        for target_node, seq_name in zip(target.args, seq_temp_names, strict=False):
+            value_rhs = ExprNodes.IndexNode(
+                target_node.pos,
+                base=self._name_expr(target_node.pos, seq_name),
+                index=self._name_expr(target_node.pos, loop_index_name),
+            )
+            assignments.append(
+                Nodes.SingleAssignmentNode(
+                    target_node.pos,
+                    lhs=self._clone_expr(target_node),
+                    rhs=value_rhs,
+                )
+            )
+
+        for assign in reversed(assignments):
+            body.stats.insert(0, assign)
+
+        node.body = body
+        node.iterator = iterator
+
+        return [*seq_assignments, node]
 
 class _AssignmentExpressionTargetNameFinder(TreeVisitor):
     def __init__(self):
@@ -624,7 +875,7 @@ def unpack_string_to_character_literals(literal):
 
 
 @cython.cfunc
-def flatten_parallel_assignments(input: list, output: list):
+def flatten_parallel_assignments(input: list[ExprNodes.ExprNode], output: list[list[ExprNodes.ExprNode]]):
     #  The input is a list of expression nodes, representing the LHSs
     #  and RHS of one (possibly cascaded) assignment statement.  For
     #  sequence constructors, rearranges the matching parts of both
@@ -712,7 +963,7 @@ def map_starred_assignment(lhs_targets: list, starred_assignments: list, lhs_arg
     i: cython.Py_ssize_t
     starred: cython.Py_ssize_t
     lhs_remaining: cython.Py_ssize_t
-    for i, (targets, expr) in enumerate(zip(lhs_targets, lhs_args)):
+    for i, (targets, expr) in enumerate(zip(lhs_targets, lhs_args, strict=False)):
         if expr.is_starred:
             starred = i
             lhs_remaining = len(lhs_args) - i - 1
@@ -723,7 +974,7 @@ def map_starred_assignment(lhs_targets: list, starred_assignments: list, lhs_arg
 
     # right side of the starred target
     for i, (targets, expr) in enumerate(zip(lhs_targets[-lhs_remaining:],
-                                            lhs_args[starred + 1:])):
+                                            lhs_args[starred + 1:], strict=False)):
         targets.append(expr)
 
     # the starred target itself, must be assigned a (potentially empty) list
@@ -817,6 +1068,11 @@ class TrackNumpyAttributes(VisitorTransform, SkipDeclarations):
     visit_Node = VisitorTransform.recurse_to_children
 
 
+class MbcoreLoopLoweringTransform(CythonTransform):
+    """Placeholder loop-lowering hook for mbcore-specific tweaks."""
+    pass
+
+
 class InterpretCompilerDirectives(CythonTransform):
     """
     After parsing, directives can be stored in a number of places:
@@ -892,7 +1148,7 @@ class InterpretCompilerDirectives(CythonTransform):
         self.cython_module_names = set()
         self.directive_names = {'staticmethod': 'staticmethod'}
         self.parallel_directives = {}
-        directives = copy.deepcopy(Options.get_directive_defaults())
+        directives = Options.get_directive_defaults().copy()
         for key, value in compilation_directive_defaults.items():
             directives[str(key)] = copy.deepcopy(value)
         self.directives = directives
@@ -957,6 +1213,9 @@ class InterpretCompilerDirectives(CythonTransform):
 
         self.directives.update(node.directive_comments)
         node.directives = self.directives
+        # Ensure the module scope sees the resolved directive defaults before later
+        # transforms (e.g. AutoCpdefFunctionDefinitions) rely on env.directives.
+        node.scope.directives = node.directives
         node.parallel_directives = self.parallel_directives
         self.visitchildren(node)
         node.cython_module_names = self.cython_module_names
@@ -1822,6 +2081,75 @@ class _HandleGeneratorArguments(VisitorTransform, SkipDeclarations):
     visit_Node = VisitorTransform.recurse_to_children
 
 
+class OverloadDispatchTransform(CythonTransform):
+    """
+    Detect @bind_overloads when overload_dispatch is enabled and record the intent so that code
+    generation can emit a native dispatcher instead of the Python decorator.
+    """
+    def visit_DefNode(self, node):
+        # self._process_children(node)
+        if not self.current_directives.get('overload_dispatch'):
+            return node
+        decorators = node.decorators or []
+        if not decorators:
+            return node
+
+        matched_spec = None
+        filtered = []
+        for decorator in decorators:
+            spec = self._extract_bind_overloads_spec(decorator)
+            if spec is None:
+                filtered.append(decorator)
+                continue
+            if matched_spec is not None:
+                error(decorator.pos, "Only one bind_overloads decorator is supported per function in overload_dispatch mode")
+                filtered.append(decorator)
+                continue
+            matched_spec = spec
+        if matched_spec is None:
+            return node
+
+        node.decorators = filtered or None
+        node.overload_dispatch = matched_spec
+        return node
+
+    def _extract_bind_overloads_spec(self, decorator):
+        expr = decorator.decorator
+        call_node = None
+        func_expr = expr
+
+        if isinstance(expr, ExprNodes.SimpleCallNode):
+            call_node = expr
+            func_expr = expr.function
+        elif isinstance(expr, ExprNodes.GeneralCallNode):
+            call_node = expr
+            func_expr = expr.function
+
+        if not self._is_bind_overloads_expr(func_expr):
+            return None
+
+        if call_node is not None:
+            if isinstance(call_node, ExprNodes.SimpleCallNode) and call_node.args:
+                error(call_node.pos, "bind_overloads positional arguments are not supported when overload_dispatch is enabled")
+                return None
+            if isinstance(call_node, ExprNodes.GeneralCallNode):
+                if getattr(call_node.positional_args, "args", None):
+                    error(call_node.pos, "bind_overloads positional arguments are not supported when overload_dispatch is enabled")
+                    return None
+                if call_node.keyword_args and call_node.keyword_args.key_value_pairs:
+                    error(call_node.pos, "bind_overloads keyword arguments are not yet supported when overload_dispatch is enabled")
+                    return None
+
+        return Nodes.OverloadDispatchSpec(decorator.pos)
+
+    def _is_bind_overloads_expr(self, expr):
+        if isinstance(expr, ExprNodes.NameNode):
+            return expr.name == "bind_overloads"
+        if isinstance(expr, ExprNodes.AttributeNode):
+            return expr.attribute == "bind_overloads"
+        return False
+
+
 class DecoratorTransform(ScopeTrackingTransform, SkipDeclarations):
     """
     Transforms method decorators in cdef classes into nested calls or properties.
@@ -2387,7 +2715,7 @@ if VALUE is not None:
         self.visitchild(node, 'py_func')
         node.update_fused_defnode_entry(env)
         # For the moment, fused functions do not support METH_FASTCALL
-        node.py_func.entry.signature.use_fastcall = False
+        node.py_func.entry.signature.use_fastcall = True
         pycfunc = ExprNodes.PyCFunctionNode.from_defnode(node.py_func, binding=True)
         pycfunc = ExprNodes.ProxyNode(pycfunc.coerce_to_temp(env))
         node.resulting_fused_function = pycfunc
@@ -3446,8 +3774,6 @@ class MarkClosureVisitor(CythonTransform):
         self.visitchildren(node)
         node.needs_closure = self.needs_closure
         self.needs_closure = True
-        if node.needs_closure and node.overridable:
-            error(node.pos, "closures inside cpdef functions not yet supported")
         return node
 
     def visit_LambdaNode(self, node):
@@ -3529,10 +3855,17 @@ class CreateClosureClasses(CythonTransform):
 
         if not from_closure and (self.path or inner_node):
             if not inner_node:
-                if not node.py_cfunc_node:
-                    raise InternalError("DefNode does not have assignment node")
-                inner_node = node.py_cfunc_node
-            inner_node.needs_closure_code = False
+                if isinstance(node, Nodes.DefNode):
+                    if not node.py_cfunc_node:
+                        raise InternalError("DefNode does not have assignment node")
+                    inner_node = node.py_cfunc_node
+                    inner_node.needs_closure_code = False
+                else:
+                    # CFuncDefNodes (including cpdef/ccall) do not use a py_cfunc_node.
+                    # There is no closure code to disable for an assignment here.
+                    pass
+            else:
+                inner_node.needs_closure_code = False
             node.needs_outer_scope = False
 
         if node.is_generator:
@@ -3602,6 +3935,10 @@ class CreateClosureClasses(CythonTransform):
         return node
 
     def visit_FuncDefNode(self, node):
+        if getattr(node, 'is_wrapper', 0):
+            # Do not create closure classes for Python wrappers of cdef/cpdef functions.
+            self.visitchildren(node)
+            return node
         if self.in_lambda:
             self.visitchildren(node)
             return node
@@ -3617,11 +3954,8 @@ class CreateClosureClasses(CythonTransform):
         return node
 
     def visit_CFuncDefNode(self, node):
-        if not node.overridable:
-            return self.visit_FuncDefNode(node)
-        else:
-            self.visitchildren(node)
-            return node
+        # Support closures for both plain cdef and cpdef/ccall functions.
+        return self.visit_FuncDefNode(node)
 
     def visit_GeneratorExpressionNode(self, node):
         node = _HandleGeneratorArguments()(node)

@@ -7,9 +7,9 @@ is preserved (and it could not be as it is not present in the code tree).
 
 
 from .Compiler.Visitor import TreeVisitor
-from .Compiler.ExprNodes import *
 from .Compiler.Nodes import CSimpleBaseTypeNode
-
+from .Compiler import Nodes
+from .Compiler import ExprNodes
 
 class LinesResult:
     def __init__(self):
@@ -83,21 +83,21 @@ class DeclarationWriter(TreeVisitor):
                 self.put(" = ")
                 self.visit(items[-1].default)
 
-    def _visit_indented(self, node):
+    def _visit_indented(self, node:"Nodes.Node" ):
         self.indent()
         self.visit(node)
         self.dedent()
 
-    def visit_Node(self, node):
+    def visit_Node(self, node:"Nodes.Node"):
         raise AssertionError("Node not handled by serializer: %r" % node)
 
-    def visit_ModuleNode(self, node):
+    def visit_ModuleNode(self, node:"Nodes.ModuleScope"):
         self.visitchildren(node)
 
     def visit_StatListNode(self, node):
         self.visitchildren(node)
 
-    def visit_CDefExternNode(self, node):
+    def visit_CDefExternNode(self, node:"Nodes.CDefExternNode"):
         if node.include_file is None:
             file = '*'
         else:
@@ -105,11 +105,11 @@ class DeclarationWriter(TreeVisitor):
         self.putline("cdef extern from %s:" % file)
         self._visit_indented(node.body)
 
-    def visit_CPtrDeclaratorNode(self, node):
+    def visit_CPtrDeclaratorNode(self, node:"Nodes.CPtrDeclaratorNode"):
         self.put('*')
         self.visit(node.base)
 
-    def visit_CReferenceDeclaratorNode(self, node):
+    def visit_CReferenceDeclaratorNode(self, node:"Nodes.CReferenceDeclaratorNode"):
         self.put('&')
         self.visit(node.base)
 
@@ -120,17 +120,17 @@ class DeclarationWriter(TreeVisitor):
             self.visit(node.dimension)
         self.put(']')
 
-    def visit_CFuncDeclaratorNode(self, node):
+    def visit_CFuncDeclaratorNode(self, node:"Nodes.CFuncDeclaratorNode"):
         # TODO: except, gil, etc.
         self.visit(node.base)
         self.put('(')
         self.comma_separated_list(node.args)
         self.endline(')')
 
-    def visit_CNameDeclaratorNode(self, node):
+    def visit_CNameDeclaratorNode(self, node:"Nodes.CNameDeclaratorNode"):
         self.put(node.name)
 
-    def visit_CSimpleBaseTypeNode(self, node):
+    def visit_CSimpleBaseTypeNode(self, node:"Nodes.CSimpleBaseTypeNode"):
         # See Parsing.p_sign_and_longness
         if node.is_basic_c_type:
             self.put(("unsigned ", "", "signed ")[node.signed])
@@ -141,22 +141,22 @@ class DeclarationWriter(TreeVisitor):
         if node.name is not None:
             self.put(node.name)
 
-    def visit_CComplexBaseTypeNode(self, node):
+    def visit_CComplexBaseTypeNode(self, node:"Nodes.CComplexBaseTypeNode"):
         self.visit(node.base_type)
         self.visit(node.declarator)
 
-    def visit_CNestedBaseTypeNode(self, node):
+    def visit_CNestedBaseTypeNode(self, node:"Nodes.CNestedBaseTypeNode"):
         self.visit(node.base_type)
         self.put('.')
         self.put(node.name)
 
-    def visit_TemplatedTypeNode(self, node):
+    def visit_TemplatedTypeNode(self, node:"Nodes.TemplatedTypeNode"):
         self.visit(node.base_type_node)
         self.put('[')
         self.comma_separated_list(node.positional_args + node.keyword_args.key_value_pairs)
         self.put(']')
 
-    def visit_CVarDefNode(self, node):
+    def visit_CVarDefNode(self, node:"Nodes.CVarDefNode"):
         self.startline("cdef ")
         self.visit(node.base_type)
         self.put(" ")
@@ -182,7 +182,7 @@ class DeclarationWriter(TreeVisitor):
                 self.visit(attribute)
         self.dedent()
 
-    def visit_CStructOrUnionDefNode(self, node):
+    def visit_CStructOrUnionDefNode(self, node:"Nodes.CStructOrUnionDefNode"):
         if node.typedef_flag:
             decl = 'ctypedef '
         else:
@@ -194,7 +194,7 @@ class DeclarationWriter(TreeVisitor):
         decl += node.kind
         self._visit_container_node(node, decl, None, node.attributes)
 
-    def visit_CppClassNode(self, node):
+    def visit_CppClassNode(self, node:"Nodes.CppClassNode"):
         extras = ""
         if node.templates:
             extras = "[%s]" % ", ".join(node.templates)
@@ -202,7 +202,7 @@ class DeclarationWriter(TreeVisitor):
             extras += "(%s)" % ", ".join(node.base_classes)
         self._visit_container_node(node, "cdef cppclass", extras, node.attributes)
 
-    def visit_CEnumDefNode(self, node):
+    def visit_CEnumDefNode(self, node:"Nodes.CEnumDefNode"):
         self._visit_container_node(node, "cdef enum", None, node.items)
 
     def visit_CEnumDefItemNode(self, node):
@@ -214,7 +214,7 @@ class DeclarationWriter(TreeVisitor):
             self.visit(node.value)
         self.endline()
 
-    def visit_CClassDefNode(self, node):
+    def visit_CClassDefNode(self, node:"Nodes.CClassDefNode"):
         assert not node.module_name
         if node.decorators:
             for decorator in node.decorators:
@@ -238,14 +238,14 @@ class DeclarationWriter(TreeVisitor):
         self.visit(node.declarator)
         self.endline()
 
-    def visit_FuncDefNode(self, node):
+    def visit_FuncDefNode(self, node:"Nodes.FuncDefNode"):
         # TODO: support cdef + cpdef functions
         self.startline("def %s(" % node.name)
         self.comma_separated_list(node.args)
         self.endline("):")
         self._visit_indented(node.body)
 
-    def visit_CFuncDefNode(self, node):
+    def visit_CFuncDefNode(self, node:"Nodes.CFuncDefNode"):
         self.startline('cpdef ' if node.overridable else 'cdef ')
         if node.modifiers:
             self.put(' '.join(node.modifiers))
@@ -269,7 +269,7 @@ class DeclarationWriter(TreeVisitor):
 
         self._visit_indented(node.body)
 
-    def visit_CArgDeclNode(self, node):
+    def visit_CArgDeclNode(self, node:"Nodes.CArgDeclNode"):
         # For "CSimpleBaseTypeNode", the variable type may have been parsed as type.
         # For other node types, the "name" is always None.
         if not isinstance(node.base_type, CSimpleBaseTypeNode) or \
@@ -300,7 +300,7 @@ class DeclarationWriter(TreeVisitor):
         self.put(node.module_name)
         self.put(" cimport ")
         first = True
-        for pos, name, as_name, kind in node.imported_names:
+        for _, name, as_name, kind in node.imported_names:
             assert kind is None
             if first:
                 first = False
@@ -634,7 +634,7 @@ class ExpressionWriter(TreeVisitor):
     def visit_IndexNode(self, node):
         self.visit(node.base)
         self.put("[")
-        if isinstance(node.index, TupleNode):
+        if isinstance(node.index, ExprNodes.TupleNode):
             if node.index.subexpr_nodes():
                 self.emit_sequence(node.index)
             else:
@@ -725,8 +725,8 @@ class ExpressionWriter(TreeVisitor):
         self.remove(", ")
         self.put(")")
 
-    def emit_comprehension(self, body, target,
-                           sequence, condition,
+    def emit_comprehension(self, body:"ExprNode", target:"AssignmentExpressionNode",
+                           sequence:"SequenceNode", condition:"CondExprNode|None",
                            parens=("", "")):
         open_paren, close_paren = parens
         self.put(open_paren)

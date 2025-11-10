@@ -185,7 +185,7 @@ class Signature:
                     return [method_fastcall, method_keywords]
                 else:
                     return [method_varargs, method_keywords]
-        return None
+        return []
 
     def method_function_type(self):
         # Return the C function type

@@ -489,7 +489,7 @@ def copy_c_or_fortran_cname(memview):
             memview.specialization_suffix(), c_or_f)
 
 
-def get_copy_new_utility(pos, from_memview, to_memview):
+def get_copy_new_utility(pos:int, from_memview:"PyrexTypes.MemoryViewSliceType", to_memview:"PyrexTypes.MemoryViewSliceType")->"UtilityCode|None":
     if (from_memview.dtype != to_memview.dtype and
             not (from_memview.dtype.is_cv_qualified and from_memview.dtype.cv_base_type == to_memview.dtype)):
         error(pos, "dtypes must be the same!")
@@ -709,7 +709,7 @@ def validate_axes_specs(positions, specs, is_c_contig, is_f_contig):
         if access == 'ptr':
             last_indirect_dimension = idx
 
-    for idx, (pos, (access, packing)) in enumerate(zip(positions, specs)):
+    for idx, (pos, (access, packing)) in enumerate(zip(positions, specs, strict=False)):
 
         if not (access in access_specs and
                 packing in packing_specs):
@@ -754,7 +754,7 @@ def _resolve_NameNode(env, node):
     try:
         resolved_name = env.lookup(node.name).name
     except AttributeError:
-        raise CompileError(node.pos, INVALID_ERR)
+        raise CompileError(node.pos, INVALID_ERR) from None
 
     viewscope = env.context.cython_scope.viewscope
     entry = viewscope.lookup(resolved_name)
@@ -882,8 +882,6 @@ def _get_memoryview_utility_code():
                     copy_contents_new_utility,
                     ],
     )
-    memviewslice_declare_code.requires.append(memoryview_utility_code)
-    copy_contents_new_utility.requires.append(memoryview_utility_code)
     return memoryview_utility_code, memviewslice_init_code
 
 @Utils.cached_function
@@ -901,8 +899,6 @@ def _get_memoryview_shared_utility_code(shared_utility_qualified_name):
                 memviewslice_init_code,
                 ],
     )
-    memviewslice_declare_code.requires.append(shared_utility_code)
-    copy_contents_new_utility.requires.append(shared_utility_code)
     return (shared_utility_code, memviewslice_init_code)
 
 def get_view_utility_code(shared_utility_qualified_name):

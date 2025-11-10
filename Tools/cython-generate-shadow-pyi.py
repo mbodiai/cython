@@ -92,6 +92,7 @@ def replace_type_list(file_path, type_lines):
 
     with open(file_path, 'w') as f:
         f.writelines(new_lines)
+    print(f"Generated {file_path}")
 
 def map_type(pytype):
     try:

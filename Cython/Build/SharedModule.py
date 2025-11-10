@@ -26,6 +26,22 @@ def create_shared_library_pipeline(context, scope, options, result):
 
         return generate_tree
 
+    def generate_c_utilities(module_node:Symtab.ModuleScope):
+        UtilityCode = Code.UtilityCode
+        match_special = UtilityCode.get_special_comment_matcher('/')
+        for c_utility_file in os.listdir(Code.get_utility_dir()):
+            if not c_utility_file.endswith('.c'):
+                continue
+            for line in Code.read_utilities_hook(c_utility_file):
+                if not ((m := match_special(line)) and (name := m.group('name'))):
+                    continue
+                if not (section_title := UtilityCode.match_section_title(name)):
+                    continue
+                name, section_type = section_title.groups()
+                if section_type == 'export':
+                    module_node.scope.use_utility_code(UtilityCode.load_cached(name, c_utility_file))
+        return module_node
+
     orig_cimport_from_pyx = Options.cimport_from_pyx
 
     def set_cimport_from_pyx(cimport_from_pyx):

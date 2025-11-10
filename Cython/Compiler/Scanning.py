@@ -5,22 +5,35 @@
 
 
 import cython
+
 cython.declare(make_lexicon=object, lexicon=object,
                print_function=object, error=object, warning=object,
                os=object, platform=object)
-
 import os
 import platform
-from unicodedata import normalize
 from contextlib import contextmanager
+from pathlib import Path
+from typing import IO, TYPE_CHECKING
+from unicodedata import normalize
 
 from .. import Utils
-from ..Plex.Scanners import Scanner
 from ..Plex.Errors import UnrecognizedInput
-from .Errors import error, warning, hold_errors, release_errors, CompileError
-from .Lexicon import any_string_prefix, ft_string_prefixes, make_lexicon, IDENT
+from ..Plex.Scanners import Scanner
+from .Errors import CompileError, error, hold_errors, release_errors, warning
 from .Future import print_function
+from .Lexicon import IDENT, any_string_prefix, ft_string_prefixes, make_lexicon
 
+if TYPE_CHECKING:
+    from Cython.Build import CompilationContext
+
+    from .Nodes import SourceDescriptor
+    from .Symtab import Scope
+else:
+    CompilationContext = object
+    SourceDescriptor = object
+    Scope = object
+    FileSourceDescriptor = object
+    StringSourceDescriptor = object
 debug_scanner = 0
 trace_scanner = 0
 scanner_debug_flags = 0
@@ -79,14 +92,13 @@ class CompileTimeScope:
             outer = self.outer
             if outer:
                 return outer.lookup(name)
-            else:
-                raise
+            raise
 
 
-def initial_compile_time_env():
+def initial_compile_time_env() -> CompileTimeScope:
     benv = CompileTimeScope()
     names = ('UNAME_SYSNAME', 'UNAME_NODENAME', 'UNAME_RELEASE', 'UNAME_VERSION', 'UNAME_MACHINE')
-    for name, value in zip(names, platform.uname()):
+    for name, value in zip(names, platform.uname(), strict=False):
         benv.declare(name, value)
     import builtins
 
@@ -112,16 +124,13 @@ def initial_compile_time_env():
     benv.declare('long', int)
     benv.declare('xrange', range)
 
-    denv = CompileTimeScope(benv)
-    return denv
+    return CompileTimeScope(benv)
 
 
 #------------------------------------------------------------------
 
 class SourceDescriptor:
-    """
-    A SourceDescriptor should be considered immutable.
-    """
+    """A SourceDescriptor should be considered immutable."""
     filename = None
     in_utility_code = False
 
@@ -130,19 +139,19 @@ class SourceDescriptor:
     _escaped_description = None
     _cmp_name = ''
     def __str__(self):
-        assert False  # To catch all places where a descriptor is used directly as a filename
+        raise ValueError("SourceDescriptor should not be used directly as a filename")
 
-    def set_file_type_from_name(self, filename):
-        name, ext = os.path.splitext(filename)
+    def set_file_type_from_name(self, filename:str):
+        ext = Path(filename).suffix
         self._file_type = ext in ('.pyx', '.pxd', '.py') and ext[1:] or 'pyx'
 
-    def is_cython_file(self):
+    def is_cython_file(self) -> bool:
         return self._file_type in ('pyx', 'pxd')
 
-    def is_python_file(self):
+    def is_python_file(self) -> bool:
         return self._file_type == 'py'
 
-    def get_escaped_description(self):
+    def get_escaped_description(self) -> str:
         if self._escaped_description is None:
             # Use forward slashes on Windows since these paths
             # will be used in the #line directives in the C/C++ files.
@@ -243,42 +252,38 @@ class FileSourceDescriptor(SourceDescriptor):
 
 
 class StringSourceDescriptor(SourceDescriptor):
-    """
-    Instances of this class can be used instead of a filenames if the
-    code originates from a string object.
-    """
+    """Instances of this class can be used instead of a filenames if the code originates from a string object."""
+
     def __init__(self, name, code):
         self.name = name
-        #self.set_file_type_from_name(name)
         self.codelines = [line.rstrip() for line in code.splitlines()]
         self._cmp_name = name
 
-    def get_lines(self, encoding=None, error_handling=None):
+    def get_lines(self, encoding:str|None=None, error_handling:str|None=None) -> list[str]:
         if not encoding:
             return self.codelines
-        else:
-            return [line.encode(encoding, error_handling).decode(encoding)
+
+        return [line.encode(encoding, error_handling).decode(encoding)
                     for line in self.codelines]
 
-    def get_description(self):
+    def get_description(self) -> str:
         return self.name
 
     get_error_description = get_description
 
-    def get_filenametable_entry(self):
+    def get_filenametable_entry(self) -> str:
         return "<stringsource>"
 
     def __hash__(self):
         return id(self)
         # Do not hash on the name, an identical string source should be the
         # same object (name is often defaulted in other places)
-        # return hash(self.name)
 
     def __eq__(self, other):
         return isinstance(other, StringSourceDescriptor) and self.name == other.name
 
     def __repr__(self):
-        return "<StringSourceDescriptor:%s>" % self.name
+        return f"<StringSourceDescriptor:{self.name}>"
 
 
 #------------------------------------------------------------------
@@ -292,8 +297,8 @@ class PyrexScanner(Scanner):
     #  put_back_on_failure  list or None  If set, this records states so the tentatively_scan
     #                                       contextmanager can restore it
 
-    def __init__(self, file, filename, parent_scanner=None,
-                 scope=None, context=None, source_encoding=None, parse_comments=True, initial_pos=None):
+    def __init__(self, file:IO, filename:SourceDescriptor, parent_scanner:"PyrexScanner|None"=None,
+                 scope:Scope|None=None, context:CompilationContext|None=None, source_encoding:str|None=None, parse_comments:bool=True, initial_pos:tuple[int, int, int]=None):
         Scanner.__init__(self, get_lexicon(), file, filename, initial_pos)
 
         if filename.is_python_file():

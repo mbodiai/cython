@@ -9,7 +9,7 @@ from typing_extensions import Literal
 from .Dependencies import cythonize, extended_iglob
 from ..Utils import is_package_dir
 from ..Compiler import Options
-from ..Compiler.Options import CompilationOptions
+from ..Compiler.Options import CompilationOptions, DirectivesDict
 
 try:
     import multiprocessing
@@ -49,7 +49,7 @@ def cython_compile(path_pattern, options: "CythonizeOptions") -> None:
     _build(list(ext_modules_by_basedir.items()), options.parallel)
 
 
-def _cython_compile_files(all_paths, options: "CythonizeOptions") -> Dict:
+def _cython_compile_files(all_paths: List[str], options: "CythonizeOptions"):
     """Compile Cython files and return modules to build by directory."""
     ext_modules_to_build = defaultdict(list)
 
@@ -68,18 +68,17 @@ def _cython_compile_files(all_paths, options: "CythonizeOptions") -> Dict:
             # assume it's a file(-like thing)
             paths = [path]
 
-        ext_modules = cythonize(
-            paths,
-            nthreads=options.parallel,
-            exclude_failures=options.keep_going,
-            exclude=options.excludes,
-            compiler_directives=options.directives,
-            compile_time_env=options.compile_time_env,
-            force=options.force,
-            quiet=options.quiet,
-            depfile=options.depfile,
-            language=options.language,
-            **options.options)
+        try:
+            ext_modules = cythonize(paths, **options.options)
+        except Exception as exc:
+            # Print a clickable summary for the files we attempted to compile.
+            # We lack a precise position at this stage, so default to 1:1.
+            import sys
+            for p in paths:
+                if os.path.isfile(p):
+                    sys.stderr.write(f"{p}:1:1: {exc.__class__.__name__}: {exc}\n")
+            # Re-raise to preserve exit status and traceback for debugging.
+            raise
 
         if ext_modules and options.build:
             ext_modules_to_build[base_dir].extend(ext_modules)
@@ -156,9 +155,9 @@ def run_distutils(args):
 
 @dataclass
 class CythonizeOptions(dict):
-    directives: Dict[str, str] = field(default_factory=dict)
+    directives: DirectivesDict = field(default_factory=DirectivesDict)
     compile_time_env: Dict[str, str] = field(default_factory=dict)
-    options: CompilationOptions = field(default_factory=lambda: CompilationOptions())
+    options: CompilationOptions = field(default_factory=CompilationOptions)
     language_level: int = 3
     language: Optional[Literal["c", "c++"]] = None
     annotate: Optional[Literal["default", "fullc"]] = None
@@ -173,10 +172,13 @@ class CythonizeOptions(dict):
     no_docstrings: bool = False
     sources: List[str] = field(default_factory=list)
     depfile: bool = False
-    benchmark: Optional[str] = None  # Added attribute for benchmark
-    benchmark_setup: Optional[str] = None  # Added attribute for benchmark setup
+    benchmark: Optional[str] = None
+    benchmark_setup: Optional[str] = None
 
 
+    def __post_init__(self):
+        self.options = CompilationOptions(**self.options)
+        self.directives = DirectivesDict(**self.directives)
 
 def benchmark(code, setup_code=None, import_module=None, directives=None):
     from Cython.Build.Inline import cymeit
@@ -312,7 +314,7 @@ def parse_args(args):
         options.parallel = 0
     if options.language_level:
         assert options.language_level in (2, 3, '3str')
-        options.options['language_level'] = options.language_level
+        options.options.language_level = options.language_level
 
     if options.lenient:
         # increase Python compatibility by ignoring compile time errors

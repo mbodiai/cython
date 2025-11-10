@@ -10,11 +10,53 @@ import subprocess
 #import distutils.core
 #from distutils import sysconfig
 from distutils import ccompiler
+try:
+    from distutils import sysconfig as _distutils_sysconfig
+except Exception:  # pragma: no cover - fallback for environments without distutils
+    _distutils_sysconfig = None
+try:
+    import sysconfig as _sysconfig_mod
+except Exception:  # very unlikely
+    _sysconfig_mod = None
 
 import runtests
 import Cython.Distutils.extension
-import Cython.Distutils.old_build_ext as build_ext
 from Cython.Debugger import Cygdb as cygdb
+
+
+class Optimization:
+    """Local copy of the old Optimization helper used by Debugger tests.
+
+    Disables high optimisation flags during gdb builds to improve debugging
+    experience, then restores them afterwards.
+    """
+    def __init__(self):
+        self.flags = (
+            'OPT',
+            'CFLAGS',
+            'CPPFLAGS',
+            'EXTRA_CFLAGS',
+            'BASECFLAGS',
+            'PY_CFLAGS',
+        )
+        sc = _distutils_sysconfig if _distutils_sysconfig is not None else _sysconfig_mod
+        self._sysconfig = sc
+        self.config_vars = sc.get_config_vars() if sc is not None else {}
+        # record original values for restore
+        self.state = {flag: self.config_vars.get(flag) for flag in self.flags}
+
+    def disable_optimization(self):
+        badoptions = ('-O1', '-O2', '-O3')
+        for flag in self.flags:
+            option = self.config_vars.get(flag)
+            if option:
+                parts = [opt for opt in str(option).split() if opt not in badoptions]
+                self.config_vars[flag] = ' '.join(parts)
+
+    def restore_state(self):
+        for flag, option in self.state.items():
+            if option is not None:
+                self.config_vars[flag] = option
 
 root = os.path.dirname(os.path.abspath(__file__))
 codefile = os.path.join(root, 'codefile')
@@ -101,7 +143,7 @@ class DebuggerTestCase(unittest.TestCase):
                 module_path=self.destfile,
             )
 
-            optimization_disabler = build_ext.Optimization()
+            optimization_disabler = Optimization()
 
             cython_compile_testcase = runtests.CythonCompileTestCase(
                 workdir=self.tempdir,

@@ -24,8 +24,7 @@ import os.path
 import pathlib
 import re
 import sys
-from typing import Optional
-
+from typing import Any, TYPE_CHECKING
 from .Errors import (
     error, warning, InternalError, CompileError, report_error, local_errors,
     CannotSpecialize, performance_hint)
@@ -60,7 +59,9 @@ from .PyrexTypes import PythranExpr
 
 any_string_type = (bytes, str)
 
-
+if TYPE_CHECKING:
+    from .Nodes import DefNode
+    from .Symtab import ModuleScope
 class NotConstant:
     _obj = None
 
@@ -141,7 +142,12 @@ def check_negative_indices(*nodes):
                     "undefined", level=1)
 
 
-def infer_sequence_item_type(env, seq_node, index_node=None, seq_type=None):
+def infer_sequence_item_type(
+    env,
+    seq_node: "SequenceNode",
+    index_node: "IndexNode | None" = None,
+    seq_type: "PyrexTypes.PyrexType | None" = None,
+) -> "PyrexTypes.PyrexType | None":
     if not seq_node.is_sequence_constructor:
         if seq_type is None:
             seq_type = seq_node.infer_type(env)
@@ -1081,7 +1087,12 @@ class ExprNode(Node):
             elif src.constant_result is None:
                 src = NoneNode(src.pos).coerce_to(dst_type, env)
             elif src.type.is_pyobject:
-                if not src.type.subtype_of(dst_type):
+                # Allow conversion to 'list' from any iterable/sequence using PySequence_List
+                # rather than only type-checking, to accommodate common tuple->list use cases
+                # in typed variables.
+                if dst_type is Builtin.list_type and not src.type.subtype_of(dst_type):
+                    src = CoerceToListNode(src, env)
+                elif not src.type.subtype_of(dst_type):
                     # Apply a type check on assignment.
                     src = PyTypeTestNode(src, dst_type, env)
             else:
@@ -1267,8 +1278,9 @@ class _TempModifierNode(ExprNode):
     """
     subexprs = ['arg']
     is_temp = False
+    arg: "ExprNode"
 
-    def __init__(self, pos, arg):
+    def __init__(self, pos, arg: "ExprNode"):
         super().__init__(pos, arg=arg)
 
     @property
@@ -1335,9 +1347,10 @@ class AtomicExprNode(ExprNode):
 class PyConstNode(AtomicExprNode):
     #  Abstract base class for constant Python values.
 
-    is_literal = 1
+    is_literal: int = 1
     type = py_object_type
-    nogil_check = None
+    nogil_check: "bool | None" = None
+    value: Any
 
     def is_simple(self):
         return 1
@@ -1392,9 +1405,9 @@ class ConstNode(AtomicExprNode):
     #
     # value     string      C code fragment
 
-    is_literal = 1
-    nogil_check = None
-
+    is_literal: int = 1
+    nogil_check: "bool | None" = None
+    value: Any
     def is_simple(self):
         return 1
 
@@ -1420,7 +1433,7 @@ class ConstNode(AtomicExprNode):
         pass
 
     @staticmethod
-    def for_type(pos, value, type, constant_result=constant_value_not_set):
+    def for_type(pos, value, type: "PyrexTypes.PyrexType", constant_result=constant_value_not_set):
         cls = ConstNode
         if type is PyrexTypes.c_null_ptr_type or (
                 (value == "NULL" or value == 0) and type.is_ptr):
@@ -1519,9 +1532,9 @@ class IntNode(ConstNode):
     # longness     "" or "L" or "LL"
     # is_c_literal   True/False/None   creator considers this a C integer literal
 
-    unsigned = ""
-    longness = ""
-    is_c_literal = None  # unknown
+    unsigned: str = ""
+    longness: str = ""
+    is_c_literal: "bool | None" = None
 
     # hex_value and base_10_value are designed only to simplify
     # writing tests to get a consistent representation of value
@@ -1761,8 +1774,7 @@ class BytesNode(ConstNode):
     #
     # value      BytesLiteral
 
-    is_string_literal = True
-    # start off as Python 'bytes' to support len() in O(1)
+    is_string_literal: bool = True
     type = bytes_type
 
     def calculate_constant_result(self):
@@ -1851,12 +1863,18 @@ class UnicodeNode(ConstNode):
     #                              ('-3' unicode literals only)
     # is_identifier  boolean
 
-    is_string_literal = True
-    is_identifier = None
-    bytes_value = None
+    is_string_literal: bool = True
+    is_identifier: "bool | None" = None
+    bytes_value: "StringEncoding.BytesLiteral | None" = None
     type = unicode_type
 
-    def __init__(self, pos, value, bytes_value=None, type=None):
+    def __init__(
+        self,
+        pos,
+        value: "StringEncoding.EncodedString",
+        bytes_value: "StringEncoding.BytesLiteral | None" = None,
+        type: "PyrexTypes.PyrexType | None" = None,
+    ):
         super().__init__(pos, value=value, constant_result=value)
         if bytes_value is not None:
             self.bytes_value = bytes_value
@@ -1980,6 +1998,7 @@ class ImagNode(AtomicExprNode):
     #  value   string    imaginary part (float value)
 
     type = PyrexTypes.c_double_complex_type
+    value: str
 
     def calculate_constant_result(self):
         self.constant_result = complex(0.0, float(self.value))
@@ -2036,9 +2055,11 @@ class NewExprNode(AtomicExprNode):
     #
     # cppclass              node                 c++ class to create
 
-    type = None
+    type: "PyrexTypes.PyrexType | None" = None
+    cppclass: "ExprNode"
+    class_type: "PyrexTypes.PyrexType | None" = None
 
-    def infer_type(self, env):
+    def infer_type(self, env) -> "PyrexTypes.PyrexType":
         type = self.cppclass.analyse_as_type(env)
         if type is None or not type.is_cpp_class:
             error(self.pos, "new operator can only be applied to a C++ class")
@@ -2298,7 +2319,7 @@ class NameNode(AtomicExprNode):
     def analyse_assignment_expression_target_declaration(self, env):
         return self._analyse_target_declaration(env, is_assignment_expression=True)
 
-    def _analyse_target_declaration(self, env, is_assignment_expression):
+    def _analyse_target_declaration(self, env: "ModuleScope", is_assignment_expression: bool):
         self.is_target = True
         if not self.entry:
             if is_assignment_expression:
@@ -2319,7 +2340,7 @@ class NameNode(AtomicExprNode):
         if not self.entry:
             if env.directives['warn.undeclared']:
                 warning(self.pos, "implicit declaration of '%s'" % self.name, 1)
-            if env.directives['infer_types'] != False:
+            if env.directives['infer_types']:
                 type = unspecified_type
             else:
                 type = py_object_type
@@ -2848,6 +2869,7 @@ class BackquoteNode(ExprNode):
     #  arg    ExprNode
 
     type = py_object_type
+    arg: "ExprNode"
 
     subexprs = ['arg']
 
@@ -2897,6 +2919,11 @@ class ImportNode(ExprNode):
 
     type = py_object_type
     is_temp = True
+    module_name: "UnicodeNode"
+    imported_names: "list[ExprNode] | None" = None
+    level: "int | None" = None
+    is_import_as_name: bool = False
+    module_qualname: "StringEncoding.EncodedString | None" = None
 
     subexprs = ['module_name', 'imported_names']
 
@@ -2967,7 +2994,7 @@ class ImportNode(ExprNode):
                 module_obj = code.get_py_string_const(StringEncoding.EncodedString(module))
                 code.putln(f"{submodule} = __Pyx_ImportFrom({tmp_submodule}, {module_obj});")
                 code.putln(f"Py_DECREF({tmp_submodule});")
-                code.error_goto_if_null(submodule, self.pos)
+                code.putln(code.error_goto_if_null(submodule, self.pos))
                 code.putln(f"{tmp_submodule} = {submodule};")
             code.funcstate.release_temp(submodule)
 
@@ -2986,13 +3013,13 @@ class ScopedExprNode(ExprNode):
     # expr_scope    Scope  the inner scope of the expression
 
     subexprs = []
-    expr_scope = None
+    expr_scope: "Symtab.Scope | None" = None
 
     # does this node really have a local scope, e.g. does it leak loop
     # variables or not?  non-leaking Py3 behaviour is default, except
     # for list comprehensions where the behaviour differs in Py2 and
     # Py3 (set in Parsing.py based on parser context)
-    has_local_scope = True
+    has_local_scope: bool = True
 
     def init_scope(self, outer_scope, expr_scope=None):
         if expr_scope is not None:
@@ -3461,9 +3488,10 @@ class NextNode(AtomicExprNode):
     #
     #  iterator   IteratorNode
 
-    is_temp = True
+    is_temp: bool = True
+    iterator: "IteratorNode | CppIteratorNode"
 
-    def __init__(self, iterator):
+    def __init__(self, iterator: "IteratorNode | CppIteratorNode"):
         AtomicExprNode.__init__(self, iterator.pos)
         self.iterator = iterator
 
@@ -3515,11 +3543,12 @@ class AsyncIteratorNode(ScopedExprNode):
     #  sequence   ExprNode
 
     subexprs = ['sequence']
+    sequence: "ExprNode"
 
-    is_async = True
+    is_async: bool = True
     type = py_object_type
-    is_temp = 1
-    has_local_scope = False
+    is_temp: int = 1
+    has_local_scope: bool = False
 
     def infer_type(self, env):
         return py_object_type
@@ -3554,9 +3583,10 @@ class AsyncNextNode(AtomicExprNode):
     #  iterator   IteratorNode
 
     type = py_object_type
-    is_temp = 1
+    is_temp: int = 1
+    iterator: "AsyncIteratorNode"
 
-    def __init__(self, iterator):
+    def __init__(self, iterator: "AsyncIteratorNode"):
         AtomicExprNode.__init__(self, iterator.pos)
         self.iterator = iterator
 
@@ -3979,19 +4009,19 @@ class ParallelThreadIdNode(AtomicExprNode):  #, Nodes.ParallelNode):
 
     type = PyrexTypes.c_int_type
 
-    def analyse_types(self, env):
+    def analyse_types(self, env: "Symtab.Scope") -> "ParallelThreadIDNode":
         self.is_temp = True
         # env.add_include_file("omp.h")
         return self
 
-    def generate_result_code(self, code):
+    def generate_result_code(self, code) -> None:
         code.putln("#ifdef _OPENMP")
         code.putln("%s = omp_get_thread_num();" % self.temp_code)
         code.putln("#else")
         code.putln("%s = 0;" % self.temp_code)
         code.putln("#endif")
 
-    def result(self):
+    def result(self) -> str:
         return self.temp_code
 
 
@@ -4007,16 +4037,19 @@ class _IndexingBaseNode(ExprNode):
     #
     # base   ExprNode   the value being indexed
 
-    def is_ephemeral(self):
+    base: "ExprNode"
+    index: "ExprNode"
+
+    def is_ephemeral(self) -> bool:
         # in most cases, indexing will return a safe reference to an object in a container,
         # so we consider the result safe if the base object is
         return self.base.is_ephemeral() or self.base.type in (
             unicode_type, bytes_type, bytearray_type)
 
-    def check_const_addr(self):
+    def check_const_addr(self) -> bool:
         return self.base.check_const_addr() and self.index.check_const()
 
-    def is_lvalue(self):
+    def is_lvalue(self) -> bool:
         # NOTE: references currently have both is_reference and is_ptr
         # set.  Since pointers and references have different lvalue
         # rules, we must be careful to separate the two.
@@ -4043,10 +4076,10 @@ class IndexNode(_IndexingBaseNode):
     #                           c(p)def function
 
     subexprs = ['base', 'index']
-    type_indices = None
+    type_indices: "list[PyrexTypes.PyrexType] | None" = None
 
-    is_subscript = True
-    is_fused_index = False
+    is_subscript: bool = True
+    is_fused_index: bool = False
 
     def calculate_constant_result(self):
         self.constant_result = self.base.constant_result[self.index.constant_result]
@@ -4607,7 +4640,7 @@ class IndexNode(_IndexingBaseNode):
         # See if our index types form valid specializations
         for pos, specific_type, fused_type in zip(positions,
                                                   specific_types,
-                                                  fused_types):
+                                                  fused_types, strict=False):
             if not any([specific_type.same_as(t) for t in fused_type.types]):
                 return error(pos, "Type not in fused type")
 
@@ -5946,9 +5979,12 @@ class SliceNode(ExprNode):
     #  step      ExprNode
 
     subexprs = ['start', 'stop', 'step']
-    is_slice = True
+    is_slice: bool = True
     type = slice_type
-    is_temp = 1
+    is_temp: int = 1
+    start: "ExprNode"
+    stop: "ExprNode"
+    step: "ExprNode"
 
     def calculate_constant_result(self):
         self.constant_result = slice(
@@ -6062,8 +6098,9 @@ class SliceIntNode(SliceNode):
 
 class CallNode(ExprNode):
 
-    # allow overriding the default 'may_be_none' behaviour
-    may_return_none = None
+    may_return_none: "bool | None" = None
+    function: "ExprNode"
+    explicit_args_kwds: "Any"
 
     def infer_type(self, env):
         function = self.function
@@ -6238,14 +6275,15 @@ class SimpleCallNode(CallNode):
 
     subexprs = ['self', 'coerced_self', 'function', 'args', 'arg_tuple']
 
-    self = None
-    coerced_self = None
-    arg_tuple = None
-    wrapper_call = False
-    has_optional_args = False
-    nogil = False
-    analysed = False
-    overflowcheck = False
+    self: "ExprNode | None" = None
+    coerced_self: "ExprNode | None" = None
+    arg_tuple: "ExprNode | None" = None
+    wrapper_call: bool = False
+    has_optional_args: bool = False
+    nogil: bool = False
+    analysed: bool = False
+    overflowcheck: bool = False
+    args: "list[ExprNode]"
 
     def compile_time_value(self, denv):
         function = self.function.compile_time_value(denv)
@@ -7708,15 +7746,17 @@ class AttributeNode(ExprNode):
     #  is_called            boolean   Function call is being done on result
     #  entry                Entry     Symbol table entry of attribute
 
-    is_attribute = 1
+    is_attribute: int = 1
     subexprs = ['obj']
 
-    entry = None
-    is_called = 0
-    needs_none_check = True
-    is_memslice_transpose = False
-    is_special_lookup = False
-    is_py_attr = 0
+    entry: "Symtab.Entry | None" = None
+    is_called: int = 0
+    needs_none_check: bool = True
+    is_memslice_transpose: bool = False
+    is_special_lookup: bool = False
+    is_py_attr: int = 0
+    attribute: str
+    obj: "ExprNode"
 
     def as_cython_attribute(self):
         if (isinstance(self.obj, NameNode) and
@@ -8389,13 +8429,11 @@ class SequenceNode(ExprNode):
 
     subexprs = ['args', 'mult_factor']
 
-    is_sequence_constructor = 1
-    unpacked_items = None
-    mult_factor = None
-    slow = False  # trade speed for code size (e.g. use PyTuple_Pack())
-    needs_subexpr_disposal = False  # set to True in code-generation if we
-            # didn't steal references to our temps and thus need to dispose
-            # of them normally.
+    is_sequence_constructor: int = 1
+    unpacked_items: "list[ExprNode] | None" = None
+    mult_factor: "ExprNode | None" = None
+    slow: bool = False
+    needs_subexpr_disposal: bool = False
 
 
     def compile_time_value_list(self, denv):
@@ -8944,9 +8982,9 @@ class TupleNode(SequenceNode):
     #  Tuple constructor.
 
     type = tuple_type
-    is_partly_literal = False
+    is_partly_literal: bool = False
 
-    gil_message = "Constructing Python tuple"
+    gil_message: str = "Constructing Python tuple"
 
     def infer_type(self, env):
         if self.mult_factor or not self.args:
@@ -9101,11 +9139,12 @@ class ListNode(SequenceNode):
     # obj_conversion_errors    [PyrexError]   used internally
     # orignial_args            [ExprNode]     used internally
 
-    obj_conversion_errors = []
+    obj_conversion_errors: list = []
     type = list_type
-    in_module_scope = False
+    in_module_scope: bool = False
+    original_args: "list[ExprNode]"
 
-    gil_message = "Constructing Python list"
+    gil_message: str = "Constructing Python list"
 
     def type_dependencies(self, env):
         return ()
@@ -9611,8 +9650,9 @@ class SetNode(ExprNode):
     """
     subexprs = ['args']
     type = set_type
-    is_set_literal = True
-    gil_message = "Constructing Python set"
+    is_set_literal: bool = True
+    args: "list[ExprNode]"
+    gil_message: str = "Constructing Python set"
 
     def analyse_types(self, env):
         for i in range(len(self.args)):
@@ -9662,13 +9702,14 @@ class DictNode(ExprNode):
     # obj_conversion_errors    PyrexError   used internally
 
     subexprs = ['key_value_pairs']
-    is_temp = 1
-    exclude_null_values = False
+    is_temp: int = 1
+    exclude_null_values: bool = False
     type = dict_type
-    is_dict_literal = True
-    reject_duplicates = False
+    is_dict_literal: bool = True
+    reject_duplicates: bool = False
+    key_value_pairs: "list[DictItemNode]"
 
-    obj_conversion_errors = []
+    obj_conversion_errors: list = []
 
     @classmethod
     def from_pairs(cls, pos, pairs):
@@ -9809,10 +9850,31 @@ class DictNode(ExprNode):
                             code.error_goto(item.pos)))
                         code.putln("} else {")
 
-                code.put_error_if_neg(self.pos, "PyDict_SetItem(%s, %s, %s)" % (
-                    self.result(),
-                    item.key.py_result(),
-                    item.value.py_result()))
+                # Fast-path for string literal keys: leverage KnownHash when available.
+                if item.key.is_string_literal:
+                    key_c = item.key.py_result()
+                    val_c = item.value.py_result()
+                    d_c = self.result()
+                    err = code.error_goto(self.pos)
+                    code.putln("#if defined(PyDict_SetItem) && (defined(CYTHON_COMPILING_IN_CPYTHON))")
+                    code.putln("#if PY_VERSION_HEX >= 0x030A0000 /* CPython 3.10+ exposes KnownHash APIs */")
+                    code.putln("/* Use CPython's KnownHash APIs when available */")
+                    code.putln("extern int _PyDict_SetItem_KnownHash(PyObject*, PyObject*, PyObject*, Py_hash_t);")
+                    code.putln("{")
+                    code.putln("Py_hash_t __pyx_hash = PyObject_Hash(%s); if (unlikely(__pyx_hash == -1)) %s;" % (key_c, err))
+                    code.putln("if (unlikely(_PyDict_SetItem_KnownHash(%s, %s, %s, __pyx_hash) < 0)) %s;" % (d_c, key_c, val_c, err))
+                    code.putln("}")
+                    code.putln("#else")
+                    code.put_error_if_neg(self.pos, "PyDict_SetItem(%s, %s, %s)" % (d_c, key_c, val_c))
+                    code.putln("#endif")
+                    code.putln("#else")
+                    code.put_error_if_neg(self.pos, "PyDict_SetItem(%s, %s, %s)" % (d_c, key_c, val_c))
+                    code.putln("#endif")
+                else:
+                    code.put_error_if_neg(self.pos, "PyDict_SetItem(%s, %s, %s)" % (
+                        self.result(),
+                        item.key.py_result(),
+                        item.value.py_result()))
                 if self.reject_duplicates and keys_seen is None:
                     code.putln('}')
                 if self.exclude_null_values:
@@ -9933,6 +9995,24 @@ class SortedListNode(_TempModifierNode):
 
     def generate_result_code(self, code):
         code.putln(code.error_goto_if_neg(f"PyList_Sort({self.arg.result()})", self.pos))
+
+
+class CoerceToListNode(_TempModifierNode):
+    """Coerce a Python object to a list using PySequence_List.
+
+    Used to allow assigning tuples/sequences into cdef list variables
+    by creating a new list copy.
+    """
+    type = list_type
+
+    def __init__(self, arg, env):
+        super().__init__(arg.pos, arg)
+
+    def generate_result_code(self, code):
+        code.putln(
+            f"{self.result()} = PySequence_List({self.arg.py_result()}); "
+            f"{code.error_goto_if_null(self.result(), self.pos)}")
+        self.generate_gotref(code)
 
 
 class ModuleNameMixin:
@@ -10235,7 +10315,7 @@ class PyCFunctionNode(ExprNode, ModuleNameMixin):
     is_specialization = False
 
     @classmethod
-    def from_defnode(cls, node, binding):
+    def from_defnode(cls, node: "DefNode", binding: bool) -> "PyCFunctionNode":
         return cls(
             node.pos,
             def_node=node,
@@ -11164,8 +11244,10 @@ class UnopNode(ExprNode):
     #      - Allocate temporary for result if needed.
 
     subexprs = ['operand']
-    infix = True
-    is_inc_dec_op = False
+    infix: bool = True
+    is_inc_dec_op: bool = False
+    operand: "ExprNode"
+    operator: str
 
     def calculate_constant_result(self):
         func = compile_time_unary_operators[self.operator]
@@ -11552,7 +11634,11 @@ class TypecastNode(ExprNode):
     #  "type" directly and leave base_type and declarator to None
 
     subexprs = ['operand']
-    base_type = declarator = type = None
+    base_type: "Nodes.CBaseTypeNode | None" = None
+    declarator: "Nodes.CDeclaratorNode | None" = None
+    type: "PyrexTypes.PyrexType | None" = None
+    operand: "ExprNode"
+    typecheck: bool
 
     def type_dependencies(self, env):
         return ()
@@ -11720,10 +11806,12 @@ class CythonArrayNode(ExprNode):
 
     subexprs = ['operand', 'shapes']
 
-    shapes = None
-    is_temp = True
-    mode = "c"
-    array_dtype = None
+    shapes: "list[ExprNode] | None" = None
+    is_temp: bool = True
+    mode: str = "c"
+    array_dtype: "PyrexTypes.PyrexType | None" = None
+    operand: "ExprNode"
+    base_type_node: "Nodes.MemoryViewSliceTypeNode"
 
     shape_type = PyrexTypes.c_py_ssize_t_type
 
@@ -11936,10 +12024,10 @@ class SizeofNode(ExprNode):
 
     type = PyrexTypes.c_size_t_type
 
-    def check_const(self):
+    def check_const(self) -> bool:
         return True
 
-    def generate_result_code(self, code):
+    def generate_result_code(self, code: "Code.CCodeWriter") -> None:
         pass
 
 
@@ -11950,7 +12038,7 @@ class SizeofTypeNode(SizeofNode):
     #  declarator  CDeclaratorNode
 
     subexprs = []
-    arg_type = None
+    arg_type: "PyrexTypes.PyrexType | None" = None
 
     def analyse_types(self, env):
         # we may have incorrectly interpreted a dotted name as a type rather than an attribute
@@ -11999,6 +12087,8 @@ class SizeofVarNode(SizeofNode):
     #  operand   ExprNode
 
     subexprs = ['operand']
+    operand: "ExprNode"
+    arg_type: "PyrexTypes.PyrexType"
 
     def analyse_types(self, env):
         # We may actually be looking at a type rather than a variable...
@@ -12197,7 +12287,10 @@ class BinopNode(ExprNode):
     #      - Allocate temporary for result if needed.
 
     subexprs = ['operand1', 'operand2']
-    inplace = False
+    inplace: bool = False
+    operand1: "ExprNode"
+    operand2: "ExprNode"
+    operator: str
 
     def calculate_constant_result(self):
         func = compile_time_binary_operators[self.operator]
@@ -13468,9 +13561,10 @@ class CondExprNode(ExprNode):
     #  true_val    ExprNode
     #  false_val   ExprNode
 
-    true_val = None
-    false_val = None
-    is_temp = True
+    true_val: "ExprNode | None" = None
+    false_val: "ExprNode | None" = None
+    is_temp: bool = True
+    test: "ExprNode"
 
     subexprs = ['test', 'true_val', 'false_val']
 
@@ -13616,9 +13710,14 @@ class CmpNode:
     #  Mixin class containing code common to PrimaryCmpNodes
     #  and CascadedCmpNodes.
 
-    special_bool_cmp_function = None
-    special_bool_cmp_utility_code = None
-    special_bool_extra_args = []
+    special_bool_cmp_function: "str | None" = None
+    special_bool_cmp_utility_code: "UtilityCode | None" = None
+    special_bool_extra_args: list = []
+    operator: str
+    operand1: "ExprNode"
+    operand2: "ExprNode"
+    cascade: "CascadedCmpNode | None"
+    pos: tuple
 
     def infer_type(self, env):
         # TODO: Actually implement this (after merging with -unstable).
@@ -13975,9 +14074,9 @@ class PrimaryCmpNode(ExprNode, CmpNode):
     child_attrs = ['operand1', 'operand2', 'coerced_operand2', 'cascade',
                    'special_bool_extra_args']
 
-    cascade = None
-    coerced_operand2 = None
-    is_memslice_nonecheck = False
+    cascade: "CascadedCmpNode | None" = None
+    coerced_operand2: "ExprNode | None" = None
+    is_memslice_nonecheck: bool = False
 
     def infer_type(self, env):
         type1 = self.operand1.infer_type(env)
@@ -14385,8 +14484,9 @@ class CoercionNode(ExprNode):
 
     subexprs = ['arg']
     constant_result = not_a_constant
+    arg: "ExprNode"
 
-    def __init__(self, arg):
+    def __init__(self, arg: "ExprNode"):
         super().__init__(arg.pos)
         self.arg = arg
         if debug_coercion:
@@ -14560,11 +14660,12 @@ class NoneCheckNode(_TempModifierNode):
     # raises an appropriate exception (as specified by the creating
     # transform).
 
-    is_nonecheck = True
-    type = None
+    is_nonecheck: bool = True
+    type: "PyrexTypes.PyrexType | None" = None
+    arg: "ExprNode"
 
-    def __init__(self, arg, exception_type_cname, exception_message,
-                 exception_format_args=()):
+    def __init__(self, arg: "ExprNode", exception_type_cname: str, exception_message: str,
+                 exception_format_args: tuple = ()):
         super().__init__(arg.pos, arg)
         self.type = arg.type
         self.result_ctype = arg.ctype()
@@ -15324,11 +15425,11 @@ class AssignmentExpressionNode(ExprNode):
     child_attrs = ["rhs", "assignment"]  # This order is important for control-flow (i.e. xdecref) to be right
 
     is_temp: bool = False
-    rhs: Optional[ExprNode] = None
-    assignment: SingleAssignmentNode
+    rhs: "ExprNode | None" = None
+    assignment: "SingleAssignmentNode"
     assignment_is_independent: bool = False
 
-    def __init__(self, pos, lhs: NameNode, rhs: ExprNode, **kwds):
+    def __init__(self, pos, lhs: "NameNode", rhs: "ExprNode", **kwds):
         super().__init__(pos, **kwds)
         self.assignment = SingleAssignmentNode(
             pos, lhs=lhs, rhs=rhs, is_assignment_expression=True)
@@ -15435,8 +15536,9 @@ class FirstArgumentForCriticalSectionNode(ExprNode):
 
     subexprs = ['name_node']
 
-    name_node = None
+    name_node: "NameNode | None" = None
     type = PyrexTypes.py_object_type
+    func_node: "Nodes.FuncDefNode"
 
     def analyse_declarations(self, env):
         if len(self.func_node.args) < 1:
@@ -15454,10 +15556,13 @@ class FirstArgumentForCriticalSectionNode(ExprNode):
 
 
 class TStringInterpolationNode(ExprNode):
-    # conversion_char   str
     subexprs = ['value', 'format_spec', 'expression_str']
-    is_temp = True
+    is_temp: bool = True
     type = py_object_type
+    conversion_char: "StringEncoding.EncodedString | None"
+    value: "ExprNode"
+    format_spec: "ExprNode | None"
+    expression_str: "ExprNode"
 
     def __init__(self, pos, **kwds):
         super().__init__(pos, **kwds)

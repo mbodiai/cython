@@ -11,6 +11,8 @@ from . import Naming
 if TYPE_CHECKING:
     from .UtilityCode import CythonUtilityCode
     from .ModuleNode import ModuleNode
+    from .Symtab import Scope
+    from ..Compiler.Main import Context
 #
 # Really small pipeline stages
 #
@@ -36,6 +38,10 @@ def parse_stage_factory(context):
         tree = context.parse(source_desc, scope, pxd = 0, full_module_name = full_module_name)
         tree.compilation_source = compsrc
         tree.scope = scope
+        # Ensure ModuleNode has an initial directives mapping before any transform runs.
+        # This is populated/updated by InterpretCompilerDirectives later.
+        if not hasattr(tree, 'directives') or tree.directives is None:
+            tree.directives = Options.get_directive_defaults()
         tree.is_pxd = False
         return tree
     return parse
@@ -45,6 +51,8 @@ def parse_pxd_stage_factory(context, scope, module_name):
         tree = context.parse(source_desc, scope, pxd=True,
                              full_module_name=module_name)
         tree.scope = scope
+        if not hasattr(tree, 'directives') or tree.directives is None:
+            tree.directives = Options.get_directive_defaults()
         tree.is_pxd = True
         return tree
     return parse
@@ -93,13 +101,33 @@ def use_utility_code_definitions(scope, target, seen=None):
 
 def sorted_utility_codes_and_deps(utilcodes):
     ranks = {}
-    def calculate_rank(utilcode:"CythonUtilityCode"):
-        rank = ranks.setdefault(utilcode, 0)
-        if rank == 0:
-            original_order = len(ranks)
-            rank = ranks[utilcode] = 1 + (
-                min([calculate_rank(dep) for dep in utilcode.requires]) if utilcode.requires else -1
-                ) + original_order * 1e-8
+    visiting = set()
+
+    def calculate_rank(utilcode: "CythonUtilityCode"):
+        # Already ranked – return cached value
+        rank = ranks.get(utilcode)
+        if rank is not None and rank != 0:
+            return rank
+
+        # Detect cycles: if we see the same utilcode again on the recursion stack,
+        # treat it as a minimal dependency to break the cycle.
+        if utilcode in visiting:
+            return 0
+
+        # Reserve an entry to preserve original-order tie-breaking
+        if utilcode not in ranks:
+            ranks[utilcode] = 0
+
+        visiting.add(utilcode)
+        original_order = len(ranks)
+        deps = utilcode.requires or ()
+        if deps:
+            dep_min = min(calculate_rank(dep) for dep in deps)
+        else:
+            dep_min = -1
+        rank = 1 + dep_min + original_order * 1e-8
+        ranks[utilcode] = rank
+        visiting.remove(utilcode)
         return rank
 
     for utilcode in utilcodes:
@@ -153,11 +181,11 @@ def inject_utility_code_stage_factory(context:"Context", internalise_c_class_ent
 def create_pipeline(context, mode, exclude_classes=()):
     assert mode in ('pyx', 'py', 'pxd')
     from .Visitor import PrintTree
-    from .ParseTreeTransforms import WithTransform, NormalizeTree, PostParse, PxdPostParse
+    from .ParseTreeTransforms import WithTransform, NormalizeTree, PostParse, PxdPostParse, LoopLoweringTransform
     from .ParseTreeTransforms import ForwardDeclareTypes, InjectGilHandling, AnalyseDeclarationsTransform
     from .ParseTreeTransforms import AnalyseExpressionsTransform, FindInvalidUseOfFusedTypes
     from .ParseTreeTransforms import CreateClosureClasses, MarkClosureVisitor, DecoratorTransform
-    from .ParseTreeTransforms import TrackNumpyAttributes, InterpretCompilerDirectives, TransformBuiltinMethods
+    from .ParseTreeTransforms import TrackNumpyAttributes, InterpretCompilerDirectives, TransformBuiltinMethods, OverloadDispatchTransform
     from .ParseTreeTransforms import ExpandInplaceOperators, ParallelRangeTransform
     from .ParseTreeTransforms import CalculateQualifiedNamesTransform
     from .TypeInference import MarkParallelAssignments, MarkOverflowingArithmetic
@@ -166,7 +194,7 @@ def create_pipeline(context, mode, exclude_classes=()):
     from .FlowControl import ControlFlowAnalysis
     from .AnalysedTreeTransforms import AutoTestDictTransform
     from .AutoDocTransforms import EmbedSignature
-    from .Optimize import FlattenInListTransform, SwitchTransform, IterationTransform
+    from .Optimize import FlattenInListTransform, SwitchTransform, IterationTransform, PowerToSquareOptimization
     from .Optimize import EarlyReplaceBuiltinCalls, OptimizeBuiltinCalls
     from .Optimize import InlineDefNodeCalls
     from .Optimize import ConstantFolding, FinalOptimizePhase
@@ -194,6 +222,7 @@ def create_pipeline(context, mode, exclude_classes=()):
     stages = [
         NormalizeTree(context),
         PostParse(context),
+        LoopLoweringTransform(context),
         _specific_post_parse,
         TrackNumpyAttributes(),
         InterpretCompilerDirectives(context, context.compiler_directives),
@@ -206,6 +235,7 @@ def create_pipeline(context, mode, exclude_classes=()):
         RemoveUnreachableCode(context),
         ConstantFolding(),
         FlattenInListTransform(),
+        OverloadDispatchTransform(context),
         DecoratorTransform(context),
         ForwardDeclareTypes(context),
         InjectGilHandling(),
@@ -226,6 +256,7 @@ def create_pipeline(context, mode, exclude_classes=()):
         FindInvalidUseOfFusedTypes(),
         ExpandInplaceOperators(context),
         IterationTransform(context),
+        PowerToSquareOptimization(context),
         SwitchTransform(context),
         OptimizeBuiltinCalls(context),  ## Necessary?
         CreateClosureClasses(context),  ## After all lookups and type inference
@@ -382,7 +413,21 @@ def _make_debug_phase_runner(phase_name):
         pass
 
     def run(phase, data):
-        return phase(data)
+        # Call a pipeline phase with robust error reporting. Wrap unexpected
+        # exceptions into a CompilerCrash that includes the current module
+        # position so that errors show as file:line:col. This improves
+        # tooling/IDE integration compared to a raw Python traceback.
+        try:
+            return phase(data)
+        except CompileError:
+            raise
+        except AbortError:
+            raise
+        except Exception as e:
+            from sys import exc_info
+            phase_name = getattr(phase, '__name__', type(phase).__name__)
+            pos = getattr(data, 'pos', None)
+            raise Errors.CompilerCrash(pos, phase_name, '', e, exc_info()[2])
 
     run.__name__ = run.__qualname__ = phase_name
     _pipeline_entry_points[phase_name] = run

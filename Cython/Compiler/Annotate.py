@@ -121,11 +121,37 @@ class AnnotationCCodeWriter(CCodeWriter):
         with Utils.open_source_file(source_filename) as f:
             code = f.read()
         generated_code = self.code.get(source_filename, {})
-        c_file = Utils.decode_filename(os.path.basename(target_filename))
-        html_filename = os.path.splitext(target_filename)[0] + ".html"
+        if target_filename is not None:
+            c_file = Utils.decode_filename(os.path.basename(target_filename))
+            html_filename = os.path.splitext(target_filename)[0] + ".html"
+        else:
+            c_file = None
+            # default: store next to the source file name without extension
+            html_filename = os.path.splitext(source_filename)[0] + ".html"
 
         with codecs.open(html_filename, "w", encoding="UTF-8") as out_buffer:
             out_buffer.write(self._save_annotation(code, generated_code, c_file, source_filename, coverage_xml))
+
+    def save_annotation_md(self, source_filename, target_filename, coverage_xml=None):
+        with Utils.open_source_file(source_filename) as f:
+            code = f.read()
+        generated_code = self.code.get(source_filename, {})
+        if target_filename is not None:
+            c_file = Utils.decode_filename(os.path.basename(target_filename))
+            md_filename = os.path.splitext(target_filename)[0] + ".md"
+        else:
+            c_file = None
+            md_filename = os.path.splitext(source_filename)[0] + ".md"
+
+        with codecs.open(md_filename, "w", encoding="UTF-8") as out_buffer:
+            out_buffer.write(self._save_annotation_md(code, generated_code, c_file, source_filename, coverage_xml))
+        # Best-effort: remove stale HTML file if it exists to avoid confusion.
+        try:
+            html_filename = os.path.splitext(target_filename or source_filename)[0] + ".html"
+            if os.path.exists(html_filename):
+                os.unlink(html_filename)
+        except Exception:
+            pass
 
     def _save_annotation_header(self, c_file, source_filename, coverage_timestamp=None):
         coverage_info = ''
@@ -182,6 +208,74 @@ class AnnotationCCodeWriter(CCodeWriter):
         outlist.extend(self._save_annotation_body(code, generated_code, annotation_items, scopes, covered_lines))
         outlist.extend(self._save_annotation_footer())
         return ''.join(outlist)
+
+    def _save_annotation_md(self, cython_code, generated_code, c_file=None, source_filename=None, coverage_xml=None):
+        # Markdown rendering with per-line score (Python-interaction) and collapsible C code.
+        out = []
+        title = os.path.basename(source_filename) if source_filename else ''
+        out.append(f"# Cython annotation for {title}\n\n")
+        if c_file:
+            out.append(f"Raw output: {c_file}\n\n")
+
+        # Score helper copied from HTML path
+        def new_calls_map():
+            return {name: 0 for name in 'refnanny trace py_macro_api py_c_api pyx_macro_api pyx_c_api error_goto'.split()}
+
+        pos_comment_marker = '/* \u2026 */\n'
+        lines = cython_code.splitlines()
+
+        for k, line in enumerate(lines, 1):
+            c_code = generated_code.get(k, '')
+            calls = new_calls_map()
+
+            if c_code:
+                # Normalize code and compute score as HTML annotation does
+                c_text = _replace_pos_comment(pos_comment_marker, c_code)
+                if c_text.startswith(pos_comment_marker):
+                    c_text = c_text[len(pos_comment_marker):]
+
+                def _count_calls(match):
+                    group_name = match.lastgroup
+                    calls[group_name] += 1
+                    return match.group(group_name)  # keep text unchanged
+
+                _ = _parse_code(_count_calls, c_text)
+                score = (5 * calls['py_c_api'] + 2 * calls['pyx_c_api'] +
+                         calls['py_macro_api'] + calls['pyx_macro_api'])
+            else:
+                c_text = ''
+                score = 0
+
+            # Visible score indicator (emoji bar) since CSS is not available in Markdown
+            if score >= 10:
+                badge = '🔴'
+            elif score >= 5:
+                badge = '🟠'
+            elif score >= 1:
+                badge = '🟡'
+            else:
+                badge = '⚪'
+
+            # Show the Cython line (use python fence for wider highlighter support)
+            out.append(f"L{k}  {badge}  (score={score})\n")
+            if line:
+                out.append("```python\n")
+                out.append(f"{line}\n")
+                out.append("```\n")
+            else:
+                out.append("```python\n```\n")
+
+            # Collapsible C with <details> for GitHub/Markdown viewers that support it
+            if c_text:
+                out.append(f"<details><summary>Show generated C (score={score})</summary>\n\n")
+                out.append("```c\n")
+                out.append(c_text)
+                if not c_text.endswith('\n'):
+                    out.append('\n')
+                out.append("```\n\n")
+                out.append("</details>\n\n")
+
+        return ''.join(out)
 
     def _get_line_coverage(self, coverage_xml, source_filename):
         coverage_data = None

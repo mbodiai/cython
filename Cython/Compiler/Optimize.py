@@ -321,7 +321,11 @@ class IterationTransform(Visitor.EnvTransform):
         # enumerate/reversed ?
         if iterable.self is None and function.is_name and \
                function.entry and function.entry.is_builtin:
-            if function.name == 'enumerate':
+            if function.name == 'zip':
+                optimised = self._transform_zip_range_enumerate(node, iterable)
+                if optimised is not None:
+                    return optimised
+            elif function.name == 'enumerate':
                 if reversed:
                     # CPython raises an error here: not a sequence
                     return node
@@ -911,6 +915,114 @@ class IterationTransform(Visitor.EnvTransform):
 
         # recurse into loop to check for further optimisations
         return UtilNodes.LetNode(temp, self._optimise_for_loop(node, node.iterator.sequence))
+
+    def _transform_zip_range_enumerate(self, node, zip_function):
+        if node.target is None or not node.target.is_sequence_constructor:
+            return None
+
+        targets = getattr(node.target, 'args', None)
+        if not targets or len(targets) != 2:
+            return None
+
+        idx_target, value_target = targets
+        if not (idx_target.is_name and value_target.is_name):
+            return None
+
+        args = zip_function.arg_tuple.args if zip_function.arg_tuple else []
+        if len(args) != 2:
+            return None
+
+        range_call, sequence_expr = args
+        if not isinstance(range_call, ExprNodes.SimpleCallNode):
+            return None
+        if not (range_call.function.is_name and range_call.function.name == 'range' and range_call.function.entry and range_call.function.entry.is_builtin):
+            return None
+        range_args = range_call.arg_tuple.args if range_call.arg_tuple else []
+        if len(range_args) != 1:
+            return None
+
+        len_call = range_args[0]
+        if not isinstance(len_call, ExprNodes.SimpleCallNode):
+            return None
+        if not (len_call.function.is_name and len_call.function.name == 'len' and len_call.function.entry and len_call.function.entry.is_builtin):
+            return None
+        len_args = len_call.arg_tuple.args if len_call.arg_tuple else []
+        if len(len_args) != 1:
+            return None
+
+        len_arg = len_args[0]
+        if not (len_arg.is_name and sequence_expr.is_name and len_arg.name == sequence_expr.name):
+            return None
+
+        env = self.current_env()
+
+        seq_expr = sequence_expr.as_none_safe_node("'NoneType' object is not iterable")
+        seq_ref = UtilNodes.LetRefNode(seq_expr)
+
+        len_func = ExprNodes.NameNode(node.pos, name="len", entry=Builtin.builtin_scope.lookup("len"))
+        len_call_expr = ExprNodes.SimpleCallNode(node.pos, function=len_func, args=[seq_ref])
+        len_ref = UtilNodes.LetRefNode(len_call_expr, type=PyrexTypes.c_py_ssize_t_type)
+
+        counter_temp = UtilNodes.TempHandle(PyrexTypes.c_py_ssize_t_type)
+        counter_ref_for_target = counter_temp.ref(idx_target.pos)
+        idx_assign = Nodes.SingleAssignmentNode(
+            pos=idx_target.pos,
+            lhs=idx_target,
+            rhs=counter_ref_for_target
+        )
+
+        counter_ref_for_value = counter_temp.ref(value_target.pos)
+        index_expr = ExprNodes.IndexNode(
+            sequence_expr.pos,
+            base=seq_ref,
+            index=counter_ref_for_value
+        )
+        value_assign = Nodes.SingleAssignmentNode(
+            pos=value_target.pos,
+            lhs=value_target,
+            rhs=index_expr
+        )
+
+        body = Nodes.StatListNode(
+            node.pos,
+            stats=[
+                idx_assign,
+                value_assign,
+                node.body
+            ]
+        )
+
+        loop = Nodes.ForFromStatNode(
+            node.pos,
+            bound1=ExprNodes.IntNode.for_int(node.pos, 0),
+            relation1='<=',
+            target=counter_temp.ref(node.pos),
+            relation2='<',
+            bound2=len_ref,
+            step=ExprNodes.IntNode.for_int(node.pos, 1),
+            body=body,
+            else_clause=node.else_clause,
+            from_range=True
+        )
+
+        loop = UtilNodes.TempsBlockNode(
+            node.pos,
+            temps=[counter_temp],
+            body=loop
+        )
+
+        loop = UtilNodes.LetNode(
+            len_ref,
+            loop
+        )
+
+        loop = UtilNodes.LetNode(
+            seq_ref,
+            loop
+        )
+
+        loop = loop.analyse_declarations(env)
+        return loop.analyse_expressions(env)
 
     def _find_for_from_node_relations(self, neg_step_value, reversed):
         if reversed:
@@ -5291,3 +5403,36 @@ class ConsolidateOverflowCheck(Visitor.CythonTransform):
         else:
             self.visitchildren(node)
         return node
+
+
+class PowerToSquareOptimization(Visitor.EnvTransform):
+    """
+    Replace ``x ** 2`` with ``x * x`` for simple C numeric expressions.
+    """
+
+    def __init__(self, context):
+        super().__init__(context)
+
+    def visit_PowNode(self, node):
+        node = self.visitchildren(node)
+
+        if node.type.is_pyobject:
+            return node
+        if not isinstance(node.operand1, ExprNodes.NameNode):
+            return node
+        if not node.operand1.type.is_numeric:
+            return node
+        if not node.operand2.has_constant_result():
+            return node
+        if node.operand2.constant_result != 2:
+            return node
+
+        env = self.current_env()
+        replacement = ExprNodes.binop_node(
+            node.pos,
+            operator='*',
+            operand1=node.operand1,
+            operand2=ExprNodes.CloneNode(node.operand1),
+            inplace=False
+        )
+        return replacement.analyse_expressions(env)

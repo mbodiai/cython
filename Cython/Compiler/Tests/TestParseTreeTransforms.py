@@ -2,9 +2,9 @@ import os.path
 import unittest
 
 from Cython.TestUtils import TransformTest
-from Cython.Compiler.ParseTreeTransforms import *
+from Cython.Compiler.ParseTreeTransforms import NormalizeTree, WithTransform, InterpretCompilerDirectives
 from Cython.Compiler.ParseTreeTransforms import _calculate_pickle_checksums
-from Cython.Compiler.Nodes import *
+from Cython.Compiler.Nodes import DebugFlags
 from Cython.Compiler import Main, Symtab, Options
 
 
@@ -175,7 +175,7 @@ class TestInterpretCompilerDirectives(TransformTest):
     def setUp(self):
         super().setUp()
 
-        compilation_options = Options.CompilationOptions(Options.default_options)
+        compilation_options = Options.CompilationOptions(**Options.default_options)
         ctx = Main.Context.from_options(compilation_options)
 
         transform = InterpretCompilerDirectives(ctx, ctx.compiler_directives)
