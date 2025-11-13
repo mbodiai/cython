@@ -11,7 +11,7 @@ import cython
 def build_line_table(positions, firstlineno):
     # positions is a list of four-tuples (start_lineno, end_lineno, start_col_offset, end_col_offset)
     table_bytes = []
-    last_lineno = firstlineno
+    last_lineno: cython.int = firstlineno
     for position_info in positions:
         last_lineno = encode_single_position(table_bytes, position_info, last_lineno)
     linetable = ''.join(table_bytes)

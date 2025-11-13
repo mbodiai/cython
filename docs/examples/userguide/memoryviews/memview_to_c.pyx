@@ -18,11 +18,15 @@ def multiply_by_10(arr):  # 'arr' is a one-dimensional numpy array
 
     return arr
 
+cpdef void main():
+    a = np.ones(5, dtype=np.double)
+    print(multiply_by_10(a))
 
-a = np.ones(5, dtype=np.double)
-print(multiply_by_10(a))
+    b = np.ones(10, dtype=np.double)
+    b = b[::2]  # b is not contiguous.
 
-b = np.ones(10, dtype=np.double)
-b = b[::2]  # b is not contiguous.
+    print(multiply_by_10(b))  # but our function still works as expected.
 
-print(multiply_by_10(b))  # but our function still works as expected.
+
+if __name__ == "__main__":
+    main()

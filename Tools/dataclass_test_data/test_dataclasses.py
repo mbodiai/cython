@@ -2,7 +2,7 @@
 # is tested, so they all must be present.  This is a way to catch
 # missing ones.
 
-from dataclasses import *
+from dataclasses import dataclass, field, fields, MISSING
 
 import abc
 import pickle
@@ -19,7 +19,6 @@ from functools import total_ordering
 
 import typing       # Needed for the string "typing.ClassVar[int]" to work as an annotation.
 import dataclasses  # Needed for the string "dataclasses.InitVar[int]" to work as an annotation.
-
 # Just any custom exception we can catch.
 class CustomError(Exception): pass
 

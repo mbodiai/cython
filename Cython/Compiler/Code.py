@@ -1,7 +1,7 @@
 #
 #   Code output module
 #
-
+from __future__ import annotations
 
 import cython
 cython.declare(os=object, re=object, operator=object, textwrap=object,
@@ -867,14 +867,14 @@ class UtilityCode(UtilityCodeBase):
         writer.putln("  " + writer.error_goto_if_PyErr(output.module_pos))
         writer.putln()
 
-    def _put_shared_function_declarations(self, code: "CCodeWriter") -> None:
+    def _put_shared_function_declarations(self, code: CCodeWriter) -> None:
         code.putln(f'/* {self.name} */')
         for shared in self.shared_utility_functions:
             # Convert function declarations to static function pointers.
             code.putln(f'static {shared.ret}(*{shared.name})({shared.params}); /*proto*/')
         code.putln()
 
-    def put_code(self, globalstate: "GlobalState", used_by=None) -> None:
+    def put_code(self, globalstate: GlobalState, used_by: str | None = None) -> None:
         has_shared_utility_code = bool(
             self.shared_utility_functions and globalstate.module_node.scope.context.shared_utility_qualified_name
         )

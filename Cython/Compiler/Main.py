@@ -301,7 +301,7 @@ class Context:
 
     def search_include_directories(self, qualified_name,
                                    suffix=None, source_pos=None, include=False, sys_path=False, source_file_path=None):
-        include_dirs = list(self.include_directories)
+        include_dirs = self.include_directories
         if sys_path:
             include_dirs.extend(sys.path)
         # include_dirs must be hashable for caching in @cached_function
@@ -371,47 +371,16 @@ class Context:
         # Parse the given source file and return a parse tree.
         num_errors = Errors.get_errors_count()
         try:
-            use_mb_visitor = bool(os.environ.get('CYTHON_MB_VISITOR') == '1') and source_desc.is_python_file()
-            if use_mb_visitor:
-                try:
-                    import ast, io
-                    from mbcore.cython_compat.visitor import transform_to_pure_cython, init_cython
-                    init_cython()
-                    with source_desc.get_file_object() as f:
-                        src_text = f.read()
-                    py_tree = ast.parse(src_text)
-                    py_tree = transform_to_pure_cython(py_tree)
-                    try:
-                        # Python 3.9+
-                        new_src = ast.unparse(py_tree)
-                    except Exception:
-                        # Fallback: keep original source on failure
-                        new_src = src_text
-                    from .Scanning import StringSourceDescriptor
-                    mb_desc = StringSourceDescriptor(source_desc.get_description(), new_src)
-                    fobj = io.StringIO(new_src)
-                    encoding = 'utf-8'
-                    from . import Parsing
-                    s = PyrexScanner(fobj, mb_desc, source_encoding=encoding, scope=scope, context=self)
-                    tree = Parsing.p_module(s, pxd, full_module_name)
-                except Exception:
-                    # On any import/transform failure, fall back to default path
-                    with source_desc.get_file_object() as f:
-                        from . import Parsing
-                        s = PyrexScanner(f, source_desc, source_encoding=getattr(f, 'encoding', None),
-                                         scope=scope, context=self)
-                        tree = Parsing.p_module(s, pxd, full_module_name)
-            else:
-                with source_desc.get_file_object() as f:
-                    from . import Parsing
-                    s = PyrexScanner(f, source_desc, source_encoding = getattr(f, 'encoding', None),
-                                     scope = scope, context = self)
-                    tree = Parsing.p_module(s, pxd, full_module_name)
+            with source_desc.get_file_object() as f:
+                from . import Parsing
+                s = PyrexScanner(f, source_desc, source_encoding = f.encoding,
+                                 scope = scope, context = self)
+                tree = Parsing.p_module(s, pxd, full_module_name)
                 if self.options.formal_grammar:
                     try:
                         from ..Parser import ConcreteSyntaxTree
                     except ImportError:
-                        raise RuntimeError(
+                        raise RuntimeError(  # noqa: B904
                             "Formal grammar can only be used with compiled Cython with an available pgen.")
                     ConcreteSyntaxTree.p_module(source_desc.filename)
         except UnicodeDecodeError as e:

@@ -284,9 +284,6 @@ def cython_inline(code, get_type=unsafe_type,
             os.makedirs(lib_dir)
         if force or not os.path.isfile(module_path):
             cflags = []
-            # Suppress noisy "unused" warnings by default for inline builds (POSIX compilers).
-            if os.name == 'posix':
-                cflags.extend(['-Wno-unused-function', '-Wno-unused'])
             define_macros = []
             c_include_dirs = []
             qualified = re.compile(r'([.\w]+)[.]')
@@ -358,25 +355,6 @@ def __invoke(%(params)s):
             build_extension.build_temp = os.path.dirname(pyx_file)
             build_extension.build_lib  = lib_dir
             build_extension.run()
-
-            # Write metadata alongside the compiled module if configured
-            if getattr(cache_config, 'keep_metadata', False):
-                metadata = {
-                    "compiled_at": datetime.now().isoformat(),
-                    "cython_version": Cython.__version__,
-                    "python_version": sys.version,
-                    "caller": caller_info,
-                    "module_name": module_name,
-                    "hash": key_hash,
-                    "arg_sigs": [{"type": t, "name": n} for t, n in arg_sigs],
-                    "language_level": language_level,
-                    "directives": cython_compiler_directives,
-                    "pyx_file": pyx_file,
-                    "annotated_html": os.path.join(lib_dir, module_name + '.html'),
-                    "annotated_md": os.path.join(lib_dir, module_name + '.md'),
-                    "module_path": module_path,
-                }
-                _write_metadata(lib_dir, module_name, metadata)
 
         if sys.platform == 'win32' and sys.version_info >= (3, 8):
             with os.add_dll_directory(os.path.abspath(lib_dir)):

@@ -1005,7 +1005,7 @@ class CArgDeclNode(Node):
             return punycodify_name(Naming.var_prefix + self.entry.name)
 
 
-    def analyse(self, env:"ModuleScope", nonempty=0, is_self_arg=False) -> tuple["CNameDeclaratorNode", "PyrexTypes.PyrexType"]:
+    def analyse(self, env:"Scope", nonempty=0, is_self_arg=False) -> tuple["CNameDeclaratorNode", "PyrexTypes.PyrexType"]:
         if is_self_arg:
             self.base_type.is_self_arg = self.is_self_arg = is_self_arg
         if self.type is not None:

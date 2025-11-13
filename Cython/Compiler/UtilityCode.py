@@ -7,9 +7,11 @@ from . import Naming
 from . import Code
 from . import Options
 
+
 import os.path
 import re
 import io
+
 
 
 class NonManglingModuleScope(Symtab.ModuleScope):
@@ -257,8 +259,7 @@ class CythonUtilityCode(Code.UtilityCodeBase):
         other compiler directives. This function provides a sensible default list
         of directives to copy.
         """
-        from .Options import _directive_defaults
-        utility_code_directives = dict(_directive_defaults)
+        utility_code_directives = dict(Options.get_directive_defaults())
         inherited_directive_names = (
             'binding', 'always_allow_keywords', 'allow_none_for_extension_args',
             'auto_pickle', 'ccomplex',

@@ -1,5 +1,8 @@
 from .Symtab import ModuleScope
-from .PyrexTypes import *
+from .Code import UtilityCode
+from .PyrexTypes import (
+    cy_integral_type, cy_floating_type, cy_numeric_type, cy_pymutex_type, cy_pythread_type_lock_type,
+)
 from .UtilityCode import CythonUtilityCode
 from .Errors import error
 from .Scanning import StringSourceDescriptor

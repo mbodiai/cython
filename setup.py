@@ -9,6 +9,7 @@ import subprocess
 import sysconfig
 import textwrap
 import sys
+import glob
 
 import platform
 is_cpython = platform.python_implementation() == 'CPython'
@@ -83,6 +84,23 @@ else:
 def compile_cython_modules(profile=False, coverage=False, compile_minimal=False, compile_more=False, cython_with_refnanny=False,
                            cython_limited_api=False):
     source_root = os.path.abspath(os.path.dirname(__file__))
+
+    # Clean up any in-tree compiled extension artifacts that might shadow sources and
+    # cause ABI mismatches during early imports (e.g., setuptools importing
+    # Cython.Compiler.Main triggers Symtab->Code import before our build runs).
+    # We only remove artifacts within the Cython package tree in this repo.
+    for pattern in (
+        os.path.join(source_root, 'Cython', 'Compiler', '*.so'),
+        os.path.join(source_root, 'Cython', 'Compiler', '*.pyd'),
+        os.path.join(source_root, 'Cython', '*.so'),
+        os.path.join(source_root, 'Cython', '*.pyd'),
+    ):
+        for path in glob.glob(pattern):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
     compiled_modules = [
         "Cython.Plex.Actions",
         "Cython.Plex.Scanners",
@@ -179,17 +197,9 @@ def compile_cython_modules(profile=False, coverage=False, compile_minimal=False,
     extensions.sort(key=lambda ext: os.path.getsize(ext.sources[0]), reverse=True)
 
     from Cython.Distutils.build_ext import build_ext as cy_build_ext
-    build_ext = None
-    try:
-        # Use the setuptools build_ext in preference, because it
-        # gets limited api filenames right, and should inherit itself from
-        # Cython's own build_ext. But failing that, use the Cython build_ext
-        # directly.
-        from setuptools.command.build_ext import build_ext
-        if cy_build_ext not in build_ext.__mro__:
-            build_ext = cy_build_ext
-    except ImportError:
-        build_ext = cy_build_ext
+    # Prefer Cython's build_ext to avoid setuptools eagerly importing
+    # Cython.Compiler.Main (which can trigger premature imports of compiled modules).
+    build_ext = cy_build_ext
 
     from Cython.Compiler.Options import get_directive_defaults
     get_directive_defaults().update(

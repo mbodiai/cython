@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 """Utility code for benchmark scripts."""
 
@@ -7,7 +7,10 @@ __author__ = "collinwinter@google.com (Collin Winter)"
 import math
 import operator
 
-from functools import reduce
+try:
+    reduce
+except NameError:
+    from functools import reduce
 
 def run_benchmark(options, num_runs, bench_func, *args):
     """Run the given benchmark, print results to stdout.

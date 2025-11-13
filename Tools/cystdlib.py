@@ -20,6 +20,7 @@ except ImportError:
     from setuptools import setup
 from Cython.Build import cythonize
 from Cython.Compiler import Options
+from Cython.Compiler.Options import Directives
 
 # improve Python compatibility by allowing some broken code
 Options.error_on_unknown_names = False
@@ -41,7 +42,7 @@ broken = [
     'importlib/_bootstrap',
 ]
 
-default_directives = dict(
+default_directives = Directives(
     auto_cpdef=False,   # enable when it's safe, see long list of failures below
     binding=True,
     set_initial_path='SOURCEFILE')

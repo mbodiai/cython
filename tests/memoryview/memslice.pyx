@@ -1382,7 +1382,7 @@ objs = [[UniqueObject("spam")], [UniqueObject("ham")], [UniqueObject("eggs")]]
 addref(*[obj for L in objs for obj in L])
 cdef cdef_function(int[:] buf1, object[::view.indirect, :] buf2 = ObjectMockBuffer(None, objs)):
     print 'cdef called'
-    print buf1[6], buf2[1, 0]
+    print(buf1[6], buf2[1, 0])
     buf2[1, 0] = UniqueObject("eggs")
 
 @testcase
@@ -1432,7 +1432,7 @@ cdef object[::view.indirect, :] global_B = ObjectMockBuffer(None, objs)
 
 cdef cdef_function2(int[:] buf1, object[::view.indirect, :] buf2 = global_B):
     print 'cdef2 called'
-    print buf1[6], buf2[1, 0]
+    print(buf1[6], buf2[1, 0])
     buf2[1, 0] = UniqueObject("eggs")
 
 @testcase
@@ -1453,7 +1453,7 @@ def test_cdef_function2():
     del A
     del B
 
-    print global_B[1, 0]
+    print(global_B[1, 0])
 
     cdef_function2(global_A, global_B)
 
@@ -1493,12 +1493,10 @@ def test_generic_slicing(arg, indirect=False):
     cdef int[::view.generic, ::view.generic, :] a = arg
     cdef int[::view.generic, ::view.generic, :] b = a[2:8:2, -4:1:-1, 1:3]
 
-    print b.shape[0], b.shape[1], b.shape[2]
+    print(b.shape[0], b.shape[1], b.shape[2])
 
     if indirect:
-        print b.suboffsets[0] // sizeof(int *),
-        print b.suboffsets[1] // sizeof(int),
-        print b.suboffsets[2]
+        print(b.suboffsets[0] // sizeof(int *), b.suboffsets[1] // sizeof(int), b.suboffsets[2])
     else:
         print_int_offsets(b.strides[0], b.strides[1], b.strides[2])
         print_int_offsets(b.suboffsets[0], b.suboffsets[1], b.suboffsets[2])
@@ -1557,23 +1555,23 @@ def test_indirect_slicing(arg):
     cdef int[::view.generic, :] generic_d = generic_b[4]
     cdef int[:] generic_e = generic_b[4, 2]
 
-    print b.shape[0], b.shape[1], b.shape[2]
-    print b.suboffsets[0] // sizeof(int *),
-    print b.suboffsets[1] // sizeof(int),
-    print b.suboffsets[2]
+    print(b.shape[0], b.shape[1], b.shape[2])
+    print(b.suboffsets[0] // sizeof(int *))
+    print(b.suboffsets[1] // sizeof(int))
+    print(b.suboffsets[2])
 
-    print b[4, 2, 1]
-    print c[4, 2]
+    print(b[4, 2, 1])
+    print(c[4, 2])
     # test adding offset from last dimension to suboffset
-    print b[..., 1][4, 2]
+    print(b[..., 1][4, 2])
 
-    print "index away indirect"
-    print d[2, 1]
-    print e[1]
+    print("index away indirect")
+    print(d[2, 1])
+    print(e[1])
 
-    print "index away generic"
-    print generic_d[2, 1]
-    print generic_e[1]
+    print("index away generic")
+    print(generic_d[2, 1])
+    print(generic_e[1])
 
 cdef class TestIndexSlicingDirectIndirectDims(object):
     "Test a int[:, ::view.indirect, :] slice"
