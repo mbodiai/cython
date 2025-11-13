@@ -284,8 +284,7 @@ class VisitorTransform(TreeVisitor):
 
 
 class CythonTransform(VisitorTransform):
-    """
-    Certain common conventions and utilities for Cython transforms.
+    """Certain common conventions and utilities for Cython transforms.
 
      - Sets up the context of the pipeline in self.context
      - Tracks directives in effect in self.current_directives
@@ -295,8 +294,8 @@ class CythonTransform(VisitorTransform):
         self.context = context
 
     def __call__(self, node):
-        from .ModuleNode import ModuleNode
         from . import Options
+        from .ModuleNode import ModuleNode
         if isinstance(node, ModuleNode):
             directives = node.directives
             if directives is None:
@@ -424,8 +423,7 @@ class EnvTransform(CythonTransform):
 
 
 class NodeRefCleanupMixin:
-    """
-    Clean up references to nodes that were replaced.
+    """Clean up references to nodes that were replaced.
 
     NOTE: this implementation assumes that the replacement is
     done first, before hitting any further references during
@@ -548,8 +546,7 @@ class MethodDispatcherTransform(EnvTransform):
             operand1, operand2 = node.operand1, node.operand2
             if special_method_name == '__contains__':
                 operand1, operand2 = operand2, operand1
-            elif special_method_name == '__div__':
-                if Future.division in self.current_env().context.future_directives:
+            elif special_method_name == '__div__' and Future.division in self.current_env().context.future_directives:
                     special_method_name = '__truediv__'
             obj_type = operand1.type
             type_name = obj_type.name if obj_type.is_builtin_type else "object" # safety measure

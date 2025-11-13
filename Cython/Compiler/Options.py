@@ -149,9 +149,8 @@ class EmbedSignatureDirectives(DataDict):
     enabled: bool = False
     format: str = "c"
 
-
 @dataclass
-class OverflowcheckDirectives(DataDict):
+class OverflowCheckDirectives(DataDict):
     enabled: bool = False
     fold: bool = True
 
@@ -187,8 +186,8 @@ class WarnDirectives(DataDict):
     unused_arg: bool = False
     unused_result: bool = False
     multiple_declarators: bool = False
-    deprecated_DEF: bool = False
-    deprecated_IF: bool = False
+    deprecated_DEF: bool = False # noqa: N815
+    deprecated_IF: bool = False # noqa: N815
 
 
 @dataclass
@@ -197,14 +196,6 @@ class OptimizeDirectives(DataDict):
     unpack_method_calls: bool = True
     unpack_method_calls_in_pyinit: bool = True
     use_switch: bool = True
-
-
-class OptimizeDirectivesDict(TypedDict, total=False):
-    inline_defnode_calls: bool
-    unpack_method_calls: bool
-    unpack_method_calls_in_pyinit: bool
-    use_switch: bool
-
 
 @dataclass
 class ControlFlowDirectivesScopes(DataDict):
@@ -230,6 +221,67 @@ class TestDirectives(DataDict):
     fail_if_c_code_has: List[str]
 
 
+class FastGetattrDirectivesDict(TypedDict, total=False):
+    fast: bool
+
+class EmbedSignatureDirectivesDict(TypedDict, total=False):
+    enabled: bool
+    format: str
+
+class Py2ImportDirectivesDict(TypedDict, total=False):
+    py2: bool
+
+class WarnDirectivesDict(TypedDict, total=False):
+    all: bool
+    undeclared: bool
+    unreachable: bool
+    maybe_uninitialized: bool
+    unused: bool
+    unused_arg: bool
+    unused_result: bool
+    multiple_declarators: bool
+    deprecated_DEF: bool
+    deprecated_IF: bool
+
+class ControlFlowDirectivesDict(TypedDict, total=False):
+    output: DirectiveScopeType
+    annotate_defs: DirectiveScopeType
+    dot_output: DirectiveScopeType
+    dot_annotate_defs: DirectiveScopeType
+
+class TestDirectivesDict(TypedDict, total=False):
+    assert_path_exists: List[str]
+    fail_if_path_exists: List[str]
+    assert_c_code_has: List[str]
+    fail_if_c_code_has: List[str]
+
+
+
+class OptimizeDirectivesDict(TypedDict, total=False):
+    inline_defnode_calls: bool
+    unpack_method_calls: bool
+    unpack_method_calls_in_pyinit: bool
+    use_switch: bool
+
+
+class InferTypesDirectivesDict(TypedDict, total=False):
+    enabled: bool
+    verbose: bool
+
+class AutotestdictDirectivesDict(TypedDict, total=False):
+    cdef: bool
+    all: bool
+
+class LanguageLevelDirectivesDict(TypedDict, total=False):
+    level: Literal["2", "3"]
+
+class OverflowCheckDirectivesDict(TypedDict, total=False):
+    enabled: bool
+    fold: bool
+
+
+
+
 @dataclass
 class DirectivesDict(TypedDict, total=False):
     """TypedDict representing the default values for compiler directives."""
@@ -240,15 +292,14 @@ class DirectivesDict(TypedDict, total=False):
     initializedcheck: bool
     freethreading_compatible: bool
     subinterpreters_compatible: str
-    embedsignature: EmbedSignatureDirectives
+    embedsignature: EmbedSignatureDirectivesDict
     auto_cpdef: bool
-    auto_pickle: Optional[bool]
+    auto_pickle: bool
     cdivision: bool
     cdivision_warnings: bool
-    cpow: Optional[bool]
+    cpow: bool
     c_api_binop_methods: bool
-    overflowcheck: bool
-    overflowcheck_fold: bool
+    overflowcheck: OverflowCheckDirectivesDict
     always_allow_keywords: bool
     allow_none_for_extension_args: bool
     wraparound: bool
@@ -261,9 +312,9 @@ class DirectivesDict(TypedDict, total=False):
     linetrace: bool
     emit_code_comments: bool
     annotation_typing: bool
-    infer_types: InferTypesDirectives
-    autotestdict: AutotestdictDirectives
-    language_level: LanguageLevelDirectives
+    infer_types: InferTypesDirectivesDict
+    autotestdict: AutotestdictDirectivesDict
+    language_level: LanguageLevelDirectivesDict
     fast_getattr: bool
     py2_import: bool
     preliminary_late_includes_cy28: bool
@@ -279,11 +330,11 @@ class DirectivesDict(TypedDict, total=False):
     legacy_implicit_noexcept: bool
     c_compile_guard: str
     set_initial_path: str | None
-    warn: WarnDirectives
+    warn: WarnDirectivesDict
     show_performance_hints: bool
     optimize: OptimizeDirectivesDict
     remove_unreachable: bool
-    control_flow: ControlFlowDirectives
+    control_flow: ControlFlowDirectivesDict
     test_assert_path_exists: List[str]
     test_fail_if_path_exists: List[str]
     test_assert_c_code_has: List[str]
@@ -545,14 +596,14 @@ class Directives(DataDict):
     initializedcheck: bool = True
     freethreading_compatible: bool = False
     subinterpreters_compatible: str = "no"
-    embedsignature: EmbedSignatureDirectives = field(default_factory=EmbedSignatureDirectives)
+    embedsignature: EmbedSignatureDirectives|EmbedSignatureDirectivesDict = field(default_factory=EmbedSignatureDirectives)
     auto_cpdef: bool = False
-    auto_pickle: Optional[bool] = None
+    auto_pickle: bool = False
     cdivision: bool = True
     cdivision_warnings: bool = False
     cpow: bool = True
     c_api_binop_methods: bool = True
-    overflowcheck: OverflowcheckDirectives = field(default_factory=OverflowcheckDirectives)
+    overflowcheck: OverflowCheckDirectives|OverflowCheckDirectivesDict = field(default_factory=OverflowCheckDirectives)
     always_allow_keywords: bool = True
     allow_none_for_extension_args: bool = True
     wraparound: bool = False
@@ -565,9 +616,9 @@ class Directives(DataDict):
     linetrace: bool = False
     emit_code_comments: bool = True  # copy original source code into C code comments
     annotation_typing: bool = True  # read type declarations from Python function annotations
-    infer_types: InferTypesDirectives = field(default_factory=InferTypesDirectives)
-    autotestdict: AutotestdictDirectives = field(default_factory=AutotestdictDirectives)
-    language_level: str = "3"
+    infer_types: InferTypesDirectives|InferTypesDirectivesDict = field(default_factory=InferTypesDirectives)
+    autotestdict: AutotestdictDirectives|AutotestdictDirectivesDict = field(default_factory=AutotestdictDirectives)
+    language: LanguageLevelDirectives|LanguageLevelDirectivesDict = field(default_factory=LanguageLevelDirectives)
     fast_getattr: bool = (
         False  # Undocumented until we come up with a better way to handle this everywhere.
     )
@@ -592,12 +643,12 @@ class Directives(DataDict):
     )
     legacy_implicit_noexcept: bool = False
     c_compile_guard: str = ""
-    set_initial_path: Optional[str] = None  # SOURCEFILE or "/full/path/to/module"
-    warn: WarnDirectives = field(default_factory=WarnDirectives)
+    set_initial_path: str | None = None  # SOURCEFILE or "/full/path/to/module"
+    warn: WarnDirectives | WarnDirectivesDict = field(default_factory=WarnDirectives)
     show_performance_hints: bool = True
-    optimize: OptimizeDirectives = field(default_factory=OptimizeDirectives)
+    optimize: OptimizeDirectives|OptimizeDirectivesDict = field(default_factory=OptimizeDirectives)
     remove_unreachable: bool = True
-    control_flow: ControlFlowDirectives = field(default_factory=ControlFlowDirectives)
+    control_flow: ControlFlowDirectives|ControlFlowDirectivesDict = field(default_factory=ControlFlowDirectives)
     test_assert_path_exists: List[str] = field(default_factory=list)
     test_fail_if_path_exists: List[str] = field(default_factory=list)
     test_assert_c_code_has: List[str] = field(default_factory=list)
@@ -605,6 +656,14 @@ class Directives(DataDict):
     formal_grammar: bool = False
     overload_dispatch: bool = True
 
+    def __post_init__(self):
+        self.overflowcheck = OverflowCheckDirectives(**self.overflowcheck)
+        self.infer_types = InferTypesDirectives(**self.infer_types)
+        self.autotestdict = AutotestdictDirectives(**self.autotestdict)
+        self.warn = WarnDirectives(**self.warn)
+        self.optimize = OptimizeDirectives(**self.optimize)
+        self.control_flow = ControlFlowDirectives(**self.control_flow)
+        self.embedsignature = EmbedSignatureDirectives(**self.embedsignature)
 
 def get_directive_defaults() -> Directives:
     """Return a copy of the directive defaults dictionary."""
@@ -615,7 +674,7 @@ def parse_directive_list(
     s: str,
     relaxed_bool: bool = False,
     ignore_unknown: bool = False,
-    current_settings: Optional[DirectivesDict] = None,
+    current_settings: DirectivesDict | None = None,
 ) -> DirectivesDict:
     """Public wrapper for _parse_directive_list for backward compatibility."""
     return _parse_directive_list(s, relaxed_bool, ignore_unknown, current_settings)
@@ -713,7 +772,7 @@ def normalise_encoding_name(option_name, encoding):
 DirectiveTypesMap = Dict[str, DirectiveType]
 # Override types possibilities above, if needed
 directive_types: DirectiveTypesMap = {
-    "language_level": str,  # values can be None/2/3/'3str', where None == 2+warning
+    "language_level": dict,
     "auto_pickle": bool,
     "locals": dict,
     "final": bool,  # final cdef classes and methods
@@ -1246,21 +1305,21 @@ CYTHON_COMMON_UTILITY_INCLUDE_DIR = str(Path(__file__).parent.parent / "Common" 
 class CompilationOptionsDict(TypedDict):
     """TypedDict representation of CompilationOptions for type checking and serialization."""
 
-    include_path: List[str]
-    output_file: Optional[str]
+    include_path: list[str]
+    output_file: str | None
     show_version: bool
     use_listing_file: bool
     errors_to_stderr: bool
     cplus: bool
-    depfile: Optional[bool]
+    depfile: bool | None
     make_depfile: bool
-    annotate: Optional[bool]
+    annotate: bool | None
     annotate_no_c_link: bool
-    annotate_coverage_xml: Optional[str]
+    annotate_coverage_xml: str | None
     generate_pxi: bool
     capi_reexport_cincludes: bool
     working_path: str
-    timestamps: Optional[Any]
+    timestamps: Any | None
     verbose: int
     quiet: bool
     compiler_directives: DirectivesDict
@@ -1268,25 +1327,25 @@ class CompilationOptionsDict(TypedDict):
     evaluate_tree_assertions: bool
     emit_linenums: bool
     relative_path_in_code_position_comments: bool
-    embedding_file_name: Optional[str]
+    embedding_file_name: str | None
     c_line_in_traceback: bool
-    language_level: Optional[Any]
+    language_level: Any | None
     formal_grammar: bool
     gdb_debug: bool
     compile_time_env: dict[str, object]
-    module_name: Optional[str]
-    common_utility_include_dir: Optional[str]
-    output_dir: Optional[str]
-    build_dir: Optional[str]
-    cache: Optional[Any]
-    create_extension: Optional[Any]
+    module_name: str | None
+    common_utility_include_dir: str | None
+    output_dir: str | None
+    build_dir: str | None
+    cache: Any | None
+    create_extension: Any | None
     np_pythran: bool
     legacy_implicit_noexcept: bool
-    shared_utility_qualified_name: Optional[str]
+    shared_utility_qualified_name: str | None
     docstrings: bool
     embed_pos_in_docstring: bool
-    pre_import: Optional[Any]
-    generate_cleanup_code: Union[bool, int]
+    pre_import: Any | None
+    generate_cleanup_code: bool | int
     clear_to_none: bool
     fast_fail: bool
     warning_errors: bool
@@ -1296,28 +1355,28 @@ class CompilationOptionsDict(TypedDict):
     cache_builtins: bool
     gcc_branch_hints: bool
     lookup_module_cpdef: bool
-    embed: Optional[Union[bool, str]]
+    embed: bool | str | None
     cimport_from_pyx: bool
     buffer_max_dims: int
     closure_freelist_size: int
 
 
 class CompilationOptionsKwargs(TypedDict, total=False):
-    include_path: List[str]
-    output_file: Optional[str]
+    include_path: list[str]
+    output_file: str | None
     show_version: bool
     use_listing_file: bool
     errors_to_stderr: bool
     cplus: bool
-    depfile: Optional[bool]
+    depfile: bool | None
     make_depfile: bool
-    annotate: Optional[bool]
+    annotate: bool | None
     annotate_no_c_link: bool
-    annotate_coverage_xml: Optional[str]
+    annotate_coverage_xml: str | None
     generate_pxi: bool
     capi_reexport_cincludes: bool
     working_path: str
-    timestamps: Optional[Any]
+    timestamps: Any | None
     verbose: int
     quiet: bool
     compiler_directives: DirectivesDict | Directives
@@ -1325,25 +1384,25 @@ class CompilationOptionsKwargs(TypedDict, total=False):
     evaluate_tree_assertions: bool
     emit_linenums: bool
     relative_path_in_code_position_comments: bool
-    embedding_file_name: Optional[str]
+    embedding_file_name: str | None
     c_line_in_traceback: bool
-    language_level: Optional[Any]
+    language_level: Any | None
     formal_grammar: bool
     gdb_debug: bool
     compile_time_env: dict[str, object]
-    module_name: Optional[str]
-    common_utility_include_dir: Optional[str]
-    output_dir: Optional[str]
-    build_dir: Optional[str]
-    cache: Optional[Any]
-    create_extension: Optional[Any]
+    module_name: str | None
+    common_utility_include_dir: str | None
+    output_dir: str | None
+    build_dir: str | None
+    cache: Any | None
+    create_extension: Any | None
     np_pythran: bool
     legacy_implicit_noexcept: bool
-    shared_utility_qualified_name: Optional[str]
+    shared_utility_qualified_name: str | None
     docstrings: bool
     embed_pos_in_docstring: bool
-    pre_import: Optional[Any]
-    generate_cleanup_code: Union[bool, int]
+    pre_import: Any | None
+    generate_cleanup_code: bool | int
     clear_to_none: bool
     fast_fail: bool
     warning_errors: bool
@@ -1353,7 +1412,7 @@ class CompilationOptionsKwargs(TypedDict, total=False):
     cache_builtins: bool
     gcc_branch_hints: bool
     lookup_module_cpdef: bool
-    embed: Optional[Union[bool, str]]
+    embed: bool | str | None
     cimport_from_pyx: bool
     buffer_max_dims: int
     closure_freelist_size: int
@@ -1361,60 +1420,60 @@ class CompilationOptionsKwargs(TypedDict, total=False):
 
 @dataclass
 class CompilationOptions(DataDict):
-    """
-    Options for Cython compilation, used throughout the compilation pipeline.
+    """Options for Cython compilation, used throughout the compilation pipeline.
+
     See default_options at the end of this module for a list of all possible
     options and CmdLine.usage and CmdLine.parse_command_line() for their meaning.
     """
 
     # Fields defined based on old CompilationOptionKwargs and default_options
     include_path: list[str] = field(default_factory=lambda: ["."])
-    shared_c_file_path: Optional[str] = None
-    output_file: Optional[str] = None
+    shared_c_file_path: str | None = None
+    output_file: str | None = None
     show_version: bool = False
     use_listing_file: bool = False
     errors_to_stderr: bool = True
     cplus: bool = False
-    depfile: Optional[bool] = None
+    depfile: bool | None = None
     make_depfile: bool = False
-    annotate: Optional[bool] = None
+    annotate: bool | None = None
     annotate_no_c_link: bool = False
-    annotate_coverage_xml: Optional[str] = None
+    annotate_coverage_xml: str | None = None
     generate_pxi: bool = False
     capi_reexport_cincludes: bool = False
     working_path: str = ""
-    timestamps: Optional[Any] = None
+    timestamps: Any | None = None
     verbose: int = 0
     quiet: bool = False
     compiler_directives: Directives | DirectivesDict = field(default_factory=get_directive_defaults)
-    embedded_metadata: Mapping[str, Any] = field(default_factory=dict)
-    embedding_file_name: Optional[str] = None
-    embedding_file_timestamp: Optional[int] = None
+    embedded_metadata: dict[str, Any] = field(default_factory=dict)
+    embedding_file_name: str | None = None
+    embedding_file_timestamp: int | None = None
     evaluate_tree_assertions: bool = False
     emit_linenums: bool = False
     relative_path_in_code_position_comments: bool = True
     c_line_in_traceback: bool = True
-    language_level: Optional[Any] = None
+    language_level: Any | None = None
     formal_grammar: bool = False
     gdb_debug: bool = False
-    compile_time_env: Mapping[str, Any] = field(default_factory=dict)
-    module_name: Optional[str] = None
-    common_utility_include_dir: Optional[str] = CYTHON_COMMON_UTILITY_INCLUDE_DIR
-    output_dir: Optional[str] = None
-    build_dir: Optional[str] = None
-    cache: Optional[Any] = None
-    cache_size: Optional[int] = None
-    create_extension: Optional[Any] = None
+    compile_time_env: dict[str, Any] = field(default_factory=dict)
+    module_name: str | None = None
+    common_utility_include_dir: str | None = CYTHON_COMMON_UTILITY_INCLUDE_DIR
+    output_dir: str | None = None
+    build_dir: str | None = None
+    cache: Any | None = None
+    cache_size: int | None = None
+    create_extension: Any | None = None
     np_pythran: bool = False
     legacy_implicit_noexcept: bool = False
-    shared_utility_qualified_name: Optional[str] = None
+    shared_utility_qualified_name: str | None = None
     old_style_globals: bool = False
 
     # Options previously defined as globals
     docstrings: bool = True
     embed_pos_in_docstring: bool = False
-    pre_import: Optional[Any] = None
-    generate_cleanup_code: Union[bool, int] = False
+    pre_import: Any | None = None
+    generate_cleanup_code: bool | int = False
     clear_to_none: bool = True
     fast_fail: bool = False
     warning_errors: bool = False
@@ -1424,7 +1483,7 @@ class CompilationOptions(DataDict):
     cache_builtins: bool = True
     gcc_branch_hints: bool = True
     lookup_module_cpdef: bool = False
-    embed: Optional[Union[bool, str]] = None
+    embed: bool | str | None = None
     cimport_from_pyx: bool = False
     buffer_max_dims: int = 8
     closure_freelist_size: int = 8
@@ -1435,10 +1494,7 @@ class CompilationOptions(DataDict):
         directive_defaults = get_directive_defaults()
         unknown_directives = set(self.compiler_directives.keys()) - set(directive_defaults.keys())
         if unknown_directives:
-            message = "got unknown compiler directive%s: %s" % (
-                "s" if len(unknown_directives) > 1 else "",
-                ", ".join(map(str, unknown_directives)),
-            )
+            message = f"got unknown compiler directive{'' if len(unknown_directives) > 1 else 's'}: {', '.join(map(str, unknown_directives))}"
             raise ValueError(message)
 
         # Handle np_pythran forcing cplus
@@ -1450,41 +1506,19 @@ class CompilationOptions(DataDict):
         self.compiler_directives = Directives(**self.compiler_directives)
 
     def configure_language_defaults(self, source_extension: str) -> None:
-        """
-        Configure language level defaults based on source extension and directives.
+        """Configure language level defaults based on source extension and directives.
 
         Args:
             source_extension: The file extension of the source file
         """
         # Direct access to dataclass fields
         directives = self.compiler_directives.copy()
-
-        lang_level = directives.get("language_level")
-        if lang_level is None:
-            # Auto-detect language level.
-            import sys
-
-            lang_level = "3" if sys.version_info[0] >= 3 else "2"
-            # Update the directive itself if it was None
-            directives["language_level"] = lang_level
-
-        # Update the main language_level attribute based on the directive value
-        if lang_level in (2, "2"):
-            self.language_level = 2
-        elif (isinstance(lang_level, int) and lang_level >= 3) or str(lang_level).startswith("3"):
-            self.language_level = 3
-        else:
-            # This case should ideally be caught by directive validation earlier
-            # but kept here for robustness.
-            raise ValueError("Invalid language level: %r" % lang_level)
-
         # Python files always imply binding=True unless explicitly set to False
         if source_extension == "py" and directives.get("binding") is not False:
             self.compiler_directives["binding"] = True
 
     def get_fingerprint(self) -> str:
-        """
-        Generate a fingerprint string containing all options relevant for cache invalidation.
+        """Generate a fingerprint string containing all options relevant for cache invalidation.
 
         Returns:
             A hexadecimal string fingerprint
@@ -1501,12 +1535,10 @@ class CompilationOptions(DataDict):
             str([(k, v) for k, v in directive_items if not callable(v)]),
             str(env_items),
         ]
-        fingerprint = hashlib.md5(str(parts).encode("utf-8")).hexdigest()
-        return fingerprint
+        return hashlib.md5(str(parts).encode("utf-8"), usedforsecurity=False).hexdigest()
 
-    def get_embedded_main_c_function(self) -> Optional[str]:
-        """
-        Get the name of the embedded main C function if embedding is enabled.
+    def get_embedded_main_c_function(self) -> str | None:
+        """Get the name of the embedded main C function if embedding is enabled.
 
         Returns:
             The function name or None if embedding is not enabled
@@ -1522,7 +1554,7 @@ class CompilationOptions(DataDict):
                 return match.name
         if isinstance(embed, str):
             return embed
-        return None
+        raise ValueError(f"Invalid embed value: {embed}. Source not available.")
 
 
 def get_default_options() -> CompilationOptions:

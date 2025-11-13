@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 import gc
 import hashlib
 import importlib.util
@@ -12,7 +13,7 @@ from datetime import datetime
 from distutils.command.build_ext import build_ext
 from distutils.core import Distribution, Extension
 from importlib.machinery import ExtensionFileLoader
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 import Cython
 import cython as cython_module
 
@@ -163,7 +164,9 @@ def _get_build_extension():
     build_extension = build_ext(dist)
     build_extension.finalize_options()
     return build_extension
-
+def _get_build_extension_so_ext():
+    from distutils.sysconfig import get_config_var
+    return str(get_config_var('EXT_SUFFIX'))
 
 @cached_function
 def _create_context(cython_include_dirs):
@@ -260,54 +263,57 @@ def cython_inline(code, get_type=unsafe_type,
     arg_sigs = tuple([(get_type(kwds[arg], ctx), arg) for arg in arg_names])
     if key_hash is None:
         key_hash = _inline_key(orig_code, arg_sigs, language_level)
+    module_name = "_cython_inline_" + key_hash
 
+    if module_name in sys.modules:
+        module = sys.modules[module_name]
 
-    build_extension = None
-    if cython_inline.so_ext is None:
-        # Figure out and cache current extension suffix
-        build_extension = _get_build_extension()
-        cython_inline.so_ext = build_extension.get_ext_filename('')
+    else:
+        build_extension = None
+        if cython_inline.so_ext is None:
+            # Figure out and cache current extension suffix
+            build_extension = _get_build_extension()
+            cython_inline.so_ext = build_extension.get_ext_filename('')
 
-    lib_dir = os.path.abspath(lib_dir)
-    module_path = os.path.join(lib_dir, module_name + cython_inline.so_ext)
+        lib_dir = Path(lib_dir or ".").resolve()
+        module_path = lib_dir / f"{module_name}{cython_inline.so_ext}"
 
-    if not os.path.exists(lib_dir):
-        os.makedirs(lib_dir)
-    if force or not os.path.isfile(module_path):
-        cflags = []
-        define_macros = []
-        c_include_dirs = []
-        qualified = re.compile(r'([.\w]+)[.]')
-        for type, _ in arg_sigs:
-            m = qualified.match(type)
-            if m:
-                cimports.append('\ncimport %s' % m.groups()[0])
-                # one special case
-                if m.groups()[0] == 'numpy':
-                    import numpy
-                    c_include_dirs.append(numpy.get_include())
-                    define_macros.append(("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION"))
-                    cflags.append('-Wno-unused')
-        module_body, func_body = extract_func_code(code)
-        params = ', '.join(['%s %s' % a for a in arg_sigs])
-        module_code = """
-%(module_body)s
-%(cimports)s
-def __invoke(%(params)s):
-%(func_body)s
+        if not lib_dir.exists():
+            os.makedirs(lib_dir)
+        if force or not os.path.isfile(module_path):
+            cflags = []
+            define_macros = []
+            c_include_dirs = []
+            qualified = re.compile(r'([.\w]+)[.]')
+            for type, _ in arg_sigs:
+                m = qualified.match(type)
+                if m:
+                    cimports.append('\ncimport %s' % m.groups()[0])
+                    # one special case
+                    if m.groups()[0] == 'numpy':
+                        import numpy
+                        c_include_dirs.append(numpy.get_include())
+                        define_macros.append(("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION"))
+                        # cflags.append('-Wno-unused')
+            module_body, func_body = extract_func_code(code)
+            params = ', '.join(['%s %s' % a for a in arg_sigs])
+            module_code = """
+{module_body}
+{cimports}
+def __invoke({params}):
+{func_body}
     return locals()
-            """ % {'cimports': '\n'.join(cimports),
-                   'module_body': module_body,
-                   'params': params,
-                   'func_body': func_body }
+            """.format(
+                   cimports='\n'.join(cimports),
+                   module_body=module_body,
+                   params=params,
+                   func_body=func_body,
+               )
             for key, value in literals.items():
                 module_code = module_code.replace(key, value)
-            pyx_file = os.path.join(lib_dir, module_name + '.pyx')
-            fh = open(pyx_file, 'w')
-            try:
-                fh.write(module_code)
-            finally:
-                fh.close()
+            pyx_file = Path(lib_dir) / f"{module_name}.pyx"
+            with Path(pyx_file).open('w', encoding='utf-8') as f:
+                f.write(module_code)
             extension = Extension(
                 name=module_name,
                 sources=[pyx_file],
@@ -317,38 +323,17 @@ def __invoke(%(params)s):
             )
             if build_extension is None:
                 build_extension = _get_build_extension()
-            # Source-reference behavior: one flag + one env var
-            # pyx_references (bool) controls: line-directives to .pyx, hide C lines in traceback,
-            # and remove C link from annotation HTML.
-            # Defaults to True unless overridden by env or flag.
-            if pyx_references is None:
-                v = os.environ.get('CYTHON_INLINE_PYX_REFERENCES')
-                if v is None:
-                    pyx_references = True
-                else:
-                    pyx_references = v not in ('0', 'false', 'False')
-            emit_linenums = bool(pyx_references)
-            c_line_in_traceback = not bool(pyx_references)
-            annotate_no_c_link = bool(pyx_references)
-
-            cythonize_kwargs = {
-                'module_list': [extension],
-                'include_path': cython_include_dirs or ['.'],
-                'compiler_directives': cython_compiler_directives,
-                # Inline should show normal compile output (Compiling/Cythonizing) by default.
-                'quiet': False,
-                'annotate': True,
-            }
-            cythonize_kwargs['emit_linenums'] = emit_linenums
-            cythonize_kwargs['c_line_in_traceback'] = c_line_in_traceback
-            cythonize_kwargs['annotate_no_c_link'] = annotate_no_c_link
-            build_extension.extensions = cythonize(**cythonize_kwargs)
-            build_extension.build_temp = os.path.dirname(pyx_file)
+            build_extension.extensions = cythonize(
+                [extension],
+                include_path=cython_include_dirs or ['.'],
+                compiler_directives=cython_compiler_directives,
+                quiet=quiet)
+            build_extension.build_temp = Path(pyx_file).parent
             build_extension.build_lib  = lib_dir
             build_extension.run()
 
         if sys.platform == 'win32' and sys.version_info >= (3, 8):
-            with os.add_dll_directory(os.path.abspath(lib_dir)):
+            with os.add_dll_directory(str(Path(lib_dir).resolve())):
                 module = load_dynamic(module_name, module_path)
         else:
             module = load_dynamic(module_name, module_path)
@@ -359,10 +344,18 @@ def __invoke(%(params)s):
 
 
 # Compile a full module-level Cython code string and import it.
-def cython_inline_module(code, lib_dir=None,
-                         cython_include_dirs=None, cython_compiler_directives=None,
-                         force=False, quiet=False,
-                         *, pyx_references=None, module_name=None, output_path=None):
+def cython_inline_module(
+        code: str,
+        lib_dir: str | Path | None = None,
+        module_name: str | None = None,
+        cython_include_dirs: Iterable[str] = (),
+        cython_compiler_directives: Directives | None = None,
+        force: bool = False,
+        quiet: bool = False,
+        *,
+        pyx_references: bool | None = None,
+        output_path: str | Path | None = None,
+):
     """Compile a full module-level Cython code string (pure decorators allowed) and import it.
 
     - No function wrapper is added; code is written as-is to a .pyx file in the cache dir
@@ -376,143 +369,98 @@ def cython_inline_module(code, lib_dir=None,
       library at '{output_path}{so_ext}'. The module name will be the basename of
       'output_path'.
     """
-
     directives = cython_compiler_directives.copy() if cython_compiler_directives else {}
-    language_level = directives.get('language_level', '3')
+    language_level = directives.get('language.level', '3')
     key_hash = _inline_key(code, (), language_level)
 
+    # Ensure platform-specific extension suffix is known.
+    if cython_inline.so_ext is None:
+        build_extension = _get_build_extension()
+        cython_inline.so_ext = build_extension.get_ext_filename('')
 
     # If an explicit output_path is specified, derive everything from it.
     base_path = None
     if output_path is not None:
-        # Treat output_path as a base path without extension. If an extension is present,
-        # strip it to form the base path.
-        base_path = os.path.abspath(str(output_path))
-        # Strip some known source extensions if present
-        for ext in ('.pyx', '.pxd', '.c', '.cpp', '.html', '.md'):
-            if base_path.endswith(ext):
-                base_path = base_path[: -len(ext)]
-                break
-        # Ensure directory exists later; choose module_name from basename
-        module_name = os.path.basename(base_path)
-        # Sanitize module_name to a valid python identifier
-        module_name = re.sub(r'[^a-zA-Z0-9_]', '_', module_name)
-        if module_name and not (module_name[0].isalpha() or module_name[0] == '_'):
-            module_name = '_' + module_name
-        # The library dir is the directory of the base_path
-        lib_dir = os.path.dirname(base_path) or '.'
+        base = Path(output_path).resolve()
+        base_path = base
+        if module_name is None:
+            derived_name = base.name
+            if not derived_name.isidentifier():
+                raise ValueError(
+                    f"Derived module name '{derived_name}' from output_path is not a valid identifier. "
+                    "Please pass a valid 'module_name'."
+                )
+            module_name = derived_name
+        if lib_dir is None:
+            lib_dir = str(base.parent)
     else:
         # Respect an explicit user-provided module name when given.
         if module_name:
-            # Sanitize to a valid module name (letters, digits, underscore, not starting with digit)
-            sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', str(module_name))
-            if sanitized and not (sanitized[0].isalpha() or sanitized[0] == '_'):
-                sanitized = '_' + sanitized
-            module_name = sanitized
+            if not str(module_name).isidentifier():
+                raise ValueError(f"module_name '{module_name}' is not a valid Python identifier.")
+        else:
+            module_name = "_cython_inline_module_" + key_hash
 
 
-    if cython_inline.so_ext is None:
-        build_extension = _get_build_extension()
-        cython_inline.so_ext = build_extension.get_ext_filename('')
-    # If the output_path pointed to a filename including the shared extension,
-    # strip it now that we know the platform-specific suffix.
-    if base_path is not None and base_path.endswith(cython_inline.so_ext):
-        base_path = base_path[: -len(cython_inline.so_ext)]
-    lib_dir = os.path.abspath(lib_dir)
+    lib_dir = Path(lib_dir or ".").resolve()
     if base_path is None:
-        module_path = os.path.join(lib_dir, module_name + cython_inline.so_ext)
-        pyx_file = os.path.join(lib_dir, module_name + '.pyx')
-        pxd_path = os.path.join(lib_dir, module_name + '.pxd')
+        artifact_dir = (Path.cwd() / "generated").resolve()
+        module_path = artifact_dir / f"{module_name}{cython_inline.so_ext}"
+        pyx_file = artifact_dir / f"{module_name}.pyx"
+        pxd_path = artifact_dir / f"{module_name}.pxd"
     else:
-        module_path = base_path + cython_inline.so_ext
-        pyx_file = base_path + '.pyx'
-        pxd_path = base_path + '.pxd'
+        artifact_dir = base_path.parent
+        module_path = base_path.with_name(base_path.name + cython_inline.so_ext)
+        pyx_file = base_path.with_suffix('.pyx')
+        pxd_path = base_path.with_suffix('.pxd')
 
-    if module_name in sys.modules and os.path.isfile(module_path):
+    if module_name in sys.modules and module_path.is_file():
         return sys.modules[module_name]
 
-    if not os.path.exists(lib_dir):
-        os.makedirs(lib_dir)
+    if not artifact_dir.exists():
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+    # Ensure the .pyx target directory exists (esp. when using output_path)
+    pyx_parent = Path(pyx_file).parent
+    if not pyx_parent.exists():
+        os.makedirs(pyx_parent, exist_ok=True)
 
-    if force or not os.path.isfile(module_path) or not os.path.isfile(pxd_path):
-        with open(pyx_file, 'w', encoding='utf-8') as fh:
-            fh.write(code)
+    if force or not module_path.is_file() or not pxd_path.is_file():
+        with Path(pyx_file).open('w', encoding='utf-8') as f:
+            f.write(code)
 
         # Suppress noisy "unused" warnings by default for inline builds (POSIX compilers).
-        cflags = []
-        if os.name == 'posix':
-            cflags.extend(['-Wno-unused-function', '-Wno-unused'])
-        extension = Extension(name=module_name, sources=[pyx_file], extra_compile_args=cflags or None)
+        cflags = ['-Wno-unused-function', '-Wno-unused'] if os.name == 'posix' else None
+        extension = Extension(name=module_name, sources=[str(pyx_file)], extra_compile_args=cflags)
         build_extension = _get_build_extension()
-        include_path = (cython_include_dirs or []) + [lib_dir]
+        include_path = [*cython_include_dirs, str(artifact_dir)]
         # Single env var + flag behavior (see cython_inline)
         if pyx_references is None:
             v = os.environ.get('CYTHON_INLINE_PYX_REFERENCES')
-            if v is None:
-                pyx_references = True
-            else:
-                pyx_references = v not in ('0', 'false', 'False')
+            pyx_references = True if v is None else v not in ('0', 'false', 'False')
         emit_linenums = bool(pyx_references)
         c_line_in_traceback = not bool(pyx_references)
         annotate_no_c_link = bool(pyx_references)
 
-        cythonize_kwargs = dict(
-            module_list=[extension],
-            include_path=include_path,
-            compiler_directives=directives,
-            quiet=quiet,
-            annotate=True,
-        )
+        cythonize_kwargs = {
+            'module_list': [extension],
+            'include_path': include_path,
+            'compiler_directives': directives,
+            'quiet': quiet,
+            'annotate': True,
+        }
         cythonize_kwargs['emit_linenums'] = emit_linenums
         cythonize_kwargs['c_line_in_traceback'] = c_line_in_traceback
         cythonize_kwargs['annotate_no_c_link'] = annotate_no_c_link
         build_extension.extensions = cythonize(**cythonize_kwargs)
-        build_extension.build_temp = os.path.dirname(pyx_file)
-        build_extension.build_lib = lib_dir
+        build_extension.build_temp = Path(pyx_file).parent
+        build_extension.build_lib = artifact_dir
         build_extension.run()
 
-        # If a specific output_path was requested and the built path differs,
-        # move the built artifact to the requested path so that we load from it.
-        if base_path is not None:
-            built_path = os.path.join(lib_dir, module_name + cython_inline.so_ext)
-            if os.path.isfile(built_path) and os.path.abspath(built_path) != os.path.abspath(module_path):
-                try:
-                    os.replace(built_path, module_path)
-                except Exception:
-                    # If moving fails, try copying as a fallback.
-                    try:
-                        import shutil
-                        shutil.copy2(built_path, module_path)
-                    except Exception:
-                        pass
-
         # Generate .pxd for cimporting extension types
-        _generate_pxd_file(pyx_file, lib_dir, module_name)
-
-        # Metadata
-        if getattr(cache_config, 'keep_metadata', False):
-            annotated_html = (base_path + '.html') if base_path is not None else os.path.join(lib_dir, module_name + '.html')
-            annotated_md = (base_path + '.md') if base_path is not None else os.path.join(lib_dir, module_name + '.md')
-            metadata = {
-                "compiled_at": datetime.now().isoformat(),
-                "cython_version": Cython.__version__,
-                "python_version": sys.version,
-                "caller": caller_info,
-                "module_name": module_name,
-                "hash": key_hash,
-                "language_level": language_level,
-                "directives": directives,
-                "pyx_file": pyx_file,
-                "pxd_file": pxd_path,
-                "annotated_html": annotated_html,
-                "annotated_md": annotated_md,
-                "module_path": module_path,
-                "code_length": len(code),
-            }
-            _write_metadata(lib_dir, module_name, metadata)
+        generate_pxd_file(pyx_file, artifact_dir, module_name)
 
     if sys.platform == 'win32' and sys.version_info >= (3, 8):
-        with os.add_dll_directory(os.path.abspath(lib_dir)):
+        with os.add_dll_directory(str(module_path.parent.resolve())):
             module = load_dynamic(module_name, module_path)
     else:
         module = load_dynamic(module_name, module_path)
@@ -674,10 +622,7 @@ def extract_func_code(code):
     lines = code.split('\n')
     for line in lines:
         if not line.startswith(' '):
-            if module_statement.match(line):
-                current = module
-            else:
-                current = function
+            current = module if module_statement.match(line) else function
         current.append(line)
     return '\n'.join(module), '    ' + '\n    '.join(function)
 
@@ -685,9 +630,8 @@ def extract_func_code(code):
 def get_body(source):
     ix = source.index(':')
     if source[:5] == 'lambda':
-        return "return %s" % source[ix+1:]
-    else:
-        return source[ix+1:]
+        return f"return {source[ix+1:]}"
+    return source[ix+1:]
 
 
 # Lots to be done here... It would be especially cool if compiled functions

@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+import contextlib
 import os
 import re
 import sys
@@ -31,14 +33,19 @@ from .Scanning import FileSourceDescriptor, PyrexScanner
 from .StringEncoding import EncodedString
 from .Symtab import ModuleScope
 
+if TYPE_CHECKING:
+    from ..Build.Cache import Cache
+else:
+    Cache = Any
+
 if sys.version_info[:2] < (3, 8): # noqa
     major, minor = sys.version_info[:2]
     sys.stderr.write(f"Sorry, Cython requires Python 3.8+, found {major}.{minor}\n")
     sys.exit(1)
 if TYPE_CHECKING:
     from .CythonScope import CythonScope
-    from .Symtab import BuiltinScope, ModuleScope
     from .Nodes import Node
+    from .Symtab import BuiltinScope, ModuleScope
 
 def _make_range_re(chrs):
     out = []
@@ -90,7 +97,7 @@ class Context:
         self.modules["cython"] = self.cython_scope
         self.include_directories = include_directories
         self.future_directives = set()
-        self.compiler_directives = Options.Directives(**compiler_directives) if isinstance(compiler_directives, Options.Directives) else compiler_directives
+        self.compiler_directives = Options.Directives(**compiler_directives) if not  isinstance(compiler_directives, Options.Directives) else compiler_directives
         self.cpp = cpp
         self.options = options
 
@@ -133,7 +140,7 @@ class Context:
             pass
         value = EncodedString(value)
         if encoding:
-            value.encoding = encoding
+            value.encoding = encoding  # type: ignore
         self._interned[key] = value
         return value
 
@@ -384,9 +391,9 @@ class Context:
                             "Formal grammar can only be used with compiled Cython with an available pgen.")
                     ConcreteSyntaxTree.p_module(source_desc.filename)
         except UnicodeDecodeError as e:
-            #import traceback
-            #traceback.print_exc()
-            raise self._report_decode_error(source_desc, e)
+            import traceback
+            traceback.print_exc()
+            raise self._report_decode_error(source_desc, e) from e
 
         if Errors.get_errors_count() > num_errors:
             raise CompileError()
@@ -399,7 +406,7 @@ class Context:
 
         line = 1
         column = idx = 0
-        with open(source_desc.filename, encoding='iso8859-1', newline='') as f:
+        with Path(source_desc.filename).open(encoding='iso8859-1', newline='') as f:
             for line, data in enumerate(f, 1):
                 idx += len(data)
                 if idx >= position:
@@ -408,13 +415,13 @@ class Context:
 
         return error((source_desc, line, column),
                      "Decoding error, missing or incorrect coding=<encoding-name> "
-                     "at top of source (cannot decode with encoding %r: %s)" % (encoding, msg))
+                     f"at top of source (cannot decode with encoding {encoding!r}: {msg})")
 
     def extract_module_name(self, path, options):
         # Find fully_qualified module name from the full pathname
         # of a source file.
         dir, filename = os.path.split(path)
-        module_name, _ = os.path.splitext(filename)
+        module_name = Path(filename).name
         if "." in module_name:
             return module_name
         names = [module_name]
@@ -444,43 +451,37 @@ class Context:
         if result.num_errors > 0:
             err = True
         if err and result.c_file:
-            try:
-                Utils.castrate_file(result.c_file, os.stat(source_desc.filename))
-            except OSError:
-                pass
+            with contextlib.suppress(OSError):
+                Utils.castrate_file(result.c_file, Path(str(source_desc.filename)).stat())
             result.c_file = None
 
 
-def get_output_filename(source_filename, cwd, options):
-    if options.cplus:
-        c_suffix = ".cpp"
-    else:
-        c_suffix = ".c"
+def get_output_filename(source_filename:str, cwd:str, options:CompilationOptions):
+    c_suffix = ".cpp" if options.cplus else ".c"
     suggested_file_name = Utils.replace_suffix(source_filename, c_suffix)
     if options.output_file:
-        out_path = os.path.join(cwd, options.output_file)
-        if os.path.isdir(out_path):
-            return os.path.join(out_path, os.path.basename(suggested_file_name))
-        else:
-            return out_path
-    else:
-        return suggested_file_name
+        out_path = Path(cwd).resolve() / options.output_file
+        if out_path.is_dir():
+            return str(out_path / Path(suggested_file_name).name)
+        return str(out_path)
+
+    return suggested_file_name
 
 
-def create_default_resultobj(compilation_source, options):
+def create_default_resultobj(compilation_source:CompilationSource, options:CompilationOptions):
     result = CompilationResult()
-    result.main_source_file = compilation_source.source_desc.filename
+    result.main_source_file = str(compilation_source.source_desc.filename)
     result.compilation_source = compilation_source
     source_desc = compilation_source.source_desc
-    result.c_file = get_output_filename(source_desc.filename,
-                        compilation_source.cwd, options)
+    result.c_file = get_output_filename(str(source_desc.filename),
+                        str(compilation_source.cwd), options)
     result.embedded_metadata = options.embedded_metadata
     return result
 
 
 def setup_source_object(source: str, source_ext: str, full_module_name: str , options: "CompilationOptions", context: "Context") -> "CompilationSource":
-    cwd = os.getcwd()
-    abs_path = os.path.abspath(source)
+    cwd = Path.cwd()
+    abs_path = Path(source).resolve()
 
     full_module_name = full_module_name or context.extract_module_name(source, options)
     full_module_name = EncodedString(full_module_name)
@@ -488,7 +489,7 @@ def setup_source_object(source: str, source_ext: str, full_module_name: str , op
     Utils.raise_error_if_module_name_forbidden(full_module_name)
     if options.relative_path_in_code_position_comments:
         rel_path = full_module_name.replace('.', os.sep) + source_ext
-        if not abs_path.endswith(rel_path):
+        if not Path(rel_path).is_relative_to(abs_path):
             rel_path = source  # safety measure to prevent printing incorrect paths
     else:
         rel_path = abs_path
@@ -496,19 +497,18 @@ def setup_source_object(source: str, source_ext: str, full_module_name: str , op
     return CompilationSource(source_desc, full_module_name, cwd)
 
 
-def run_cached_pipeline(source, options, full_module_name, context, cache, fingerprint):
-    cwd = os.getcwd()
+def run_cached_pipeline(source:str, options:CompilationOptions, full_module_name:str, context:Context, cache:Cache, fingerprint:str):
+    cwd = str(Path.cwd())
     output_filename = get_output_filename(source, cwd, options)
     cached = cache.lookup_cache(output_filename, fingerprint)
     if cached:
         cache.load_from_cache(output_filename, cached)
 
-        source_ext = os.path.splitext(source)[1]
+        source_ext = Path(source).suffix
         options.configure_language_defaults(source_ext[1:])  # py/pyx
 
-        source = setup_source_object(source, source_ext, full_module_name, options, context)
-        # Set up result object
-        return create_default_resultobj(source, options)
+        compilation_source = setup_source_object(source, source_ext, full_module_name, options, context)
+        return create_default_resultobj(compilation_source, options)
 
     result = run_pipeline(source, options, full_module_name, context)
     if fingerprint:
@@ -516,23 +516,23 @@ def run_cached_pipeline(source, options, full_module_name, context, cache, finge
     return result
 
 
-def run_pipeline(src: "str", options: "CompilationOptions", full_module_name: "str", context: "Context"):
+def run_pipeline(source:str, options:CompilationOptions, full_module_name:str, context:Context):
     from . import Pipeline
     if options.verbose:
-        sys.stderr.write("Compiling %s\n" % src)
-    source_ext = os.path.splitext(src)[1]
-    abs_path = os.path.abspath(src)
+        sys.stderr.write(f"Compiling {source}\n")
+    source_ext = Path(source).suffix
+    abs_path = Path(source).resolve()
     options.configure_language_defaults(source_ext[1:])  # py/pyx
 
-    source = setup_source_object(src, source_ext, full_module_name, options, context)
+    compilation_source = setup_source_object(source, source_ext, full_module_name, options, context)
     # Set up result object
-    result = create_default_resultobj(source, options)
+    result = create_default_resultobj(compilation_source, options)
 
     if options.annotate is None:
         # By default, decide based on whether an html file already exists.
-        html_filename = os.path.splitext(result.c_file or "")[0] + ".html"
-        if os.path.exists(html_filename):
-            with open(html_filename, encoding="UTF-8") as html_file:
+        html_filename = Path(result.c_file or "").with_suffix(".html")
+        if html_filename.exists():
+            with html_filename.open(encoding="UTF-8") as html_file:
                 if '<!-- Generated by Cython' in html_file.read(100):
                     options.annotate = True
 
@@ -544,16 +544,16 @@ def run_pipeline(src: "str", options: "CompilationOptions", full_module_name: "s
 
     context.setup_errors(options, result)
 
-    if '.' in source.full_module_name and '.' in os.path.splitext(os.path.basename(abs_path))[0]:
-        warning((source.source_desc, 1, 0),
-                "Dotted filenames ('%s') are deprecated."
-                " Please use the normal Python package directory layout." % os.path.basename(abs_path), level=1)
+    if '.' in compilation_source.full_module_name and '.' in Path(abs_path).name:
+        warning((compilation_source.source_desc, 1, 0),
+                f"Dotted filenames ('{Path(abs_path).name}') are deprecated."
+                " Please use the normal Python package directory layout.", level=1)
     if re.search("[.]c(pp|[+][+]|xx)$", result.c_file or "", re.RegexFlag.IGNORECASE) and not context.cpp:
-        warning((source.source_desc, 1, 0),
+        warning((compilation_source.source_desc, 1, 0),
                 "Filename implies a c++ file but Cython is not in c++ mode.",
                 level=1)
 
-    err, enddata = Pipeline.run_pipeline(pipeline, source)
+    err, enddata = Pipeline.run_pipeline(pipeline, compilation_source)
     context.teardown_errors(err, options, result)
     if err is None and options.depfile:
         from ..Build.Dependencies import create_dependency_tree
@@ -569,19 +569,15 @@ def run_pipeline(src: "str", options: "CompilationOptions", full_module_name: "s
 # ------------------------------------------------------------------------
 @dataclass
 class CompilationSource:
-    """
-    Contains the data necessary to start up a compilation pipeline for
-    a single compilation unit.
-    """
-    source_desc: "FileSourceDescriptor"
-    full_module_name: "EncodedString"
-    cwd: "str"
+    """Contains the data necessary to start up a compilation pipeline for a single compilation unit."""
+    source_desc: FileSourceDescriptor
+    full_module_name: EncodedString
+    cwd: str
 
 
 @dataclass
 class CompilationResult:
-    """
-    Results from the Cython compiler:
+    """Results from the Cython compiler.
 
     c_file           string or None   The generated C source file
     h_file           string or None   The generated C header file
@@ -594,17 +590,17 @@ class CompilationResult:
     compilation_source CompilationSource
     """
 
-    c_file: "str | None" = None
-    h_file: "str | None" = None
-    i_file: "str | None" = None
-    api_file: "str | None" = None
-    listing_file: "str | None" = None
-    object_file: "str | None" = None
-    extension_file: "str | None" = None
-    main_source_file: "str | None" = None
+    c_file: str | None = None
+    h_file: str | None = None
+    i_file: str | None = None
+    api_file: str | None = None
+    listing_file: str | None = None
+    object_file: str | None = None
+    extension_file: str | None = None
+    main_source_file: str | None = None
     num_errors: int = 0
-    compilation_source: "CompilationSource | None" = None
-    embedded_metadata: "dict[str, Any]| None" = None
+    compilation_source: CompilationSource | None = None
+    embedded_metadata: dict[str, Any]| None = None
 
     def get_generated_source_files(self):
         return [
@@ -614,12 +610,10 @@ class CompilationResult:
 
 
 class CompilationResultSet(dict):
-    """
-    Results from compiling multiple Pyrex source files. A mapping
-    from source file paths to CompilationResult instances. Also
-    has the following attributes:
+    """A mapping from source file paths to CompilationResult instances.
 
-    num_errors   integer   Total number of compilation errors
+    Attributes:
+    - num_errors: int   Total number of compilation errors
     """
 
     num_errors: int = 0
@@ -629,9 +623,9 @@ class CompilationResultSet(dict):
         self.num_errors += result.num_errors
 
 
-def get_fingerprint(cache: "Cache", source: "str", options: "CompilationOptions"):
-        from ..Build.Dependencies import create_dependency_tree
+def get_fingerprint(cache: Cache, source: str, options: CompilationOptions):
         from ..Build.Cache import FingerprintFlags
+        from ..Build.Dependencies import create_dependency_tree
         context = Context.from_options(options)
         dependencies = create_dependency_tree(context)
         return cache.transitive_fingerprint(
@@ -643,18 +637,16 @@ def get_fingerprint(cache: "Cache", source: "str", options: "CompilationOptions"
         )
 
 
-def compile_single(source: "str", options: "CompilationOptions", full_module_name: "str | None"=None, cache: "Cache | None"=None, context: "Context | None"=None, fingerprint: "str | None"=None):
-    """
-    compile_single(source, options, full_module_name, cache, context, fingerprint)
+def compile_single(source: str, options: CompilationOptions, full_module_name: str | None = None, cache: Cache | None = None, context: Context | None = None, fingerprint: str | None = None):
+    """Compile a single Pyrex implementation file and return a CompilationResult.
 
     Compile the given Pyrex implementation file and return a CompilationResult.
     Always compiles a single file; does not perform timestamp checking or
     recursion.
     """
-
     # Configure language defaults before creating the Context so that parsing
     # sees the correct language level (affects e.g. division semantics).
-    source_ext = os.path.splitext(source)[1]
+    source_ext = Path(source).suffix
     options.configure_language_defaults(source_ext[1:])  # py/pyx
     if context is None:
         context = Context.from_options(options)
@@ -662,12 +654,13 @@ def compile_single(source: "str", options: "CompilationOptions", full_module_nam
     if cache:
         fingerprint = fingerprint or get_fingerprint(cache, source, options)
         return run_cached_pipeline(source, options, full_module_name, context, cache, fingerprint)
-    else:
-        return run_pipeline(source, options, full_module_name, context)
+
+    return run_pipeline(source, options, full_module_name, context)
 
 
-def compile_multiple(sources:"list[str]", options:"CompilationOptions", cache=None):
-    """
+def compile_multiple(sources:list[str], options:CompilationOptions, cache:Cache | None = None):
+    """Compile multiple Pyrex implementation files and return a CompilationResultSet.
+
     compile_multiple(sources, options, cache)
 
     Compiles the given sequence of Pyrex implementation files and returns
@@ -679,12 +672,12 @@ def compile_multiple(sources:"list[str]", options:"CompilationOptions", cache=No
                            'for single source compilation')
     # run_pipeline creates the context
     # context = Context.from_options(options)
-    sources = [os.path.abspath(source) for source in sources]
+    sources = [str(Path(source).resolve()) for source in sources]
     processed = set()
     results = CompilationResultSet()
     timestamps = options.timestamps
     context = None
-    cwd = os.getcwd()
+    cwd = str(Path.cwd())
     for source in sources:
         if source not in processed:
             output_filename = get_output_filename(source, cwd, options)
@@ -703,9 +696,8 @@ def compile_multiple(sources:"list[str]", options:"CompilationOptions", cache=No
     return results
 
 
-def compile(source: "str | list[str]", options: "CompilationOptions | None" = None, full_module_name: "str | None" = None, **kwds):
-    """
-    compile(source [, options], [, <option> = <value>]...)
+def compile(source: str | list[str], options: CompilationOptions | None = None, full_module_name: str | None = None, **kwds):
+    """Compile one or more Pyrex implementation files, with optional timestamp checking and recursing on dependencies.
 
     Compile one or more Pyrex implementation files, with optional timestamp
     checking and recursing on dependencies.  The source argument may be a string
@@ -714,6 +706,7 @@ def compile(source: "str | list[str]", options: "CompilationOptions | None" = No
     CompilationResultSet is returned.
     """
     from dataclasses import replace
+    options = options or CompilationOptions()
     options = replace(options, **kwds) if kwds else options
 
     # cache is enabled when:
@@ -738,9 +731,8 @@ def compile(source: "str | list[str]", options: "CompilationOptions | None" = No
 
 
 @Utils.cached_function
-def search_include_directories(dirs, qualified_name, suffix="", pos=None, include=False, source_file_path=None):
-    """
-    Search the list of include directories for the given file name.
+def search_include_directories(dirs: Iterable[str], qualified_name: str, suffix: str = "", pos: tuple[FileSourceDescriptor, int] | None = None, include: bool = False, source_file_path: str | None = None):
+    """Search the list of include directories for the given file name.
 
     If a source file path or position is given, first searches the directory
     containing that file.  Returns None if not found, but does not report an error.
@@ -754,9 +746,9 @@ def search_include_directories(dirs, qualified_name, suffix="", pos=None, includ
         source_file_path = file_desc.filename
     if source_file_path:
         if include:
-            dirs = (os.path.dirname(source_file_path),) + dirs
+            dirs = (str(Path(source_file_path).parent),*dirs)
         else:
-            dirs = (Utils.find_root_package_dir(source_file_path),) + dirs
+            dirs = (Utils.find_root_package_dir(source_file_path),*dirs)
 
     # search for dotted filename e.g. <dir>/foo.bar.pxd
     dotted_filename = qualified_name
@@ -764,8 +756,8 @@ def search_include_directories(dirs, qualified_name, suffix="", pos=None, includ
         dotted_filename += suffix
 
     for dirname in dirs:
-        path = os.path.join(dirname, dotted_filename)
-        if os.path.exists(path):
+        path = str(Path(dirname) / dotted_filename)
+        if Path(path).exists():
             return path
 
     # search for filename in package structure e.g. <dir>/foo/bar.pxd or <dir>/foo/bar/__init__.pxd
@@ -797,13 +789,13 @@ def search_include_directories(dirs, qualified_name, suffix="", pos=None, includ
 
 
 @Utils.cached_function
-def search_module_in_dir(package_dir, module_name, suffix):
+def search_module_in_dir(package_dir: str, module_name: str, suffix: str):
     # matches modules of the form: <dir>/foo/bar.pxd
     path = Utils.find_versioned_file(package_dir, module_name, suffix)
 
     # matches modules of the form: <dir>/foo/bar/__init__.pxd
     if not path and suffix:
-        path = Utils.find_versioned_file(os.path.join(package_dir, module_name), "__init__", suffix)
+        path = Utils.find_versioned_file(Path(str(package_dir)) / module_name, "__init__", suffix)
 
     return path
 
@@ -825,7 +817,7 @@ def main(command_line = 0):
         try:
             options, sources = parse_command_line(args)
         except FileNotFoundError as e:
-            print("{}: No such file or directory: '{}'".format(sys.argv[0], e.filename), file=sys.stderr)
+            print(f"{sys.argv[0]}: No such file or directory: '{e.filename}'", file=sys.stderr)
             sys.exit(1)
     else:
         options = CompilationOptions(**default_options)

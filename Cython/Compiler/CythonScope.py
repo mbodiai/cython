@@ -1,7 +1,7 @@
 from .Symtab import ModuleScope
 from .Code import UtilityCode
 from .PyrexTypes import (
-    CFuncType, CFuncTypeArg, c_bint_type, c_ptr_type, c_void_type, cy_integral_type, cy_floating_type, cy_numeric_type, cy_pymutex_type, cy_pythread_type_lock_type, py_object_type,
+    CFuncType, CFuncTypeArg, c_bint_type, c_ptr_type, c_void_type, cy_integral_type, cy_floating_type, cy_numeric_type, cy_pymutex_type, cy_pythread_type_lock_type, parse_basic_type, py_object_type,
 )
 from .UtilityCode import CythonUtilityCode
 from .Errors import error
