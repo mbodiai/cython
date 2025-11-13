@@ -1213,7 +1213,7 @@ def basic_struct(MyStruct[:] buf):
     >>> basic_struct(MyStructMockBuffer(None, [(1, 2, 3, 4, 5)], format="ccqii"))
     1 2 3 4 5
     """
-    print(buf[0].a, buf[0].b, buf[0].c, buf[0].d, buf[0].e)
+    print buf[0].a, buf[0].b, buf[0].c, buf[0].d, buf[0].e
 
 @testcase
 def const_struct(const MyStruct[:] buf):
@@ -1225,7 +1225,7 @@ def const_struct(const MyStruct[:] buf):
     >>> const_struct(MyStructMockBuffer(None, [(1, 2, 3, 4, 5)], format="ccqii", writable=False))
     1 2 3 4 5
     """
-    print(buf[0].a, buf[0].b, buf[0].c, buf[0].d, buf[0].e)
+    print buf[0].a, buf[0].b, buf[0].c, buf[0].d, buf[0].e
 
 @testcase
 def nested_struct(NestedStruct[:] buf):
@@ -1249,7 +1249,7 @@ def const_nested_struct(const NestedStruct[:] buf):
     >>> const_nested_struct(NestedStructMockBuffer(None, [(1, 2, 3, 4, 5)], format="T{ii}T{2i}i", writable=False))
     1 2 3 4 5
     """
-    print(buf[0].x.a, buf[0].x.b, buf[0].y.a, buf[0].y.b, buf[0].z)
+    print buf[0].x.a, buf[0].x.b, buf[0].y.a, buf[0].y.b, buf[0].z
 
 @testcase
 def packed_struct(PackedStruct[:] buf):
@@ -1264,7 +1264,7 @@ def packed_struct(PackedStruct[:] buf):
     1 2
 
     """
-    print(buf[0].a, buf[0].b)
+    print buf[0].a, buf[0].b
 
 @testcase
 def const_packed_struct(const PackedStruct[:] buf):
@@ -1279,7 +1279,7 @@ def const_packed_struct(const PackedStruct[:] buf):
     1 2
 
     """
-    print(buf[0].a, buf[0].b)
+    print buf[0].a, buf[0].b
 
 @testcase
 def nested_packed_struct(NestedPackedStruct[:] buf):
@@ -1293,7 +1293,7 @@ def nested_packed_struct(NestedPackedStruct[:] buf):
     >>> nested_packed_struct(NestedPackedStructMockBuffer(None, [(1, 2, 3, 4, 5)], format="^c@i^ci@i"))
     1 2 3 4 5
     """
-    print(buf[0].a, buf[0].b, buf[0].sub.a, buf[0].sub.b, buf[0].c)
+    print buf[0].a, buf[0].b, buf[0].sub.a, buf[0].sub.b, buf[0].c
 
 
 @testcase
@@ -1308,7 +1308,7 @@ def const_nested_packed_struct(const NestedPackedStruct[:] buf):
     >>> const_nested_packed_struct(NestedPackedStructMockBuffer(None, [(1, 2, 3, 4, 5)], format="^c@i^ci@i", writable=False))
     1 2 3 4 5
     """
-    print(buf[0].a, buf[0].b, buf[0].sub.a, buf[0].sub.b, buf[0].c)
+    print buf[0].a, buf[0].b, buf[0].sub.a, buf[0].sub.b, buf[0].c
 
 
 @testcase
@@ -1317,7 +1317,7 @@ def complex_dtype(long double complex[:] buf):
     >>> complex_dtype(LongComplexMockBuffer(None, [(0, -1)]))  # , writable=False))
     -1j
     """
-    print(buf[0])
+    print buf[0]
 
 @testcase
 def complex_inplace(long double complex[:] buf):
@@ -1326,7 +1326,7 @@ def complex_inplace(long double complex[:] buf):
     (1+1j)
     """
     buf[0] = buf[0] + 1 + 2j
-    print(buf[0])
+    print buf[0]
 
 @testcase
 def complex_struct_dtype(LongComplex[:] buf):
@@ -1336,7 +1336,7 @@ def complex_struct_dtype(LongComplex[:] buf):
     >>> complex_struct_dtype(LongComplexMockBuffer(None, [(0, -1)]))  # , writable=False))
     0.0 -1.0
     """
-    print(buf[0].real, buf[0].imag)
+    print buf[0].real, buf[0].imag
 
 @testcase
 def complex_struct_inplace(LongComplex[:] buf):
@@ -1346,7 +1346,7 @@ def complex_struct_inplace(LongComplex[:] buf):
     """
     buf[0].real += 1
     buf[0].imag += 2
-    print(buf[0].real, buf[0].imag)
+    print buf[0].real, buf[0].imag
 
 #
 # Nogil
@@ -1382,7 +1382,7 @@ objs = [[UniqueObject("spam")], [UniqueObject("ham")], [UniqueObject("eggs")]]
 addref(*[obj for L in objs for obj in L])
 cdef cdef_function(int[:] buf1, object[::view.indirect, :] buf2 = ObjectMockBuffer(None, objs)):
     print 'cdef called'
-    print(buf1[6], buf2[1, 0])
+    print buf1[6], buf2[1, 0]
     buf2[1, 0] = UniqueObject("eggs")
 
 @testcase
@@ -1432,7 +1432,7 @@ cdef object[::view.indirect, :] global_B = ObjectMockBuffer(None, objs)
 
 cdef cdef_function2(int[:] buf1, object[::view.indirect, :] buf2 = global_B):
     print 'cdef2 called'
-    print(buf1[6], buf2[1, 0])
+    print buf1[6], buf2[1, 0]
     buf2[1, 0] = UniqueObject("eggs")
 
 @testcase
@@ -1453,7 +1453,7 @@ def test_cdef_function2():
     del A
     del B
 
-    print(global_B[1, 0])
+    print global_B[1, 0]
 
     cdef_function2(global_A, global_B)
 
@@ -1493,10 +1493,12 @@ def test_generic_slicing(arg, indirect=False):
     cdef int[::view.generic, ::view.generic, :] a = arg
     cdef int[::view.generic, ::view.generic, :] b = a[2:8:2, -4:1:-1, 1:3]
 
-    print(b.shape[0], b.shape[1], b.shape[2])
+    print b.shape[0], b.shape[1], b.shape[2]
 
     if indirect:
-        print(b.suboffsets[0] // sizeof(int *), b.suboffsets[1] // sizeof(int), b.suboffsets[2])
+        print b.suboffsets[0] // sizeof(int *),
+        print b.suboffsets[1] // sizeof(int),
+        print b.suboffsets[2]
     else:
         print_int_offsets(b.strides[0], b.strides[1], b.strides[2])
         print_int_offsets(b.suboffsets[0], b.suboffsets[1], b.suboffsets[2])
@@ -1555,23 +1557,23 @@ def test_indirect_slicing(arg):
     cdef int[::view.generic, :] generic_d = generic_b[4]
     cdef int[:] generic_e = generic_b[4, 2]
 
-    print(b.shape[0], b.shape[1], b.shape[2])
-    print(b.suboffsets[0] // sizeof(int *))
-    print(b.suboffsets[1] // sizeof(int))
-    print(b.suboffsets[2])
+    print b.shape[0], b.shape[1], b.shape[2]
+    print b.suboffsets[0] // sizeof(int *),
+    print b.suboffsets[1] // sizeof(int),
+    print b.suboffsets[2]
 
-    print(b[4, 2, 1])
-    print(c[4, 2])
+    print b[4, 2, 1]
+    print c[4, 2]
     # test adding offset from last dimension to suboffset
-    print(b[..., 1][4, 2])
+    print b[..., 1][4, 2]
 
-    print("index away indirect")
-    print(d[2, 1])
-    print(e[1])
+    print "index away indirect"
+    print d[2, 1]
+    print e[1]
 
-    print("index away generic")
-    print(generic_d[2, 1])
-    print(generic_e[1])
+    print "index away generic"
+    print generic_d[2, 1]
+    print generic_e[1]
 
 cdef class TestIndexSlicingDirectIndirectDims(object):
     "Test a int[:, ::view.indirect, :] slice"

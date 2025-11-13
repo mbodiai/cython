@@ -265,7 +265,7 @@ def nested_struct(NestedStruct[:] mslice):
     """
     cdef object buf = mslice
     d = buf[0]
-    print(d['x']['a'], d['x']['b'], d['y']['a'], d['y']['b'], d['z'])
+    print d['x']['a'], d['x']['b'], d['y']['a'], d['y']['b'], d['z']
 
 def packed_struct(PackedStruct[:] mslice):
     """
@@ -280,7 +280,7 @@ def packed_struct(PackedStruct[:] mslice):
 
     """
     cdef object buf = mslice
-    print(buf[0]['a'], buf[0]['b'])
+    print buf[0]['a'], buf[0]['b']
 
 def nested_packed_struct(NestedPackedStruct[:] mslice):
     """
@@ -295,7 +295,7 @@ def nested_packed_struct(NestedPackedStruct[:] mslice):
     """
     cdef object buf = mslice
     d = buf[0]
-    print(d['a'], d['b'], d['sub']['a'], d['sub']['b'], d['c'])
+    print d['a'], d['b'], d['sub']['a'], d['sub']['b'], d['c']
 
 
 def complex_dtype(long double complex[:] mslice):
@@ -304,7 +304,7 @@ def complex_dtype(long double complex[:] mslice):
     -1j
     """
     cdef object buf = mslice
-    print(buf[0])
+    print buf[0]
 
 def complex_inplace(long double complex[:] mslice):
     """
@@ -313,7 +313,7 @@ def complex_inplace(long double complex[:] mslice):
     """
     cdef object buf = mslice
     buf[0] = buf[0] + 1 + 2j
-    print(buf[0])
+    print buf[0]
 
 def complex_struct_dtype(LongComplex[:] mslice):
     """
@@ -323,7 +323,7 @@ def complex_struct_dtype(LongComplex[:] mslice):
     0.0 -1.0
     """
     cdef object buf = mslice
-    print(buf[0]['real'], buf[0]['imag'])
+    print buf[0]['real'], buf[0]['imag']
 
 #
 # Getting items and index bounds checking
@@ -544,14 +544,14 @@ def generic(int[::view.generic, ::view.generic] mslice1,
     """
     buf1, buf2 = mslice1, mslice2
 
-    print(buf1[1, 1])
-    print(buf2[1, 1])
+    print buf1[1, 1]
+    print buf2[1, 1]
 
     buf1[2, -1] = 10
     buf2[2, -1] = 11
 
-    print(buf1[2, 2])
-    print(buf2[2, 2])
+    print buf1[2, 2]
+    print buf2[2, 2]
 
 #def generic_contig(int[::view.generic_contiguous, :] mslice1,
 #                   int[::view.generic_contiguous, :] mslice2):

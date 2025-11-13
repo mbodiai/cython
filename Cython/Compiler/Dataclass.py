@@ -3,6 +3,7 @@
 from collections import OrderedDict
 from textwrap import dedent
 import operator
+from typing import TYPE_CHECKING
 
 from . import ExprNodes
 from . import Nodes
@@ -16,6 +17,10 @@ from .StringEncoding import EncodedString
 from .TreeFragment import TreeFragment
 from .ParseTreeTransforms import NormalizeTree, SkipDeclarations
 from .Options import copy_inherited_directives
+
+if TYPE_CHECKING:
+    from .Nodes import  ExprNode,CClassDefNode
+    from .ParseTreeTransforms import AnalyseDeclarationsTransform
 
 def make_dataclasses_module_callnode(pos):
     dataclass_loader_utilitycode = UtilityCode.load_cached(
@@ -132,7 +137,7 @@ class TemplateCode:
 
     def add_extra_statements(self, statements):
         if self.extra_stats is None:
-            assert False, "Can only use add_extra_statements on top-level writer"
+            raise ValueError("Can only use add_extra_statements on top-level writer")
         self.extra_stats.extend(statements)
 
     def _new_placeholder_name(self, field_names):
@@ -290,7 +295,7 @@ def process_class_get_fields(node):
     return fields
 
 
-def handle_cclass_dataclass(node, dataclass_args, analyse_decs_transform):
+def handle_cclass_dataclass(node: "CClassDefNode", dataclass_args: "tuple[bool, dict[str, ExprNode]]", analyse_decs_transform: "AnalyseDeclarationsTransform"):
     # default argument values from https://docs.python.org/3/library/dataclasses.html
     kwargs = dict(init=True, repr=True, eq=True,
                   order=False, unsafe_hash=False,

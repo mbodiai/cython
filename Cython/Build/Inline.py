@@ -3,7 +3,6 @@ import hashlib
 import importlib.util
 import inspect
 import json
-from numpy import ndarray
 import os
 from pathlib import Path
 import re
@@ -13,7 +12,7 @@ from datetime import datetime
 from distutils.command.build_ext import build_ext
 from distutils.core import Distribution, Extension
 from importlib.machinery import ExtensionFileLoader
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 import Cython
 import cython as cython_module
 
@@ -23,7 +22,6 @@ from ..Compiler.Options import CompilationOptions, default_options, get_directiv
 from ..Compiler.ParseTreeTransforms import SkipDeclarations
 from ..Compiler.TreeFragment import parse_from_strings
 from ..Compiler.Visitor import EnvTransform
-from .Cache import get_cython_cache_dir
 from .Dependencies import cached_function, cythonize, strip_string_literals
 
 from mbcore.utils.import_utils import smart_import
@@ -210,8 +208,7 @@ def _inline_key(orig_code, arg_sigs, language_level):
 def cython_inline(code, get_type=unsafe_type,
                   lib_dir=None,
                   cython_include_dirs=None, cython_compiler_directives=None,
-                  force=False, quiet=False, locals=None, globals=None, language_level=None,
-                  cache_config=None, *,
+                  force=False, quiet=False, locals=None, globals=None, language_level=None,*,
                   pyx_references=None,
                   **kwds):
 
@@ -263,43 +260,37 @@ def cython_inline(code, get_type=unsafe_type,
     arg_sigs = tuple([(get_type(kwds[arg], ctx), arg) for arg in arg_names])
     if key_hash is None:
         key_hash = _inline_key(orig_code, arg_sigs, language_level)
-    # Build module name (semantic or hashed)
-    caller_info = _get_caller_info()
-    module_name = _make_semantic_name(key_hash, caller_info, cache_config)
 
-    if module_name in sys.modules:
-        module = sys.modules[module_name]
 
-    else:
-        build_extension = None
-        if cython_inline.so_ext is None:
-            # Figure out and cache current extension suffix
-            build_extension = _get_build_extension()
-            cython_inline.so_ext = build_extension.get_ext_filename('')
+    build_extension = None
+    if cython_inline.so_ext is None:
+        # Figure out and cache current extension suffix
+        build_extension = _get_build_extension()
+        cython_inline.so_ext = build_extension.get_ext_filename('')
 
-        lib_dir = os.path.abspath(lib_dir)
-        module_path = os.path.join(lib_dir, module_name + cython_inline.so_ext)
+    lib_dir = os.path.abspath(lib_dir)
+    module_path = os.path.join(lib_dir, module_name + cython_inline.so_ext)
 
-        if not os.path.exists(lib_dir):
-            os.makedirs(lib_dir)
-        if force or not os.path.isfile(module_path):
-            cflags = []
-            define_macros = []
-            c_include_dirs = []
-            qualified = re.compile(r'([.\w]+)[.]')
-            for type, _ in arg_sigs:
-                m = qualified.match(type)
-                if m:
-                    cimports.append('\ncimport %s' % m.groups()[0])
-                    # one special case
-                    if m.groups()[0] == 'numpy':
-                        import numpy
-                        c_include_dirs.append(numpy.get_include())
-                        define_macros.append(("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION"))
-                        cflags.append('-Wno-unused')
-            module_body, func_body = extract_func_code(code)
-            params = ', '.join(['%s %s' % a for a in arg_sigs])
-            module_code = """
+    if not os.path.exists(lib_dir):
+        os.makedirs(lib_dir)
+    if force or not os.path.isfile(module_path):
+        cflags = []
+        define_macros = []
+        c_include_dirs = []
+        qualified = re.compile(r'([.\w]+)[.]')
+        for type, _ in arg_sigs:
+            m = qualified.match(type)
+            if m:
+                cimports.append('\ncimport %s' % m.groups()[0])
+                # one special case
+                if m.groups()[0] == 'numpy':
+                    import numpy
+                    c_include_dirs.append(numpy.get_include())
+                    define_macros.append(("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION"))
+                    cflags.append('-Wno-unused')
+        module_body, func_body = extract_func_code(code)
+        params = ', '.join(['%s %s' % a for a in arg_sigs])
+        module_code = """
 %(module_body)s
 %(cimports)s
 def __invoke(%(params)s):

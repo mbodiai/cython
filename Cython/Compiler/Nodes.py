@@ -9216,7 +9216,7 @@ class CythonLockStatNode(TryFinallyStatNode):
             body = body.stats[0]
         return super().analyse_expressions(env)
 
-    def generate_execution_code(self, code):
+    def generate_execution_code(self, code:"CCodeWriter"):
         code.globalstate.use_utility_code(self.arg.type.get_utility_code())
 
         code.mark_pos(self.pos)

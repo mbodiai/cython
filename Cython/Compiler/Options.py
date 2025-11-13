@@ -1,14 +1,29 @@
-# 
+#
 #  Cython - Compilation-wide options and pragma declarations
 #
 import ast
 import copy
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field, asdict
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Generic, List, Optional, Self, TypeVar, Union, Callable, Type, Tuple, Literal, TypedDict, cast, TYPE_CHECKING, overload
+from typing import (
+    Any,
+    Dict,
+    List,
+    Optional,
+    Self,
+    Union,
+    Callable,
+    Type,
+    Tuple,
+    Literal,
+    TypedDict,
+    cast,
+    TYPE_CHECKING,
+)
 
-from mbcore.abstract import MatchAST, func_def
+from Cython.Abstract import MatchAST, func_def
+
 if TYPE_CHECKING:
     from typing import Unpack
 else:
@@ -17,10 +32,10 @@ else:
 embedding_file_name: Optional[str]
 
 
-
 class DataDict(dict):
-    def copy(self)->Self:
+    def copy(self) -> Self:
         return type(self)(**self)
+
     def __deepcopy__(self, memo):
         cls = type(self)
         result = cls.__new__(cls)
@@ -29,22 +44,25 @@ class DataDict(dict):
         for key, value in self.items():
             result[key] = copy.deepcopy(value, memo)
         return result
+
     def __getattr__(self, name: str) -> Any:
         if dict.__contains__(self, name):
             return dict.__getitem__(self, name)
         raise AttributeError(f"{self.__class__.__name__} has no attribute {name}")
+
     def __contains__(self, key: object) -> bool:
         if not isinstance(key, str):
             return False
         cur: Any = self
-        while '.' in key:
-            head, key = key.split('.', 1)
+        while "." in key:
+            head, key = key.split(".", 1)
             if not dict.__contains__(cur, head):
                 return False
             cur = dict.__getitem__(cur, head)
             if not isinstance(cur, dict):
                 return False
         return dict.__contains__(cur, key) or key in getattr(type(self), "__dataclass_fields__", [])
+
     def __setattr__(self, name: str, value: Any) -> None:
         if name in getattr(type(self), "__dataclass_fields__", []):
             object.__setattr__(self, name, value)
@@ -54,8 +72,8 @@ class DataDict(dict):
 
     def __getitem__(self, key: str) -> Any:
         cur: Any = self
-        while '.' in key:
-            head, key = key.split('.', 1)
+        while "." in key:
+            head, key = key.split(".", 1)
             if not dict.__contains__(cur, head):
                 raise KeyError(head)
             next_val = dict.__getitem__(cur, head)
@@ -65,15 +83,15 @@ class DataDict(dict):
         if dict.__contains__(cur, key):
             val = dict.__getitem__(cur, key)
             # If retrieving a group without a subkey, expose its 'enabled' if present
-            if isinstance(val, dict) and 'enabled' in val:
-                return val['enabled']
+            if isinstance(val, dict) and "enabled" in val:
+                return val["enabled"]
             return val
         raise KeyError(key)
 
     def __setitem__(self, key: str, value: Any) -> None:
         # Support dotted assignment into nested mappings
-        if '.' in key:
-            head, tail = key.split('.', 1)
+        if "." in key:
+            head, tail = key.split(".", 1)
             # Use raw dict containment to avoid DataDict.__contains__ semantics here
             if dict.__contains__(self, head) and isinstance(dict.__getitem__(self, head), dict):
                 dict.__getitem__(self, head)[tail] = value
@@ -81,8 +99,8 @@ class DataDict(dict):
         # If setting a group value and it has an 'enabled' toggle, store there
         if dict.__contains__(self, key):
             cur_val = dict.__getitem__(self, key)
-            if isinstance(cur_val, dict) and 'enabled' in cur_val and not isinstance(value, dict):
-                cur_val['enabled'] = value
+            if isinstance(cur_val, dict) and "enabled" in cur_val and not isinstance(value, dict):
+                cur_val["enabled"] = value
                 if key in getattr(type(self), "__dataclass_fields__", []):
                     object.__setattr__(self, key, cur_val)
                 return
@@ -105,27 +123,32 @@ class DataDict(dict):
             object.__delattr__(self, key)
 
 
+DirectiveScopeType = Literal["module", "function", "cclass", "class", "with statement"]
 
-DirectiveScopeType = Literal["module", "function", "cclass", "class","with statement"]
+
 @dataclass
 class AutotestdictDirectivesScopes(DataDict):
     all: DirectiveScopeType = "module"
     cdef: DirectiveScopeType = "module"
+
 
 @dataclass
 class DataclassDirectivesScopes(DataDict):
     dataclass: DirectiveScopeType = "class"
     field: DirectiveScopeType = "class"
 
+
 @dataclass
 class AutotestdictDirectives(DataDict):
     all: bool = True
     cdef: bool = True
 
+
 @dataclass
 class EmbedSignatureDirectives(DataDict):
     enabled: bool = False
     format: str = "c"
+
 
 @dataclass
 class OverflowcheckDirectives(DataDict):
@@ -133,23 +156,26 @@ class OverflowcheckDirectives(DataDict):
     fold: bool = True
 
 
-
 @dataclass
 class InferTypesDirectives(DataDict):
     enabled: bool = True
     verbose: bool = False
 
+
 @dataclass
 class LanguageLevelDirectives(DataDict):
     level: str = "3"
+
 
 @dataclass
 class FastGetattrDirectives(DataDict):
     fast: bool = True
 
+
 @dataclass
 class Py2ImportDirectives(DataDict):
     py2: bool = False
+
 
 @dataclass
 class WarnDirectives(DataDict):
@@ -164,6 +190,7 @@ class WarnDirectives(DataDict):
     deprecated_DEF: bool = False
     deprecated_IF: bool = False
 
+
 @dataclass
 class OptimizeDirectives(DataDict):
     inline_defnode_calls: bool = True
@@ -171,11 +198,13 @@ class OptimizeDirectives(DataDict):
     unpack_method_calls_in_pyinit: bool = True
     use_switch: bool = True
 
+
 class OptimizeDirectivesDict(TypedDict, total=False):
     inline_defnode_calls: bool
     unpack_method_calls: bool
     unpack_method_calls_in_pyinit: bool
     use_switch: bool
+
 
 @dataclass
 class ControlFlowDirectivesScopes(DataDict):
@@ -184,12 +213,14 @@ class ControlFlowDirectivesScopes(DataDict):
     dot_output: DirectiveScopeType = "module"
     dot_annotate_defs: DirectiveScopeType = "module"
 
+
 @dataclass
 class ControlFlowDirectives(DataDict):
     output: str = ""
     annotate_defs: bool = False
     dot_output: str = ""
     dot_annotate_defs: bool = False
+
 
 @dataclass
 class TestDirectives(DataDict):
@@ -198,9 +229,11 @@ class TestDirectives(DataDict):
     assert_c_code_has: List[str]
     fail_if_c_code_has: List[str]
 
+
 @dataclass
 class DirectivesDict(TypedDict, total=False):
     """TypedDict representing the default values for compiler directives."""
+
     binding: bool
     boundscheck: bool
     nonecheck: bool
@@ -257,6 +290,7 @@ class DirectivesDict(TypedDict, total=False):
     test_fail_if_c_code_has: List[str]
     formal_grammar: bool
 
+
 class DirectiveDefaultsDict(DirectivesDict, total=True):
     """TypedDict for a complete set of directive defaults.
 
@@ -264,9 +298,11 @@ class DirectiveDefaultsDict(DirectivesDict, total=True):
     always contains all directive keys with their default values.
     """
 
+
 class DirectiveScopesDict(TypedDict, total=False):
     """TypedDict representing directive scopes mapping directives to their allowed scopes."""
-    auto_pickle: tuple[DirectiveScopeType, ...      ]
+
+    auto_pickle: tuple[DirectiveScopeType, ...]
     final: tuple[DirectiveScopeType, ...]
     ccomplex: tuple[DirectiveScopeType, ...]
     collection_type: tuple[DirectiveScopeType, ...]
@@ -315,12 +351,13 @@ class DirectiveScopesDict(TypedDict, total=False):
     subinterpreters_compatible: tuple[DirectiveScopeType, ...]
 
 
-
 # Sentinel for deferred analysis arguments
 class _DeferAnalysisOfArgumentsType:
     """Sentinel value to defer analysis of function arguments."""
+
     def __repr__(self):
         return "DEFER_ANALYSIS_OF_ARGUMENTS"
+
 
 # Create a singleton instance
 DEFER_ANALYSIS_OF_ARGUMENTS = _DeferAnalysisOfArgumentsType()
@@ -330,12 +367,11 @@ DEFER_ANALYSIS_OF_ARGUMENTS = _DeferAnalysisOfArgumentsType()
 # ---------------------------------------------------------------------------
 
 # Forward reference string avoids the need to define the class before this alias
-DirectiveType = Union[Type, Callable[[str, Any], Any], '_DeferAnalysisOfArgumentsType', None]
+DirectiveType = Union[Type, Callable[[str, Any], Any], "_DeferAnalysisOfArgumentsType", None]
 # Mapping from directive-name strings to their validation/typing helpers
 
 
 class ShouldBeFromDirective:
-
     known_directives = []
 
     def __init__(self, options_name, directive_name=None, disallow=False):
@@ -477,7 +513,7 @@ embed_modules = []
 # These are placeholders managed by ShouldBeFromDirective.
 # In previous iterations of Cython, globals() gave the first non-Cython module
 # globals in the call stack.  Sage relies on this behavior for variable injection.
-old_style_globals = ShouldBeFromDirective('old_style_globals')
+old_style_globals = ShouldBeFromDirective("old_style_globals")
 
 #: Allows cimporting from a pyx file without a pxd file.
 cimport_from_pyx = False
@@ -492,25 +528,27 @@ closure_freelist_size = 8
 
 # Extra warning directives
 extra_warnings = {
-    'warn.maybe_uninitialized': True,
-    'warn.unreachable': True,
-    'warn.unused': True,
+    "warn.maybe_uninitialized": True,
+    "warn.unreachable": True,
+    "warn.unused": True,
 }
+
 
 @dataclass
 class Directives(DataDict):
     """Dataclass representing all Cython compiler directives with their default values."""
+
     # Default values for all directives
     binding: bool = True  # was False before 3.0
     boundscheck: bool = False
     nonecheck: bool = False
     initializedcheck: bool = True
     freethreading_compatible: bool = False
-    subinterpreters_compatible: str = 'no'
+    subinterpreters_compatible: str = "no"
     embedsignature: EmbedSignatureDirectives = field(default_factory=EmbedSignatureDirectives)
     auto_cpdef: bool = False
     auto_pickle: Optional[bool] = None
-    cdivision: bool =True
+    cdivision: bool = True
     cdivision_warnings: bool = False
     cpow: bool = True
     c_api_binop_methods: bool = True
@@ -530,20 +568,30 @@ class Directives(DataDict):
     infer_types: InferTypesDirectives = field(default_factory=InferTypesDirectives)
     autotestdict: AutotestdictDirectives = field(default_factory=AutotestdictDirectives)
     language_level: str = "3"
-    fast_getattr: bool = False  # Undocumented until we come up with a better way to handle this everywhere.
-    py2_import: bool = False  # For backward compatibility of Cython's source code in Py3 source mode
-    preliminary_late_includes_cy28: bool = False  # Temporary directive in 0.28, to be removed in a later version (see GH#2079).
-    iterable_coroutine: bool = False  # Make async coroutines backwards compatible with the old asyncio yield-from syntax.
-    c_string_type: str = 'bytes'
-    c_string_encoding: str = ''
+    fast_getattr: bool = (
+        False  # Undocumented until we come up with a better way to handle this everywhere.
+    )
+    py2_import: bool = (
+        False  # For backward compatibility of Cython's source code in Py3 source mode
+    )
+    preliminary_late_includes_cy28: bool = (
+        False  # Temporary directive in 0.28, to be removed in a later version (see GH#2079).
+    )
+    iterable_coroutine: bool = (
+        False  # Make async coroutines backwards compatible with the old asyncio yield-from syntax.
+    )
+    c_string_type: str = "bytes"
+    c_string_encoding: str = ""
     type_version_tag: bool = True  # enables Py_TPFLAGS_HAVE_VERSION_TAG on extension types
     unraisable_tracebacks: bool = True
     old_style_globals: bool = False
     np_pythran: bool = False
     fast_gil: bool = True
-    cpp_locals: bool = False  # uses std::optional for C++ locals, so that they work more like Python locals
+    cpp_locals: bool = (
+        False  # uses std::optional for C++ locals, so that they work more like Python locals
+    )
     legacy_implicit_noexcept: bool = False
-    c_compile_guard: str = ''
+    c_compile_guard: str = ""
     set_initial_path: Optional[str] = None  # SOURCEFILE or "/full/path/to/module"
     warn: WarnDirectives = field(default_factory=WarnDirectives)
     show_performance_hints: bool = True
@@ -557,23 +605,24 @@ class Directives(DataDict):
     formal_grammar: bool = False
     overload_dispatch: bool = True
 
- 
-
 
 def get_directive_defaults() -> Directives:
     """Return a copy of the directive defaults dictionary."""
     return Directives()
 
 
-def parse_directive_list(s: str, relaxed_bool: bool = False,
-                         ignore_unknown: bool = False,
-                         current_settings: Optional[DirectivesDict] = None) -> DirectivesDict:
+def parse_directive_list(
+    s: str,
+    relaxed_bool: bool = False,
+    ignore_unknown: bool = False,
+    current_settings: Optional[DirectivesDict] = None,
+) -> DirectivesDict:
     """Public wrapper for _parse_directive_list for backward compatibility."""
     return _parse_directive_list(s, relaxed_bool, ignore_unknown, current_settings)
 
+
 def _copy_inherited_directives(
-    outer_directives: DirectivesDict|Directives,
-    **new_directives: Unpack[DirectivesDict]
+    outer_directives: DirectivesDict | Directives, **new_directives: Unpack[DirectivesDict]
 ) -> DirectivesDict:
     # A few directives are not copied downwards and this function removes them.
     # For example, test_assert_path_exists and test_fail_if_path_exists should not be inherited
@@ -585,11 +634,11 @@ def _copy_inherited_directives(
         new_directives_out = cast(DirectivesDict, outer_directives.copy())
 
     removal_keys: Tuple[RemovalKey, ...] = (
-        'test_assert_path_exists',
-        'test_fail_if_path_exists',
-        'test_assert_c_code_has',
-        'test_fail_if_c_code_has',
-        'critical_section',
+        "test_assert_path_exists",
+        "test_fail_if_path_exists",
+        "test_assert_c_code_has",
+        "test_fail_if_c_code_has",
+        "critical_section",
     )
     for name in removal_keys:
         if name in new_directives_out:
@@ -597,7 +646,9 @@ def _copy_inherited_directives(
     new_directives_out.update(**new_directives)
     return new_directives_out
 
+
 copy_inherited_directives = _copy_inherited_directives
+
 
 def copy_for_internal(outer_directives: DirectivesDict) -> DirectivesDict:
     # Reset some directives that users should not control for internal code.
@@ -607,24 +658,28 @@ def copy_for_internal(outer_directives: DirectivesDict) -> DirectivesDict:
         profile=False,
         linetrace=False,
     )
+
+
 _copy_for_internal = copy_for_internal
+
+
 def one_of(*args, map=None):
     def validate(name, value):
         if map is not None:
             value = map.get(value, value)
         if value not in args:
-            raise ValueError("%s directive must be one of %s, got '%s'" % (
-                name, args, value))
+            raise ValueError("%s directive must be one of %s, got '%s'" % (name, args, value))
         return value
+
     return validate
 
 
 _normalise_common_encoding_name = {
-    'utf8': 'utf8',
-    'utf-8': 'utf8',
-    'default': 'utf8',
-    'ascii': 'ascii',
-    'us-ascii': 'ascii',
+    "utf8": "utf8",
+    "utf-8": "utf8",
+    "default": "utf8",
+    "ascii": "ascii",
+    "us-ascii": "ascii",
 }.get
 
 
@@ -647,50 +702,51 @@ def normalise_encoding_name(option_name, encoding):
     'SeriousLyNoSuch--Encoding'.
     """  # noqa: D205, D402
     if not encoding:
-        return ''
+        return ""
     encoding_name = _normalise_common_encoding_name(encoding.lower())
     if encoding_name is not None:
         return encoding_name
 
     return encoding
 
+
 DirectiveTypesMap = Dict[str, DirectiveType]
 # Override types possibilities above, if needed
 directive_types: DirectiveTypesMap = {
-    'language_level': str,  # values can be None/2/3/'3str', where None == 2+warning
-    'auto_pickle': bool,
-    'locals': dict,
-    'final' : bool,  # final cdef classes and methods
-    'collection_type': one_of('sequence'),
-    'nogil' : DEFER_ANALYSIS_OF_ARGUMENTS,
-    'gil' : DEFER_ANALYSIS_OF_ARGUMENTS,
-    'critical_section' : DEFER_ANALYSIS_OF_ARGUMENTS,
-    'with_gil' : None,
-    'internal' : bool,  # cdef class visibility in the module dict
-    'infer_types.verbose' : DEFER_ANALYSIS_OF_ARGUMENTS,
-    'infer_types.enabled' : DEFER_ANALYSIS_OF_ARGUMENTS,
-    'binding' : bool,
-    'cfunc' : None,  # decorators do not take directive value
-    'ccall' : None,
-    'ufunc': None,
-    'cpow' : bool,
-    'inline' : None,
-    'staticmethod' : None,
-    'cclass' : None,
-    'no_gc_clear' : bool,
-    'no_gc' : bool,
-    'returns' : type,
-    'exceptval': type,  # actually (type, check=True/False), but has its own parser
-    'set_initial_path': str,
-    'freelist': int,
-    'c_string_type': one_of('bytes', 'bytearray', 'str', 'unicode', map={'unicode': 'str'}),
-    'c_string_encoding': normalise_encoding_name,
-    'trashcan': bool,
-    'total_ordering': None,
-    'dataclasses.dataclass': DEFER_ANALYSIS_OF_ARGUMENTS,
-    'dataclasses.field': DEFER_ANALYSIS_OF_ARGUMENTS,
-    'embedsignature.format': one_of('c', 'clinic', 'python'),
-    'subinterpreters_compatible': one_of('no', 'shared_gil', 'own_gil'),
+    "language_level": str,  # values can be None/2/3/'3str', where None == 2+warning
+    "auto_pickle": bool,
+    "locals": dict,
+    "final": bool,  # final cdef classes and methods
+    "collection_type": one_of("sequence"),
+    "nogil": DEFER_ANALYSIS_OF_ARGUMENTS,
+    "gil": DEFER_ANALYSIS_OF_ARGUMENTS,
+    "critical_section": DEFER_ANALYSIS_OF_ARGUMENTS,
+    "with_gil": None,
+    "internal": bool,  # cdef class visibility in the module dict
+    "infer_types.verbose": DEFER_ANALYSIS_OF_ARGUMENTS,
+    "infer_types.enabled": DEFER_ANALYSIS_OF_ARGUMENTS,
+    "binding": bool,
+    "cfunc": None,  # decorators do not take directive value
+    "ccall": None,
+    "ufunc": None,
+    "cpow": bool,
+    "inline": None,
+    "staticmethod": None,
+    "cclass": None,
+    "no_gc_clear": bool,
+    "no_gc": bool,
+    "returns": type,
+    "exceptval": type,  # actually (type, check=True/False), but has its own parser
+    "set_initial_path": str,
+    "freelist": int,
+    "c_string_type": one_of("bytes", "bytearray", "str", "unicode", map={"unicode": "str"}),
+    "c_string_encoding": normalise_encoding_name,
+    "trashcan": bool,
+    "total_ordering": None,
+    "dataclasses.dataclass": DEFER_ANALYSIS_OF_ARGUMENTS,
+    "dataclasses.field": DEFER_ANALYSIS_OF_ARGUMENTS,
+    "embedsignature.format": one_of("c", "clinic", "python"),
+    "subinterpreters_compatible": one_of("no", "shared_gil", "own_gil"),
 }
 
 for key, val in get_directive_defaults().items():
@@ -698,7 +754,7 @@ for key, val in get_directive_defaults().items():
         directive_types[key] = type(val)
 
 # For 'with statement' strings in tuples
-WithStatement = Literal['with statement']
+WithStatement = Literal["with statement"]
 
 # Create a mapping for scopes with dots in their names
 
@@ -706,20 +762,38 @@ WithStatement = Literal['with statement']
 # A list of directives that (when used as a decorator) are only applied to
 # the object they decorate and not to its children.
 immediate_decorator_directives = {
-    'cfunc', 'ccall', 'cclass', 'dataclasses.dataclass', 'ufunc',
+    "cfunc",
+    "ccall",
+    "cclass",
+    "dataclasses.dataclass",
+    "ufunc",
     # function signature directives
-    'inline', 'exceptval', 'returns', 'with_gil',  # 'nogil',
+    "inline",
+    "exceptval",
+    "returns",
+    "with_gil",  # 'nogil',
     # class directives
-    'freelist', 'no_gc', 'no_gc_clear', 'type_version_tag', 'final',
-    'auto_pickle', 'internal', 'collection_type', 'total_ordering',
+    "freelist",
+    "no_gc",
+    "no_gc_clear",
+    "type_version_tag",
+    "final",
+    "auto_pickle",
+    "internal",
+    "collection_type",
+    "total_ordering",
     # testing directives
-    'test_fail_if_path_exists', 'test_assert_path_exists',
+    "test_fail_if_path_exists",
+    "test_assert_path_exists",
 }
 
 
-def _parse_directive_list(s: str, relaxed_bool: bool = False,
-                          ignore_unknown: bool = False,
-                          current_settings: Optional[DirectivesDict] = None) -> DirectivesDict:
+def _parse_directive_list(
+    s: str,
+    relaxed_bool: bool = False,
+    ignore_unknown: bool = False,
+    current_settings: Optional[DirectivesDict] = None,
+) -> DirectivesDict:
     """Parses a comma-separated list of pragma options. Whitespace
     is not considered.
 
@@ -749,21 +823,23 @@ def _parse_directive_list(s: str, relaxed_bool: bool = False,
     # Start with a properly typed result dictionary
     directives = Directives()
     result: DirectivesDict = {} if current_settings is None else current_settings
-    for item in s.split(','):
+    for item in s.split(","):
         item = item.strip()
         if not item:
             continue
-        if '=' not in item:
+        if "=" not in item:
             raise ValueError('Expected "=" in option "%s"' % item)
-        name, value = [s.strip() for s in item.strip().split('=', 1)]
+        name, value = [s.strip() for s in item.strip().split("=", 1)]
         # Expand "*.all" first, even if it exists as a default key
-        if name.endswith('.all'):
+        if name.endswith(".all"):
             prefix = name[:-3]  # keep trailing dot like upstream for simple startswith()
             found_any = False
             for directive in directives:
                 if directive.startswith(prefix):
                     found_any = True
-                    parsed_value = _parse_directive_value(directive, value, relaxed_bool=relaxed_bool)
+                    parsed_value = _parse_directive_value(
+                        directive, value, relaxed_bool=relaxed_bool
+                    )
                     result[directive] = parsed_value
             if not found_any and not ignore_unknown:
                 raise ValueError('Unknown option: "%s"' % name)
@@ -783,16 +859,18 @@ def _parse_directive_list(s: str, relaxed_bool: bool = False,
     return result
 
 
-
-
 RemovalKey = Literal[
-    'test_assert_path_exists',
-    'test_fail_if_path_exists',
-    'test_assert_c_code_has',
-    'test_fail_if_c_code_has',
-    'critical_section',
+    "test_assert_path_exists",
+    "test_fail_if_path_exists",
+    "test_assert_c_code_has",
+    "test_fail_if_c_code_has",
+    "critical_section",
 ]
-def parse_compile_time_env(s: str, current_settings:    DirectivesDict|None = None) -> DirectivesDict:
+
+
+def parse_compile_time_env(
+    s: str, current_settings: DirectivesDict | None = None
+) -> DirectivesDict:
     """Parse a comma-separated list of pragma options. Whitespace is not considered.
 
     >>> parse_compile_time_env('      ')
@@ -806,13 +884,13 @@ def parse_compile_time_env(s: str, current_settings:    DirectivesDict|None = No
     True
     """
     result = current_settings or {}
-    for item in s.split(','):
+    for item in s.split(","):
         item = item.strip()
         if not item:
             continue
-        if '=' not in item:
+        if "=" not in item:
             raise ValueError('Expected "=" in option "%s"' % item)
-        name, value = [s.strip() for s in item.split('=', 1)]
+        name, value = [s.strip() for s in item.split("=", 1)]
         result[name] = _parse_directive_value(name, value)
     return result
 
@@ -825,9 +903,9 @@ def _parse_directive_value(name: str, value: Any, relaxed_bool: bool = False) ->
     orig_value = value
     if type_info is bool:
         value = str(value)
-        if value == 'True':
+        if value == "True":
             return True
-        if value == 'False':
+        if value == "False":
             return False
         if relaxed_bool:
             value = value.lower()
@@ -835,25 +913,26 @@ def _parse_directive_value(name: str, value: Any, relaxed_bool: bool = False) ->
                 return True
             elif value in ("false", "no"):
                 return False
-        raise ValueError("%s directive must be set to True or False, got '%s'" % (
-            name, orig_value))
+        raise ValueError("%s directive must be set to True or False, got '%s'" % (name, orig_value))
     elif type_info is int:
         try:
             return int(value)
         except ValueError as e:
-            raise ValueError("%s directive must be set to an integer, got '%s'" % (
-                name, orig_value)) from e
+            raise ValueError(
+                "%s directive must be set to an integer, got '%s'" % (name, orig_value)
+            ) from e
     elif type_info is str:
         return str(value)
     elif callable(type_info):
         return type_info(name, value)
     else:
-        raise ValueError("%s directive must be set to a valid type, got '%s'" % (
-            name, orig_value))
+        raise ValueError("%s directive must be set to a valid type, got '%s'" % (name, orig_value))
+
 
 # ------------------------------------------------------------------------
 # GlobalDirectives are constructed to manage directive defaults, types and scopes
 # ------------------------------------------------------------------------
+
 
 @dataclass
 class GlobalDirectives(DataDict):
@@ -861,6 +940,7 @@ class GlobalDirectives(DataDict):
     Global directives and defaults that can be used throughout the compilation process.
     These values can be accessed directly but also correspond to directives.
     """
+
     #: Whether or not to include docstring in the Python extension. If False, the binary size
     #: will be smaller, but the ``__doc__`` attribute of any class or function will be an
     #: empty string.
@@ -982,32 +1062,40 @@ class GlobalDirectives(DataDict):
 
         # Extra warning toggles remain as lightweight data.
         self.extra_warnings = {
-            'warn.maybe_uninitialized': True,
-            'warn.unreachable': True,
-            'warn.unused': True,
+            "warn.maybe_uninitialized": True,
+            "warn.unreachable": True,
+            "warn.unused": True,
         }
 
     def get_directive_defaults(self) -> DirectiveDefaultsDict:
-        """Return the default directive values."""        
+        """Return the default directive values."""
         return cast(DirectiveDefaultsDict, self.copy())
+
     def parse_directive_value(self, name: str, value: Any, relaxed_bool: bool = False) -> Any:
         """Delegate to module-level parser for identical behavior."""
         return _parse_directive_value(name, value, relaxed_bool)
 
-    def parse_directive_list(self, s: str, relaxed_bool: bool = False,
-                             ignore_unknown: bool = False,
-                             current_settings: Optional[DirectivesDict] = None) -> DirectivesDict:
+    def parse_directive_list(
+        self,
+        s: str,
+        relaxed_bool: bool = False,
+        ignore_unknown: bool = False,
+        current_settings: Optional[DirectivesDict] = None,
+    ) -> DirectivesDict:
         """Delegate to module-level list parser for identical behavior."""
         return _parse_directive_list(s, relaxed_bool, ignore_unknown, current_settings)
 
     def parse_variable_value(self, value: str) -> Any:
-
         return _parse_variable_value(value)
 
-    def parse_compile_time_env(self, s: str, current_settings: DirectivesDict|None = None) -> DirectivesDict:
+    def parse_compile_time_env(
+        self, s: str, current_settings: DirectivesDict | None = None
+    ) -> DirectivesDict:
         return _parse_compile_time_env(s, current_settings)
 
-    def _one_of(self, *args: str, map: Optional[Dict[str, str]] = None) -> Callable[[str, Any], Any]:
+    def _one_of(
+        self, *args: str, map: Optional[Dict[str, str]] = None
+    ) -> Callable[[str, Any], Any]:
         """
         Create a validator function for directive values that must be one of a set of values.
 
@@ -1018,13 +1106,14 @@ class GlobalDirectives(DataDict):
         Returns:
             Validator function
         """
+
         def validate(name: str, value: Any) -> Any:
             if map is not None:
                 value = map.get(value, value)
             if value not in args:
-                raise ValueError("%s directive must be one of %s, got '%s'" % (
-                    name, args, value))
+                raise ValueError("%s directive must be one of %s, got '%s'" % (name, args, value))
             return value
+
         return validate
 
     def _normalise_encoding_name(self, option_name: str, encoding: str) -> str:
@@ -1039,14 +1128,14 @@ class GlobalDirectives(DataDict):
             Normalized encoding name
         """
         if not encoding:
-            return ''
+            return ""
 
         _normalise_common_encoding_name = {
-            'utf8': 'utf8',
-            'utf-8': 'utf8',
-            'default': 'utf8',
-            'ascii': 'ascii',
-            'us-ascii': 'ascii',
+            "utf8": "utf8",
+            "utf-8": "utf8",
+            "default": "utf8",
+            "ascii": "ascii",
+            "us-ascii": "ascii",
         }.get
 
         encoding_name = _normalise_common_encoding_name(encoding.lower())
@@ -1055,9 +1144,9 @@ class GlobalDirectives(DataDict):
 
         return encoding
 
-    def copy_inherited_directives(self, outer_directives: DirectivesDict,
-                                  **new_directives: Unpack[DirectivesDict]) -> DirectivesDict:
-
+    def copy_inherited_directives(
+        self, outer_directives: DirectivesDict, **new_directives: Unpack[DirectivesDict]
+    ) -> DirectivesDict:
         return _copy_inherited_directives(outer_directives, **new_directives)
 
     def copy_for_internal(self, outer_directives: DirectivesDict) -> DirectivesDict:
@@ -1071,11 +1160,11 @@ class GlobalDirectives(DataDict):
             Dictionary containing important configuration values.
         """
         result = {
-            'directive_defaults': self.copy(),
-            'directive_scopes': self.directive_scopes,
-            'directive_types': {k: str(v) for k, v in self.directive_types.items()},
-            'immediate_decorator_directives': list(self.immediate_decorator_directives),
-            'extra_warnings': self.extra_warnings.copy()
+            "directive_defaults": self.copy(),
+            "directive_scopes": self.directive_scopes,
+            "directive_types": {k: str(v) for k, v in self.directive_types.items()},
+            "immediate_decorator_directives": list(self.immediate_decorator_directives),
+            "extra_warnings": self.extra_warnings.copy(),
         }
         return result
 
@@ -1086,57 +1175,64 @@ class GlobalDirectives(DataDict):
         Returns:
             A DirectiveScopesDict mapping directives to allowed scopes
         """
-        return {'auto_pickle': ('module', 'cclass'),
-            'final' : ('cclass', 'function'),
-            'ccomplex' : ('module',),
-            'collection_type': ('cclass',),
-            'nogil' : ('function', 'with statement'),
-            'gil' : ('with statement',),
-            'with_gil' : ('function',),
-            'critical_section': ('function', 'with statement'),
-            'inline' : ('function',),
-            'cfunc' : ('function', 'with statement'),
-            'ccall' : ('function', 'with statement'),
-            'returns' : ('function',),
-            'exceptval' : ('function',),
-            'locals' : ('function',),
-            'staticmethod' : ('function',),  # FIXME: analysis currently lacks more specific function scope
-            'no_gc_clear' : ('cclass',),
-            'no_gc' : ('cclass',),
-            'internal' : ('cclass',),
-            'cclass' : ('class', 'cclass', 'with statement'),
-            'autotestdict' : AutotestdictDirectivesScopes("module","module"),
-            'set_initial_path' : ('module',),
-            'test_assert_path_exists' : ('function', 'class', 'cclass'),
-            'test_fail_if_path_exists' : ('function', 'class', 'cclass'),
-            'test_assert_c_code_has' : ('module',),
-            'test_fail_if_c_code_has' : ('module',),
-            'freelist': ('cclass',),
-            'formal_grammar': ('module',),
-            'emit_code_comments': ('module',),
-            'overload_dispatch': ('module', 'class', 'function'),
+        return {
+            "auto_pickle": ("module", "cclass"),
+            "final": ("cclass", "function"),
+            "ccomplex": ("module",),
+            "collection_type": ("cclass",),
+            "nogil": ("function", "with statement"),
+            "gil": ("with statement",),
+            "with_gil": ("function",),
+            "critical_section": ("function", "with statement"),
+            "inline": ("function",),
+            "cfunc": ("function", "with statement"),
+            "ccall": ("function", "with statement"),
+            "returns": ("function",),
+            "exceptval": ("function",),
+            "locals": ("function",),
+            "staticmethod": (
+                "function",
+            ),  # FIXME: analysis currently lacks more specific function scope
+            "no_gc_clear": ("cclass",),
+            "no_gc": ("cclass",),
+            "internal": ("cclass",),
+            "cclass": ("class", "cclass", "with statement"),
+            "autotestdict": AutotestdictDirectivesScopes("module", "module"),
+            "set_initial_path": ("module",),
+            "test_assert_path_exists": ("function", "class", "cclass"),
+            "test_fail_if_path_exists": ("function", "class", "cclass"),
+            "test_assert_c_code_has": ("module",),
+            "test_fail_if_c_code_has": ("module",),
+            "freelist": ("cclass",),
+            "formal_grammar": ("module",),
+            "emit_code_comments": ("module",),
+            "overload_dispatch": ("module", "class", "function"),
             # Avoid scope-specific to/from_py_functions for c_string.
-            'c_string_type': ('module',),
-            'c_string_encoding': ('module',),
-            'type_version_tag': ('module', 'cclass'),
-            'language_level': ('module',),
+            "c_string_type": ("module",),
+            "c_string_encoding": ("module",),
+            "type_version_tag": ("module", "cclass"),
+            "language_level": ("module",),
             # globals() could conceivably be controlled at a finer granularity,
             # but that would complicate the implementation
-            'old_style_globals': ('module',),
-            'np_pythran': ('module',),
-            'preliminary_late_includes_cy28': ('module',),
-            'fast_gil': ('module',),
-            'iterable_coroutine': ('module', 'function'),
-            'trashcan' : ('cclass',),
-            'total_ordering': ('class', 'cclass'),
-            'dataclasses' : DataclassDirectivesScopes("class", "cclass"),
-            'cpp_locals': ('module', 'function', 'cclass'),  # I don't think they make sense in a with_statement
-            'ufunc': ('function',),
-            'legacy_implicit_noexcept': ('module', ),
-            'c_compile_guard': ('function',),  # actually C function but this is enforced later
-            'control_flow' : ControlFlowDirectives("module","module"),
-            'freethreading_compatible': ('module',),
-            'subinterpreters_compatible': ('module',),
+            "old_style_globals": ("module",),
+            "np_pythran": ("module",),
+            "preliminary_late_includes_cy28": ("module",),
+            "fast_gil": ("module",),
+            "iterable_coroutine": ("module", "function"),
+            "trashcan": ("cclass",),
+            "total_ordering": ("class", "cclass"),
+            "dataclasses": DataclassDirectivesScopes("class", "cclass"),
+            "cpp_locals": (
+                "module",
+                "function",
+                "cclass",
+            ),  # I don't think they make sense in a with_statement
+            "ufunc": ("function",),
+            "legacy_implicit_noexcept": ("module",),
+            "c_compile_guard": ("function",),  # actually C function but this is enforced later
+            "control_flow": ControlFlowDirectives("module", "module"),
+            "freethreading_compatible": ("module",),
+            "subinterpreters_compatible": ("module",),
         }
 
 
@@ -1145,8 +1241,11 @@ class GlobalDirectives(DataDict):
 #  object passed throughout the compilation pipeline.
 # ------------------------------------------------------------------------
 CYTHON_COMMON_UTILITY_INCLUDE_DIR = str(Path(__file__).parent.parent / "Common" / "Include")
+
+
 class CompilationOptionsDict(TypedDict):
     """TypedDict representation of CompilationOptions for type checking and serialization."""
+
     include_path: List[str]
     output_file: Optional[str]
     show_version: bool
@@ -1202,6 +1301,7 @@ class CompilationOptionsDict(TypedDict):
     buffer_max_dims: int
     closure_freelist_size: int
 
+
 class CompilationOptionsKwargs(TypedDict, total=False):
     include_path: List[str]
     output_file: Optional[str]
@@ -1220,7 +1320,7 @@ class CompilationOptionsKwargs(TypedDict, total=False):
     timestamps: Optional[Any]
     verbose: int
     quiet: bool
-    compiler_directives: DirectivesDict|Directives
+    compiler_directives: DirectivesDict | Directives
     embedded_metadata: dict[str, object]
     evaluate_tree_assertions: bool
     emit_linenums: bool
@@ -1258,6 +1358,7 @@ class CompilationOptionsKwargs(TypedDict, total=False):
     buffer_max_dims: int
     closure_freelist_size: int
 
+
 @dataclass
 class CompilationOptions(DataDict):
     """
@@ -1265,6 +1366,7 @@ class CompilationOptions(DataDict):
     See default_options at the end of this module for a list of all possible
     options and CmdLine.usage and CmdLine.parse_command_line() for their meaning.
     """
+
     # Fields defined based on old CompilationOptionKwargs and default_options
     include_path: list[str] = field(default_factory=lambda: ["."])
     shared_c_file_path: Optional[str] = None
@@ -1284,7 +1386,7 @@ class CompilationOptions(DataDict):
     timestamps: Optional[Any] = None
     verbose: int = 0
     quiet: bool = False
-    compiler_directives: Directives|DirectivesDict = field(default_factory=get_directive_defaults)
+    compiler_directives: Directives | DirectivesDict = field(default_factory=get_directive_defaults)
     embedded_metadata: Mapping[str, Any] = field(default_factory=dict)
     embedding_file_name: Optional[str] = None
     embedding_file_timestamp: Optional[int] = None
@@ -1334,17 +1436,18 @@ class CompilationOptions(DataDict):
         unknown_directives = set(self.compiler_directives.keys()) - set(directive_defaults.keys())
         if unknown_directives:
             message = "got unknown compiler directive%s: %s" % (
-                's' if len(unknown_directives) > 1 else '',
-                ', '.join(map(str, unknown_directives)))
+                "s" if len(unknown_directives) > 1 else "",
+                ", ".join(map(str, unknown_directives)),
+            )
             raise ValueError(message)
 
         # Handle np_pythran forcing cplus
-        if self.compiler_directives.get('np_pythran', False) and not self.cplus:
+        if self.compiler_directives.get("np_pythran", False) and not self.cplus:
             import warnings
+
             warnings.warn("C++ mode forced when in Pythran mode!")
             self.cplus = True
         self.compiler_directives = Directives(**self.compiler_directives)
-
 
     def configure_language_defaults(self, source_extension: str) -> None:
         """
@@ -1356,20 +1459,19 @@ class CompilationOptions(DataDict):
         # Direct access to dataclass fields
         directives = self.compiler_directives.copy()
 
-        lang_level = directives.get('language_level')
+        lang_level = directives.get("language_level")
         if lang_level is None:
             # Auto-detect language level.
             import sys
-            lang_level = '3' if sys.version_info[0] >= 3 else '2'
+
+            lang_level = "3" if sys.version_info[0] >= 3 else "2"
             # Update the directive itself if it was None
-            directives['language_level'] = lang_level
-
-
+            directives["language_level"] = lang_level
 
         # Update the main language_level attribute based on the directive value
-        if lang_level in (2, '2'):
+        if lang_level in (2, "2"):
             self.language_level = 2
-        elif (isinstance(lang_level, int) and lang_level >= 3) or str(lang_level).startswith('3'):
+        elif (isinstance(lang_level, int) and lang_level >= 3) or str(lang_level).startswith("3"):
             self.language_level = 3
         else:
             # This case should ideally be caught by directive validation earlier
@@ -1377,12 +1479,8 @@ class CompilationOptions(DataDict):
             raise ValueError("Invalid language level: %r" % lang_level)
 
         # Python files always imply binding=True unless explicitly set to False
-        if source_extension == 'py' and directives.get('binding') is not False:
-            self.compiler_directives['binding'] = True
-
-
-    
-
+        if source_extension == "py" and directives.get("binding") is not False:
+            self.compiler_directives["binding"] = True
 
     def get_fingerprint(self) -> str:
         """
@@ -1392,6 +1490,7 @@ class CompilationOptions(DataDict):
             A hexadecimal string fingerprint
         """
         import hashlib
+
         # compiler directives can contain python objects that are unhashable
         # and lists that are unhashable. Sort dictionary items for consistency.
         # Access attributes directly
@@ -1402,7 +1501,7 @@ class CompilationOptions(DataDict):
             str([(k, v) for k, v in directive_items if not callable(v)]),
             str(env_items),
         ]
-        fingerprint = hashlib.md5(str(parts).encode('utf-8')).hexdigest()
+        fingerprint = hashlib.md5(str(parts).encode("utf-8")).hexdigest()
         return fingerprint
 
     def get_embedded_main_c_function(self) -> Optional[str]:
@@ -1415,8 +1514,10 @@ class CompilationOptions(DataDict):
         embed = self.embed
         if isinstance(embed, bool):
             return "main" if embed else None
-        if MatchAST and hasattr(self, 'source') and self.source:
-            match = MatchAST[ast.FunctionDef,Literal["node"]](func_def(name=str(embed)),"node")(self.source)
+        if MatchAST and hasattr(self, "source") and self.source:
+            match = MatchAST[ast.FunctionDef, Literal["node"]](func_def(name=str(embed)), "node")(
+                self.source
+            )
             if match:
                 return match.name
         if isinstance(embed, str):
@@ -1459,6 +1560,7 @@ def get_default_options() -> CompilationOptions:
     )
     return options.copy()
 
+
 # Create default options dictionary
 default_options: CompilationOptions = get_default_options()  # type: ignore[assignment]
 
@@ -1466,9 +1568,11 @@ default_options: CompilationOptions = get_default_options()  # type: ignore[assi
 GLOBAL_DIRECTIVES = GlobalDirectives()
 directive_defaults = GLOBAL_DIRECTIVES.get_directive_defaults()
 
+
 # Transform the directive_scopes into a DirectiveScopesDict
 def get_directive_scopes() -> DirectiveScopesDict:
     """Return the directive scopes as a properly typed DirectiveScopesDict."""
     return DirectiveScopesDict()
+
 
 directive_scopes = get_directive_scopes()

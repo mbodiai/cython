@@ -88,7 +88,7 @@ cdef class InheritsFromDataclass(BasicDataclass):
     e: cython.int = 0
 
     def __post_init__(self):
-        print("In __post_init__")
+        print "In __post_init__"
 
 @cython.dataclasses.dataclass
 cdef class InheritsFromNotADataclass(NotADataclass):
@@ -177,7 +177,7 @@ cdef class InitClassVars:
         self.b2 = b2
         self.d1 = d1
         self.d2 = d2
-        print("In __post_init__")
+        print "In __post_init__"
 
 @dataclass
 cdef class TestVisibility:

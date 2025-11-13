@@ -3,7 +3,7 @@
 #
 
 
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
 import cython
 cython.declare(Naming=object, Options=object, PyrexTypes=object, TypeSlots=object,
                error=object, warning=object, py_object_type=object, UtilityCode=object,
@@ -29,7 +29,7 @@ from . import PyrexTypes
 from . import Pythran
 
 from .Errors import error, warning, CompileError, format_position
-from .PyrexTypes import py_object_type, get_all_subtypes
+from .PyrexTypes import py_object_type
 from ..Utils import open_new_file, replace_suffix, decode_filename, build_hex_version, is_cython_generated_file
 from .Code import UtilityCode, IncludeCode, TempitaUtilityCode
 from .StringEncoding import EncodedString, encoded_string_or_bytes_literal
@@ -973,7 +973,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
             code.putln_openmp("#include <omp.h>")
 
     def generate_filename_table(self, code):
-        from os.path import isabs, basename
+        from os.path import isabs
         code.putln("")
         code.putln("static const char* const %s[] = {" % Naming.filetable_cname)
         if code.globalstate.filename_list:

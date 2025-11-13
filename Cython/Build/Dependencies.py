@@ -434,7 +434,9 @@ def strip_string_literals(code: str, prefix: str = "__Pyx_L"):
 # IF ...:
 #     cimport ...
 dependency_regex = re.compile(
+    r"(?:^\s*from +([0-9a-zA-Z_.]+) +import)|"
     r"(?:^\s*from +([0-9a-zA-Z_.]+) +cimport)|"
+    r"(?:^\s*import +([0-9a-zA-Z_.]+(?: *, *[0-9a-zA-Z_.]+)*))|"
     r"(?:^\s*cimport +([0-9a-zA-Z_.]+(?: *, *[0-9a-zA-Z_.]+)*))|"
     r"(?:^\s*cdef +extern +from +['\"]([^'\"]+)['\"])|"
     r"(?:^\s*include +['\"]([^'\"]+)['\"])",
@@ -1190,15 +1192,16 @@ def cythonize(
                     to_compile.append(
                         (
                             priority,
-                            source,
-                            c_file,
-                            fingerprint,
-                            quiet,
-                            options,
-                            not exclude_failures,
-                            module_metadata.get(m.name),
-                            full_module_name,
-                            show_all_warnings,
+                            source,  # pyx_file
+                            c_file,  # c_file
+                            fingerprint,  # fingerprint
+                            cache,  # cache (must precede 'quiet')
+                            quiet,  # quiet
+                            options,  # options
+                            not exclude_failures,  # raise_on_failure
+                            module_metadata.get(m.name),  # embedded_metadata
+                            full_module_name,  # full_module_name
+                            show_all_warnings,  # show_all_warnings
                         )
                     )
                 modules_by_cfile[c_file].append(m)
@@ -1206,7 +1209,11 @@ def cythonize(
                 # Generate shared utility code module now.
                 c_file = file_in_build_dir(source)
                 module_options = CompilationOptions(
-                    **{**options, "shared_c_file_path": c_file, "shared_utility_qualified_name": None},
+                    **{
+                        **options,
+                        "shared_c_file_path": c_file,
+                        "shared_utility_qualified_name": None,
+                    },
                 )
                 if not Utils.is_cython_generated_file(c_file):
                     print(
@@ -1233,10 +1240,7 @@ def cythonize(
     # Drop "priority" sorting component of "to_compile" entries
     # and add a simple progress indicator and the remaining arguments.
     build_progress_indicator = ("[{0:%d}/%d] " % (len(str(N)), N)).format
-    to_compile = [
-        task[1:] + (build_progress_indicator(i), cache)
-        for i, task in enumerate(to_compile, 1)
-    ]
+    to_compile = [task[1:] + (build_progress_indicator(i),) for i, task in enumerate(to_compile, 1)]
 
     if N <= 1:
         nthreads = 0

@@ -4,14 +4,6 @@
 import sys
 import cython
 
-def skip_on_limited_api(why):
-    def skipper(f):
-        # CYTHON_COMPILING_IN_LIMITED_API is in pxd
-        if cython.compiled and CYTHON_COMPILING_IN_LIMITED_API:
-            return None
-        return f
-    return skipper
-
 
 def very_simple():
     """
@@ -347,7 +339,6 @@ def test_lambda(n):
     for i in range(n):
         yield lambda : i
 
-@skip_on_limited_api("Can't call finalizer")
 def test_generator_cleanup():
     """
     >>> g = test_generator_cleanup()

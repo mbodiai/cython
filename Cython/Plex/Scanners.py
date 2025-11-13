@@ -16,7 +16,7 @@ from .Regexps import BOL, EOF, EOL
 if TYPE_CHECKING:
     from .Lexicons import Lexicon
     from typing import IO
-    from .Compiler.Scanning import SourceDescriptor
+    from Cython.Compiler.Scanning import SourceDescriptor
 else:
     Lexicon = object
     IO = object

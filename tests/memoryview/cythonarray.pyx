@@ -190,8 +190,8 @@ def test_array_from_pointer_3d():
     cdef int[:, :, ::1] m1 = c_arr
     cdef int[::1, :, :] m2 = f_arr
 
-    print(m1[0, 1, 1], m2[1, 1, 0])
-    print(m1.is_c_contig(), m2.is_f_contig())
+    print m1[0, 1, 1], m2[1, 1, 0]
+    print m1.is_c_contig(), m2.is_f_contig()
 
 def test_cyarray_from_carray():
     """
@@ -205,10 +205,10 @@ def test_cyarray_from_carray():
             a[i][j] = i * 8 + j
 
     cdef int[:, :] mslice = <int[:, :]> a
-    print(mslice[0, 0], mslice[1, 0], mslice[2, 5])
+    print mslice[0, 0], mslice[1, 0], mslice[2, 5]
 
     mslice = a
-    print(mslice[0, 0], mslice[1, 0], mslice[2, 5])
+    print mslice[0, 0], mslice[1, 0], mslice[2, 5]
 
 class InheritFrom(v.array):
     """

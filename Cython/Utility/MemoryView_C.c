@@ -510,7 +510,7 @@ static CYTHON_INLINE void __Pyx_XCLEAR_MEMVIEW($memviewslice_cname *memslice,
 }
 
 
-////////// MemviewSliceCopy.proto //////////
+////////// MemviewSliceCopyTemplate.proto //////////
 //@substitute: naming
 
 static $memviewslice_cname
@@ -520,7 +520,7 @@ __pyx_memoryview_copy_new_contig(const $memviewslice_cname *from_mvs,
                                  int dtype_is_object);
 
 
-////////// MemviewSliceCopy //////////
+////////// MemviewSliceCopyTemplate //////////
 //@requires: MemviewSliceInit
 //@substitute: naming
 
@@ -610,7 +610,7 @@ no_fail:
 
 
 ////////// CopyContentsUtility.proto /////////
-//@requires: MemviewSliceCopy
+//@requires: MemviewSliceCopyTemplate
 
 #define {{func_cname}}(slice) \
         __pyx_memoryview_copy_new_contig(&slice, "{{mode}}", {{ndim}},            \

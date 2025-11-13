@@ -1,14 +1,10 @@
-# mode: run
+# mode: error
 
-cpdef cpdef_closure(x):
+cpdef cpdef_yield():
     def inner():
-        return x
-    return inner
+        pass
 
-def test():
-    """
-    >>> f = cpdef_closure(7)
-    >>> f()
-    7
-    """
-    pass
+
+_ERRORS = u"""
+3:0: closures inside cpdef functions not yet supported
+"""

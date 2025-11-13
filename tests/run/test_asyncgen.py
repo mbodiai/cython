@@ -4,8 +4,6 @@
 
 from __future__ import generator_stop
 
-import cython
-
 import os
 import sys
 #import inspect
@@ -40,14 +38,7 @@ else:
 def not_pypy(f):
     if getattr(sys, "pypy_version_info", False):
         from unittest import skip
-        return skip("cannot run on PyPy due to finalizer")(f)
-    return f
-
-def not_limited_api(f):
-    # CYTHON_COMPILING_IN_LIMITED_API exposed in PXD
-    if cython.compiled and CYTHON_COMPILING_IN_LIMITED_API:
-        from unittest import skip
-        return skip("Cannot run in Limited API due to finalizer")(f)
+        return skip("cannot run on PyPy due to to finalizer")(f)
     return f
 
 try:
@@ -787,7 +778,6 @@ class AsyncGenAsyncioTest(unittest.TestCase):
         self.loop.run_until_complete(asyncio.sleep(0.01))
 
     @not_pypy
-    @not_limited_api
     def test_async_gen_asyncio_gc_aclose_09(self):
         DONE = 0
 

@@ -62,6 +62,7 @@ any_string_type = (bytes, str)
 if TYPE_CHECKING:
     from .Nodes import DefNode
     from .Symtab import ModuleScope
+    from .Code import CCodeWriter
 class NotConstant:
     _obj = None
 
@@ -76,6 +77,9 @@ class NotConstant:
 
 not_a_constant = NotConstant()
 constant_value_not_set = object()
+
+def _type_to_itself(tp):
+    return tp, tp
 
 # error messages when coercing from key[0] to key[1]
 coercion_error_dict = {
@@ -336,9 +340,9 @@ class ExprNode(Node):
     #                              be changed to a generator argument
 
     result_ctype = None
-    type = None
-    annotation = None
-    temp_code = None
+    type: "PyrexTypes.PyrexType | None" = None
+    annotation: "ExprNode | None" = None
+    temp_code: "str | None" = None
     old_temp = None  # error checker for multiple frees etc.
     use_managed_ref = True  # can be set by optimisation transforms
     result_is_used = True
@@ -12027,7 +12031,7 @@ class SizeofNode(ExprNode):
     def check_const(self) -> bool:
         return True
 
-    def generate_result_code(self, code: "Code.CCodeWriter") -> None:
+    def generate_result_code(self, code: "CCodeWriter") -> None:
         pass
 
 

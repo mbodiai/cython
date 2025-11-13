@@ -14,10 +14,7 @@ Usage example::
 
 import os
 import sys
-try:
-    from distutils.core import setup # type: ignore
-except ImportError:
-    from setuptools import setup
+from distutils.core import setup
 from Cython.Build import cythonize
 from Cython.Compiler import Options
 from Cython.Compiler.Options import Directives

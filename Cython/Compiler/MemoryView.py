@@ -578,7 +578,7 @@ def get_axes_specs(env, axes):
     for idx, (access, packing) in enumerate(axes_specs):
         if packing == 'cfcontig':
             if is_contig:
-                raise CompileError(axis.step.pos, BOTH_CF_ERR)
+                raise CompileError(axes[idx].step.pos, BOTH_CF_ERR)
 
             contig_dim = idx
             axes_specs[idx] = (access, 'contig')
@@ -591,7 +591,7 @@ def get_axes_specs(env, axes):
         else:
             is_f_contig = True
 
-            if contig_dim and not axes_specs[contig_dim - 1][0] in ('full', 'ptr'):
+            if contig_dim and axes_specs[contig_dim - 1][0] not in ('full', 'ptr'):
                 raise CompileError(axes[contig_dim].pos,
                                    "Fortran contiguous specifier must follow an indirect dimension")
 
@@ -702,7 +702,7 @@ def validate_axes_specs(positions, specs, is_c_contig, is_f_contig):
         if access == 'ptr':
             last_indirect_dimension = idx
 
-    for idx, (pos, (access, packing)) in enumerate(zip(positions, specs)):
+    for idx, (pos, (access, packing)) in enumerate(zip(positions, specs,strict=False)):
 
         if not (access in access_specs and
                 packing in packing_specs):
@@ -791,17 +791,10 @@ def load_memview_cy_utility(util_code_name, context=None, **kwargs):
     return CythonUtilityCode.load(util_code_name, "MemoryView.pyx",
                                   context=context, **kwargs)
 
-_UTILITY_NAME_COMPAT_MAP = {
-    # Upstream names that changed in this fork
-    "MemviewRefcount": "MemviewSliceInit",
-    "MemviewSliceCopyTemplate": "MemviewSliceCopy",
-}
-
 def load_memview_c_utility(
         util_code_name, util_code_filename="MemoryView_C.c",
         *,
         context=None, **kwargs):
-    util_code_name = _UTILITY_NAME_COMPAT_MAP.get(util_code_name, util_code_name)
     if context is None:
         return UtilityCode.load(util_code_name, util_code_filename, **kwargs)
     else:
@@ -855,7 +848,7 @@ slice_init_utility = load_memview_c_utility("MemviewSliceInit")
 memviewslice_declare_code = load_memview_c_utility("MemviewSliceStruct", context=template_context)
 
 copy_contents_new_utility = load_memview_c_utility(
-    "MemviewSliceCopy",
+    "MemviewSliceCopyTemplate",
     context=template_context,
     # Requires general memoryview code - dependency is added below.
 )

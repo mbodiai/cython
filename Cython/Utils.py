@@ -329,12 +329,9 @@ def path_exists(path):
 
 _parse_file_version = re.compile(r".*[.]cython-([0-9]+)[.][^./\\]+$").findall
 
-
+_CURRENT_VERSION = int(re.sub(r"^([0-9]+)[.]([0-9]+).*", r"\1\2", str(cython_version or "0")))
 @cached_function
-def find_versioned_file(directory, filename, suffix,
-                        _current_version=int(
-        re.sub(r"^([0-9]+)[.]([0-9]+).*", r"\1\2", str(cython_version or "0"))
-    )):
+def find_versioned_file(directory, filename, suffix,_current_version=_CURRENT_VERSION):
     """
     Search a directory for versioned pxd files, e.g. "lib.cython-30.pxd" for a Cython 3.0+ version.
 

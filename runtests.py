@@ -2646,7 +2646,7 @@ def configure_cython(options):
     from Cython.Compiler.Options import \
         CompilationOptions, \
         default_options as pyrex_default_options
-    from Cython.Compiler.Options import _directive_defaults as directive_defaults
+    from Cython.Compiler.Options import directive_defaults
 
     from Cython.Compiler import Errors
     Errors.LEVEL = 0  # show all warnings

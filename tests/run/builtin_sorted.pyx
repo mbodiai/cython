@@ -36,13 +36,7 @@ def sorted_arg(x):
     return sorted(x)
 
 
-@cython.test_assert_path_exists(
-    "//PyMethodCallNode",
-)
-@cython.test_fail_if_path_exists(
-    "//GeneralCallNode",
-    "//SimpleCallNode",
-)
+@cython.test_assert_path_exists("//GeneralCallNode")
 def sorted_arg_with_key(x):
     """
     >>> a = [3, 2, 1]

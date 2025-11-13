@@ -686,14 +686,14 @@ class ExpressionWriter(TreeVisitor):
     def emit_pos_args(self, node):
         if node is None:
             return
-        if isinstance(node, AddNode):
+        if isinstance(node, ExprNodes.AddNode):
             self.emit_pos_args(node.operand1)
             self.emit_pos_args(node.operand2)
-        elif isinstance(node, TupleNode):
+        elif isinstance(node, ExprNodes.TupleNode):
             for expr in node.subexpr_nodes():
                 self.visit(expr)
                 self.put(", ")
-        elif isinstance(node, AsTupleNode):
+        elif isinstance(node, ExprNodes.AsTupleNode):
             self.put("*")
             self.visit(node.arg)
             self.put(", ")
@@ -704,10 +704,10 @@ class ExpressionWriter(TreeVisitor):
     def emit_kwd_args(self, node):
         if node is None:
             return
-        if isinstance(node, MergedDictNode):
+        if isinstance(node, ExprNodes.MergedDictNode):
             for expr in node.subexpr_nodes():
                 self.emit_kwd_args(expr)
-        elif isinstance(node, DictNode):
+        elif isinstance(node, ExprNodes.DictNode):
             for expr in node.subexpr_nodes():
                 self.put("%s=" % expr.key.value)
                 self.visit(expr.value)
@@ -725,8 +725,8 @@ class ExpressionWriter(TreeVisitor):
         self.remove(", ")
         self.put(")")
 
-    def emit_comprehension(self, body:"ExprNode", target:"AssignmentExpressionNode",
-                           sequence:"SequenceNode", condition:"CondExprNode|None",
+    def emit_comprehension(self, body:"ExprNodes.ExprNode", target:"ExprNodes.AssignmentExpressionNode",
+                           sequence:"ExprNodes.SequenceNode", condition:"ExprNodes.CondExprNode|None",
                            parens=("", "")):
         open_paren, close_paren = parens
         self.put(open_paren)
