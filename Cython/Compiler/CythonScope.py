@@ -1,7 +1,7 @@
 from .Symtab import ModuleScope
 from .Code import UtilityCode
 from .PyrexTypes import (
-    CFuncType, CFuncTypeArg, c_bint_type, c_ptr_type, c_void_type, cy_integral_type, cy_floating_type, cy_numeric_type, cy_pymutex_type, cy_pythread_type_lock_type, parse_basic_type, py_object_type,
+    CFuncType, CFuncTypeArg, c_bint_type, c_ptr_type, c_void_type, cy_integral_type, cy_floating_type, cy_numeric_type, cy_pymutex_type, cy_pythread_type_lock_type, parse_basic_type, py_object_type
 )
 from .UtilityCode import CythonUtilityCode
 from .Errors import error
@@ -28,12 +28,16 @@ class CythonScope(ModuleScope):
                                          cname='<error>')
             entry.in_cinclude = True
 
+        cy_pymutex_type = get_cy_pymutex_type()
         entry = self.declare_type(
             "pymutex", cy_pymutex_type, None,
             cname="__Pyx_Locks_PyMutex")
+        entry.utility_code = cy_pymutex_type.get_decl_utility_code()
+        cy_pythread_type_lock_type = get_cy_pythread_type_lock_type()
         entry = self.declare_type(
             "pythread_type_lock", cy_pythread_type_lock_type, None,
             cname="__Pyx_Locks_PyThreadTypeLock")
+        entry.utility_code = cy_pythread_type_lock_type.get_decl_utility_code()
 
     def is_cpp(self):
         # Allow C++ utility code in C++ contexts.

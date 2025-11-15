@@ -1,10 +1,11 @@
 #
 #   Symbol Table
 #
-
+from __future__ import annotations
 
 from collections.abc import Callable
 import copy
+from dataclasses import dataclass, field
 import operator
 import re
 from typing import TYPE_CHECKING, Any
@@ -21,7 +22,7 @@ from .TypeSlots import (
     pymethod_signature,
     richcmp_special_methods,
 )
-from .Options import Directives
+from .Directives import Directives
 
 if TYPE_CHECKING:
     from .PyrexTypes import CFuncType, PyrexType
@@ -68,7 +69,7 @@ class BufferAux:
     def __repr__(self):
         return f"<BufferAux {self.__dict__!r}>"
 
-
+Boolean = bool | int
 class Entry:
     # A symbol table entry in a Scope or ModuleNamespace.
     #
@@ -165,82 +166,92 @@ class Entry:
     # specialiser  function or None  Callable to specialise a function to specific C arguments.
 
     # TODO: utility_code and utility_code_definition serves the same purpose...
-
-    inline_func_in_pxd = False
+    name: str
+    cname: str
+    type: "PyrexTypes.PyrexType"
+    pos: int|None
+    overloaded_alternatives: list["Entry"]
+    cf_assignments: list["Entry"]
+    cf_references: list["Entry"]
+    inner_entries: list["Entry"]
+    defining_entry: "Entry"
+    borrowed: int = 0
+    is_builtin: Boolean = False
+    is_cglobal: Boolean = False
+    is_pyglobal: Boolean = False
+    is_member: Boolean = False
+    is_pyclass_attr: Boolean = False
+    is_variable: Boolean = False
+    is_cfunction: Boolean = False
+    is_cmethod: Boolean = False
+    is_builtin_cmethod: Boolean = False
+    is_unbound_cmethod: Boolean = False
+    is_final_cmethod: Boolean = False
+    is_inline_cmethod: Boolean = False
+    is_anonymous: Boolean = False
+    is_type: Boolean = False
+    is_cclass: Boolean = False
+    is_cclass_var_entry: Boolean = False
+    is_cpp_class: Boolean = False
+    is_const: Boolean = False
+    is_property: Boolean = False
+    is_cproperty: Boolean = False
+    is_self_arg: Boolean = False
+    is_arg: Boolean = False
+    is_local: Boolean = False
+    in_closure: Boolean = False
+    from_closure: Boolean = False
+    in_subscope: Boolean = False
+    is_declared_generic: Boolean = False
+    is_readonly: Boolean = False
+    xdecref_cleanup: Boolean = False
+    in_cinclude: Boolean = False
+    is_inherited: Boolean = False
+    is_identifier: Boolean = False
+    is_interned: Boolean = False
+    used: Boolean = False
+    is_special: Boolean = False
+    defined_in_pxd: Boolean = False
+    is_implemented: Boolean = False
+    api: Boolean = False
+    is_overridable: Boolean = False
+    buffer_aux: "BufferAux|None" = None
+    inline_func_in_pxd: Boolean = False
     borrowed = 0
-    init = ""
-    annotation = None
-    visibility = 'private'
-    is_builtin = 0
-    is_cglobal = 0
-    is_pyglobal = 0
-    is_member = 0
-    is_pyclass_attr = 0
-    is_variable = 0
-    is_cfunction = 0
-    is_cmethod = 0
-    is_builtin_cmethod = False
-    is_unbound_cmethod = 0
-    is_final_cmethod = 0
-    is_inline_cmethod = 0
-    is_anonymous = 0
-    is_type = 0
-    is_cclass = 0
-    is_cclass_var_entry = False  # Remove when other cglobals are in the module scope
-    is_cpp_class = 0
-    is_const = 0
-    is_property = 0
-    is_cproperty = 0
-    doc_cname = None
-    getter_cname = None
-    setter_cname = None
-    is_self_arg = 0
-    is_arg = 0
-    is_local = 0
-    in_closure = 0
-    from_closure = 0
-    in_subscope = 0
-    is_declared_generic = 0
-    is_readonly = 0
-    pyfunc_cname = None
-    func_cname = None
-    func_modifiers = []
-    final_func_cname = None
-    doc = None
-    as_variable = None
-    xdecref_cleanup = 0
-    in_cinclude = 0
-    as_module = None
-    is_inherited = 0
-    pystring_cname = None
-    is_identifier = 0
-    is_interned = 0
-    used = 0
-    is_special = 0
-    defined_in_pxd = 0
-    is_implemented = 0
-    api = 0
-    utility_code = None
+    init: str|None = None
+    annotation: str|None = None
+    visibility: str = 'private'
+  
+    doc_cname: str|None = None
+    getter_cname: str|None = None
+    setter_cname: str|None = None
+   
+    pyfunc_cname: str|None = None
+    func_cname: str|None = None
+    func_modifiers: list[str] = []
+    final_func_cname: str|None = None
+    doc: str|None = None
+    as_variable: "Entry|None" = None
+    as_module: "Scope|None" = None
+    pystring_cname: str|None = None
+    utility_code: "Code.UtilityCode|None" = None
     specialiser:"Callable[[Scope, list[PyrexType]], Entry|None]|None" = None
-    is_overridable = 0
-    buffer_aux:"BufferAux|None" = None
     prev_entry:"Entry|None" = None
-    might_overflow = 0
+    might_overflow:Boolean = 0
     fused_cfunction:"CFuncType|None" = None
-    is_fused_specialized = False
-    utility_code_definition:Code.UtilityCode|None = None
-    needs_property = False
-    in_with_gil_block = 0
+    is_fused_specialized: Boolean = False
+    needs_property: Boolean = False
+    in_with_gil_block: int = 0
     from_cython_utility_code:"Code.UtilityCode|None" = None
-    error_on_uninitialized = False
-    cf_used = True
+    error_on_uninitialized: Boolean = False
+    cf_used: Boolean     = True
     outer_entry:"Entry|None" = None
-    is_cgetter = False
-    is_cpp_optional = False
-    known_standard_library_import = None
-    pytyping_modifiers = None
-    enum_int_value = None
-    vtable_type = None
+    is_cgetter: Boolean = False
+    is_cpp_optional: Boolean = False
+    known_standard_library_import: str|None = None
+    pytyping_modifiers: list[str]|None = None
+    enum_int_value: int|None = None
+    vtable_type: "PyrexTypes.PyrexType|None" = None
     signature: "Signature"
     def __init__(self, name:str, cname:str, type:"CFuncType", pos:int|None = None, init:str|None = None):
         self.name = name
@@ -254,16 +265,6 @@ class Entry:
         self.inner_entries = []
         self.defining_entry = self
 
-    # Debug helper to find places where entry types are assigned.
-    if DebugFlags.debug_verbose_entry_types:
-        @property
-        def type(self) -> "CFuncType":
-            return self.__dict__['type']
-
-        @type.setter
-        def type(self, new_type:"CFuncType"):
-            print(f"ENTRY {self.name}[{self.cname}] TYPE: {self.__dict__.get('type')} -> {new_type}")
-            self.__dict__['type'] = new_type
 
     def __repr__(self):
         return f"{type(self).__name__}(<{id(self):x}>, name={self.name}, type={self.type})"
@@ -295,9 +296,9 @@ class Entry:
     def all_entries(self):
         return [self] + self.inner_entries
 
-    def __lt__(left, right):
-        if isinstance(left, Entry) and isinstance(right, Entry):
-            return (left.name, left.cname) < (right.name, right.cname)
+    def __lt__(self, right):
+        if isinstance(self, Entry) and isinstance(right, Entry):
+            return (self.name, self.cname) < (right.name, right.cname)
         return NotImplemented
 
     @property
@@ -308,7 +309,7 @@ class Entry:
         assert self.type.is_cpp_class
         self.is_cpp_optional = True
         assert not self.utility_code  # we're not overwriting anything?
-        self.utility_code_definition = Code.UtilityCode.load_cached("OptionalLocals", "CppSupport.cpp")
+        self.utility_code = Code.UtilityCode.load_cached("OptionalLocals", "CppSupport.cpp")
 
     def declared_with_pytyping_modifier(self, modifier_name):
         return modifier_name in self.pytyping_modifiers if self.pytyping_modifiers else False
@@ -339,7 +340,7 @@ class InnerEntry(Entry):
         self.is_cpp_optional = outermost_entry.is_cpp_optional
         self.inner_entries.append(self)
 
-    def __getattr__(self, name):
+    def __getattr__(self, name:str)->Any:
         if name.startswith('__'):
             # we wouldn't have been called if it was there
             raise AttributeError(name)
@@ -348,7 +349,7 @@ class InnerEntry(Entry):
     def all_entries(self):
         return self.defining_entry.all_entries()
 
-
+@dataclass
 class Scope:
     # name              string             Unqualified name
     # outer_scope       Scope or None      Enclosing scope
@@ -384,7 +385,29 @@ class Scope:
     # scope_predefined_names  list of str   Class variable containing special names defined by
     #                                      this type of scope (e.g. __builtins__, __qualname__)
     # node_positions_to_offset  {pos: offset}  Mapping from node positions to line table offsets
-
+    name: str
+    outer_scope: "Scope|None" = None
+    parent_scope: "Scope|None" = None
+    entries: dict[str, "Entry"] = field(default_factory=dict)
+    subscopes: set["Scope"] = field(default_factory=set)
+    const_entries: list["Scope|Entry"] = field(default_factory=list)
+    type_entries: list["Scope|Entry"] = field(default_factory=list)
+    sue_entries: list["Scope|Entry"] = field(default_factory=list)
+    arg_entries: list["Scope|Entry"] = field(default_factory=list)
+    var_entries: list["Scope|Entry"] = field(default_factory=list)
+    pyfunc_entries: list["Scope|Entry"] = field(default_factory=list)
+    cfunc_entries: list["Scope|Entry"] = field(default_factory=list)
+    c_class_entries: list["Scope|Entry"] = field(default_factory=list)
+    defined_c_classes: list["Scope|Entry"] = field(default_factory=list)
+    imported_c_classes: dict[str, "Scope"] = field(default_factory=dict)
+    cname_to_entry: dict[str, "Scope|Entry"] = field(default_factory=dict)
+    identifier_to_entry: dict[str, "Scope|Entry"] = field(default_factory=dict)
+    num_to_entry: dict[str, "Scope|Entry"] = field(default_factory=dict)
+    obj_to_entry: dict[str, "Scope|Entry"] = field(default_factory=dict)
+    buffer_entries: list["Scope"] = field(default_factory=list)
+    lambda_defs: list["Scope"] = field(default_factory=list)
+    id_counters: dict[str, int] = field(default_factory=dict[str, int])
+    
     is_builtin_scope:bool|int = False
     is_py_class_scope:bool|int = False
     is_c_class_scope:bool|int = False
@@ -398,50 +421,32 @@ class Scope:
     is_module_scope:bool|int = False
     is_c_dataclass_scope:bool|int = False
     is_internal:bool|int = False
-    scope_prefix = ""
+    scope_prefix: str = ""
     in_cinclude:bool|int = False
     nogil:bool|int = False
     fused_to_specific:"dict[PyrexTypes.FusedType, PyrexTypes.PyrexType]|None" = None
     return_type:"PyrexTypes.PyrexType|None" = None
     scope_predefined_names = []
+    qualified_name:EncodedString = field(default_factory=EncodedString)
+    directives:Directives = field(default_factory=Directives)
     # Do ambiguous type names like 'int' and 'float' refer to the C types? (Otherwise, Python types.)
     in_c_type_context = True
     node_positions_to_offset = {}  # read-only fallback dict
-    qualified_name:EncodedString
-    directives:Directives
-    def __init__(self, name, outer_scope, parent_scope):
+
+
+
+    @property
+    def __post_init__(self):
         # The outer_scope is the next scope in the lookup chain.
         # The parent_scope is used to derive the qualified name of this scope.
-        self.name = name
-        self.outer_scope = outer_scope
-        self.parent_scope = parent_scope
-        mangled_name = "%d%s_" % (len(name), name.replace('.', '_dot_'))
+        mangled_name = "%d%s_" % (len(self.name), self.name.replace('.', '_dot_'))
         qual_scope = self.qualifying_scope()
         if qual_scope:
-            self.qualified_name = qual_scope.qualify_name(name)
+            self.qualified_name = qual_scope.qualify_name(self.name)
             self.scope_prefix = qual_scope.scope_prefix + mangled_name
         else:
-            self.qualified_name = EncodedString(name)
+            self.qualified_name = EncodedString(self.name)
             self.scope_prefix = mangled_name
-        self.entries:dict[str, "Entry"] = {}
-        self.subscopes:set[Scope] = set()
-        self.const_entries:list["Scope|Entry"] = []
-        self.type_entries:list["Scope|Entry"]  = []
-        self.sue_entries:list["Scope|Entry"] = []
-        self.arg_entries:list["Scope|Entry"] = []
-        self.var_entries:list["Scope|Entry"] = []
-        self.pyfunc_entries:list["Scope|Entry"] = []
-        self.cfunc_entries:list["Scope|Entry"] = []
-        self.c_class_entries:list["Scope|Entry"] = []
-        self.defined_c_classes:list["Scope|Entry"   ] = []
-        self.imported_c_classes:dict[str, Scope] = {}
-        self.cname_to_entry:dict[str, "Scope|Entry"] = {}
-        self.identifier_to_entry:dict[str, "Scope|Entry"] = {}
-        self.num_to_entry:dict[str, "Scope|Entry"] = {}
-        self.obj_to_entry:dict[str, "Scope|Entry"] = {}
-        self.buffer_entries:list[Scope] = []
-        self.lambda_defs:list[Scope] = []
-        self.id_counters:dict[str, int] = {}
         for var_name in self.scope_predefined_names:
             self.declare_var(EncodedString(var_name), py_object_type, pos=None)
 
@@ -597,7 +602,7 @@ class Scope:
         return entry
 
 
-    def declare(self, name: str | None, cname: str | None, type:"PyrexType", pos: int | None, visibility: str, shadow = 0, is_type = 0, create_wrapper = 0):
+    def declare(self, name: str, cname: str, type:"PyrexType", pos: int | None, visibility: str, shadow = 0, is_type = 0, create_wrapper = 0):
         # Create new entry, and add to dictionary if
         # name is not None. Reports a warning if already
         # declared.
@@ -1244,6 +1249,16 @@ class Scope:
         return False
 
 
+class PreImportScope(Scope):
+    namespace_cname = Naming.preimport_cname
+    def __init__(self):
+        Scope.__init__(self, Options.pre_import, None, None)
+    def declare_builtin(self, name, pos):
+        entry = self.declare(name, name, py_object_type, pos, 'private')
+        entry.is_variable = True
+        entry.is_pyglobal = True
+        return entry
+
 class BuiltinScope(Scope):
     #  The builtin namespace.
 
@@ -1324,7 +1339,7 @@ class BuiltinScope(Scope):
         var_entry.is_readonly = 1
         var_entry.is_builtin = 1
         var_entry.scope = self
-        if Options.cache_builtins:
+        if Options.DEFAULT_COMPILATION_OPTIONS.cache_builtins:
             var_entry.is_const = True
         if utility_code:
             var_entry.utility_code = utility_code
@@ -1712,7 +1727,7 @@ class ModuleScope(Scope):
             self.var_entries.append(entry)
         else:
             entry.is_pyglobal = 1
-        if Options.cimport_from_pyx:
+        if Directives.cimport_from_pyx:
             entry.used = 1
         return entry
 
@@ -1758,8 +1773,6 @@ class ModuleScope(Scope):
             return
         if entry.utility_code:
             self.utility_code_list.append(entry.utility_code)
-        if entry.utility_code_definition:
-            self.utility_code_list.append(entry.utility_code_definition)
 
     def declare_c_class(self, name, pos, defining=0, implementing=0,
             module_name=None, base_type=None, objstruct_cname=None,
@@ -2312,7 +2325,7 @@ class ClassScope(Scope):
                 PyrexTypes.CFuncType(
                     py_object_type,
                     [PyrexTypes.CFuncTypeArg("", py_object_type, None)], 0, 0))
-            entry.utility_code_definition = Code.UtilityCode.load_cached("ClassMethod", "CythonFunction.c")
+            entry.utility_code = Code.UtilityCode.load_cached("ClassMethod", "CythonFunction.c")
             self.use_entry_utility_code(entry)
             entry.is_cfunction = 1
             entry.scope = self.builtin_scope()

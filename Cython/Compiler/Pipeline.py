@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 from . import Errors
 from . import DebugFlags
-from . import Options
+from . import Options, Directives
 from .Errors import CompileError, InternalError, AbortError
 from . import Naming
 
@@ -32,16 +32,16 @@ def parse_stage_factory(context):
         source_desc = compsrc.source_desc
         full_module_name = compsrc.full_module_name
         initial_pos = (source_desc, 1, 0)
-        saved_cimport_from_pyx, Options.cimport_from_pyx = Options.cimport_from_pyx, False
+        saved_cimport_from_pyx, Directives.cimport_from_pyx = Directives.cimport_from_pyx, False
         scope = context.find_module(full_module_name, pos = initial_pos, need_pxd = 0)
-        Options.cimport_from_pyx = saved_cimport_from_pyx
+        Directives.cimport_from_pyx = saved_cimport_from_pyx
         tree = context.parse(source_desc, scope, pxd = 0, full_module_name = full_module_name)
         tree.compilation_source = compsrc
         tree.scope = scope
         # Ensure ModuleNode has an initial directives mapping before any transform runs.
         # This is populated/updated by InterpretCompilerDirectives later.
         if not hasattr(tree, 'directives') or tree.directives is None:
-            tree.directives = Options.get_directive_defaults()
+            tree.directives = Directives.DIRECTIVE_DEFAULTS.copy()
         tree.is_pxd = False
         return tree
     return parse
@@ -52,7 +52,7 @@ def parse_pxd_stage_factory(context, scope, module_name):
                              full_module_name=module_name)
         tree.scope = scope
         if not hasattr(tree, 'directives') or tree.directives is None:
-            tree.directives = Options.get_directive_defaults()
+            tree.directives = Directives.DIRECTIVE_DEFAULTS.copy()
         tree.is_pxd = True
         return tree
     return parse

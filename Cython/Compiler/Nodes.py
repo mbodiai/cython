@@ -22,7 +22,7 @@ from itertools import chain
 from typing import TYPE_CHECKING, Any, Unpack, cast, Generic, TypeVar
 
 from ..Utils import add_metaclass, str_to_number
-from . import Builtin, DebugFlags, Future, Naming, Options, PyrexTypes, TypeSlots
+from . import Builtin, DebugFlags, Future, Naming, Options, PyrexTypes, TypeSlots, Directives
 from .Code import UtilityCode
 from .Errors import CannotSpecialize, CompileError, InternalError, error, warning
 from .PyrexTypes import error_type, py_object_type
@@ -41,6 +41,9 @@ from .Symtab import (
     TemplateScope,
     punycodify_name,
 )
+
+if TYPE_CHECKING:
+    from .PyrexTypes import BaseType
 
 class OverloadDispatchSpec:
     __slots__ = ("pos", "extra", "precompute_bits")
@@ -72,7 +75,7 @@ def relative_position(pos:list):
 
 
 def embed_position(pos, docstring):
-    if not Options.embed_pos_in_docstring:
+    if not Directives.embed_pos_in_docstring:
         return docstring
     pos_line = 'File: %s (starting at line %s)' % relative_position(pos)
     if docstring is None:
@@ -201,7 +204,7 @@ class Node(Generic[T]):
     is_templated_type_node = False
     temps = None
     body: "T"
-    base_type: "CBaseType"
+    base_type: "BaseType"
     base_type_node: "CBaseTypeNode"
     pos: tuple[SourceDescriptor, int, int]
     # All descendants should set child_attrs to a list of the attributes
@@ -223,6 +226,16 @@ class Node(Generic[T]):
     def __init__(self, pos:tuple[SourceDescriptor, int, int], **kw):
         self.pos = pos
         self.__dict__.update(kw)
+
+    def analyse(self, *args, **kwargs):
+        raise NotImplementedError(f"analyse not implemented for {self.__class__.__name__}")
+
+    def generate_function_definitions(self, *args, **kwargs):
+        raise NotImplementedError(f"generate_function_definitions not implemented for {self.__class__.__name__}")
+
+    def generate_execution_code(self, *args, **kwargs):
+        raise NotImplementedError(f"generate_execution_code not implemented for {self.__class__.__name__}")
+
 
     gil_message = "Operation"
 
@@ -371,15 +384,17 @@ class CompilerDirectivesNode(Node):
     #  body           Node
     child_attrs = ["body"]
     body: Node
-    directives: Options.Directives
+    directives: Directives.Directives
     @classmethod
-    def for_directives(cls, body:Node, env:"Scope", **directives:Unpack[Options.DirectivesDict]):
-        new_directives = Options.copy_inherited_directives(env.directives, **directives)
+    def for_directives(cls, body:Node, env:"Scope", **directives:Unpack[Directives.Directives.Dict]):
+        from .Directives import copy_inherited_directives
+        new_directives = copy_inherited_directives(env.directives, **directives)
         return cls(body.pos, body=body, directives=new_directives, is_terminator=body.is_terminator)
 
     @classmethod
     def for_internal(cls, body, env):
-        new_directives = Options.copy_for_internal(env.directives)
+        from .Directives import copy_for_internal
+        new_directives = copy_for_internal(env.directives)
         return cls(body.pos, body=body, directives=new_directives, is_terminator=body.is_terminator)
 
     def analyse_declarations(self, env):
@@ -621,7 +636,7 @@ class _CReferenceDeclaratorBaseNode(CDeclaratorNode):
 
 
 class CReferenceDeclaratorNode(_CReferenceDeclaratorBaseNode):
-    def analyse(self, base_type:"BaseType", env:"Scope", nonempty=0, visibility=None, in_pxd=False):
+    def analyse(self, base_type:"PyrexTypes.PyrexType", env:"Scope", nonempty=0, visibility=None, in_pxd=False):
         if base_type.is_pyobject:
             error(self.pos, "Reference base type cannot be a Python object")
         ref_type = PyrexTypes.c_ref_type(base_type)
@@ -1643,7 +1658,7 @@ class CVarDefNode(StatNode):
                     name, type, declarator.pos,
                     cname=cname, visibility=visibility, in_pxd=self.in_pxd,
                     api=self.api, is_cdef=True, pytyping_modifiers=modifiers)
-                if Options.docstrings:
+                if Directives.docstrings:
                     self.entry.doc = embed_position(self.pos, self.doc)
 
 
@@ -1804,7 +1819,7 @@ class CEnumDefNode(StatNode):
 
     def declare(self, env):
         doc = None
-        if Options.docstrings:
+        if Directives.docstrings:
             doc = embed_position(self.pos, self.doc)
 
         self.entry = env.declare_enum(
@@ -2754,7 +2769,7 @@ class CFuncDefNode(FuncDefNode):
         self.c_compile_guard = env.directives['c_compile_guard']
         self.is_c_class_method = env.is_c_class_scope
         if self.directive_locals is None:
-            self.directive_locals = Options.Directives()
+            self.directive_locals = Directives.Directives()
         self.directive_locals.update(env.directives.get('locals', {}))
         if self.directive_returns is not None:
             base_type = self.directive_returns.analyse_as_type(env)
@@ -2894,7 +2909,7 @@ class CFuncDefNode(FuncDefNode):
         # Reset scope entry the above cfunction
         env.entries[name] = self.entry
         if (not self.entry.is_final_cmethod and
-                (not env.is_module_scope or Options.lookup_module_cpdef)):
+                (not env.is_module_scope or Directives.lookup_module_cpdef)):
             if self.override:
                 # This is a hack: we shouldn't create the wrapper twice, but we do for fused functions.
                 assert self.entry.is_fused_specialized  # should not happen for non-fused cpdef functions
@@ -2935,7 +2950,7 @@ class CFuncDefNode(FuncDefNode):
             type_arg.entry = type_entry
             cfunc = ExprNodes.AttributeNode(self.pos, obj=type_arg, attribute=self.entry.name)
 
-        skip_dispatch = not (is_module_scope and Options.lookup_module_cpdef)
+        skip_dispatch = not (is_module_scope and Directives.lookup_module_cpdef)
         c_call = ExprNodes.SimpleCallNode(
             self.pos,
             function=cfunc,
@@ -3227,7 +3242,7 @@ class DefNode(FuncDefNode):
     return_type_annotation: "ExprNode|None"
     body: "StatListNode"
     local_scope: "Scope"
-    directives: "Options.Directives"
+    directives: "Directives.Directives"
     num_posonly_args: int
     num_kwonly_args: int
     num_required_kw_args: int
@@ -3579,7 +3594,7 @@ class DefNode(FuncDefNode):
         self.entry = entry
         prefix = env.next_id(env.scope_prefix)
         self.entry.pyfunc_cname = punycodify_name(Naming.pyfunc_prefix + prefix + name)
-        if Options.docstrings:
+        if Directives.docstrings:
             entry.doc = embed_position(self.pos, self.doc)
             entry.doc_cname = punycodify_name(Naming.funcdoc_prefix + prefix + name)
             if entry.is_special:
@@ -3763,6 +3778,14 @@ class DefNodeWrapper(FuncDefNode):
     defnode : "DefNode" = None
     target : "DefNode" = None  # Target DefNode
     needs_values_cleanup = False
+    fast_arg_parsing = False
+    fast_arg_param_cname = None
+    fast_arg_info_cname = None
+    _fast_arg_tables_generated = False
+    fast_arg_required_pos = 0
+    fast_arg_max_pos = 0
+    fast_arg_accepts_keywords = False
+    vectorcall_cname = None
 
     def __init__(self, *args, **kwargs):
         FuncDefNode.__init__(self, *args, **kwargs)
@@ -3781,6 +3804,7 @@ class DefNodeWrapper(FuncDefNode):
         target_entry.pymethdef_cname = punycodify_name(Naming.pymethdef_prefix + prefix + name)
 
         self.signature = target_entry.signature
+        self._determine_fast_arg_support()
 
         self.np_args_idx = self.target.np_args_idx
 
@@ -3805,6 +3829,26 @@ class DefNodeWrapper(FuncDefNode):
             for ass in entry.cf_assignments:
                 if not ass.is_arg and ass.lhs.is_name:
                     ass.lhs.cf_maybe_null = True
+
+    def _determine_fast_arg_support(self):
+        if not self.signature.use_fastcall:
+            self.fast_arg_parsing = False
+            return
+        if self.target.star_arg or self.target.starstar_arg:
+            self.fast_arg_parsing = False
+            return
+        if self.target.has_fused_arguments:
+            self.fast_arg_parsing = False
+            return
+        for arg in self.args:
+            if not arg.type.is_pyobject or arg.needs_conversion:
+                self.fast_arg_parsing = False
+                return
+        self.fast_arg_required_pos = max(
+            0,
+            self.target.num_required_args - self.target.num_required_kw_args)
+        self.fast_arg_max_pos = sum(1 for arg in self.args if not arg.kw_only)
+        self.fast_arg_parsing = True
 
     def signature_has_nongeneric_args(self):
         argcount = len(self.args)
@@ -3928,6 +3972,8 @@ class DefNodeWrapper(FuncDefNode):
         if preprocessor_guard:
             code.putln("#endif /*!(%s)*/" % preprocessor_guard)
 
+        self.vectorcall_cname = self.generate_vectorcall_function(env, code)
+
     def generate_function_header(self, code: "CCodeWriter", with_pymethdef: bool, proto_only: bool = False):
         arg_code_list = []
         sig = self.signature
@@ -3984,7 +4030,7 @@ class DefNodeWrapper(FuncDefNode):
                     code, with_pymethdef, proto_only=True)
             return
 
-        if (Options.docstrings and entry.doc and
+        if (Directives.docstrings and entry.doc and
                 not self.target.fused_py_func and
                 not entry.scope.is_property_scope and
                 (not entry.is_special or entry.wrapperbase_cname)):
@@ -4086,7 +4132,16 @@ class DefNodeWrapper(FuncDefNode):
             self.generate_stararg_copy_code(code)
 
         else:
-            self.generate_tuple_and_keyword_parsing_code(self.args, code, decl_code)
+            if self.fast_arg_parsing:
+                self.generate_argument_values_setup_code(self.args, code, decl_code)
+                code.putln("#if CYTHON_METH_FASTCALL")
+                self._generate_fast_argument_parsing_code(code, end_label)
+                code.putln("#else")
+                self.generate_tuple_and_keyword_parsing_code(
+                    self.args, code, decl_code, values_already_setup=True)
+                code.putln("#endif")
+            else:
+                self.generate_tuple_and_keyword_parsing_code(self.args, code, decl_code)
             self.needs_values_cleanup = True
 
         code.error_label = old_error_label
@@ -4112,6 +4167,203 @@ class DefNodeWrapper(FuncDefNode):
             code.putln("return %s;" % self.error_value())
 
         code.put_label(end_label)
+
+    def _fast_arg_flags(self, arg:"CArgDeclNode") -> str:
+        flags = []
+        if not arg.kw_only:
+            flags.append("__PYX_PARAM_ACCEPTS_POS")
+        if not arg.pos_only:
+            flags.append("__PYX_PARAM_ACCEPTS_KW")
+        if arg.kw_only:
+            flags.append("__PYX_PARAM_IS_KWONLY")
+        if arg.pos_only:
+            flags.append("__PYX_PARAM_IS_POSONLY")
+        return " | ".join(flags) if flags else "0"
+
+    def _ensure_fast_arg_tables(self, code:"CCodeWriter"):
+        if self._fast_arg_tables_generated:
+            return
+        decls_code = code.globalstate['decls']
+        param_count = len(self.args)
+        param_cname = punycodify_name(Naming.parammeta_prefix + self.target.entry.func_cname)
+        info_cname = punycodify_name(Naming.paraminfo_prefix + self.target.entry.func_cname)
+        optional_count = 0
+        accepts_keywords = False
+        if param_count:
+            decls_code.putln(f"static const __Pyx_ParamMeta {param_cname}[{param_count}] = {{")
+            decls_code.indent()
+            for arg in self.args:
+                name_cname = code.intern_identifier(arg.entry.name)
+                flags = self._fast_arg_flags(arg)
+                if "__PYX_PARAM_ACCEPTS_KW" in flags:
+                    accepts_keywords = True
+                if arg.default:
+                    default_index = optional_count
+                    optional_count += 1
+                else:
+                    default_index = "__PYX_PARAM_DEFAULT_MISSING"
+                decls_code.putln(
+                    f"{{{name_cname}, {flags}, 0, {default_index}}},")
+            decls_code.dedent()
+            decls_code.putln("};")
+            params_expr = param_cname
+        else:
+            params_expr = "NULL"
+        defaults_expr = "NULL"
+        allow_keywords = self.target.local_scope.directives['always_allow_keywords']
+        self.fast_arg_accepts_keywords = accepts_keywords and allow_keywords
+        func_name_literal = self.target.entry.qualified_name.as_c_string_literal()
+        decls_code.putln(f"static const __Pyx_FastArgInfo {info_cname} = {{")
+        decls_code.indent()
+        decls_code.putln(
+            f"{params_expr}, {defaults_expr}, {param_count}, {optional_count}, "
+            f"{self.fast_arg_required_pos}, {self.fast_arg_max_pos}, "
+            f"{self.num_required_kw_args}, {func_name_literal}")
+        decls_code.dedent()
+        decls_code.putln("};")
+        self.fast_arg_param_cname = params_expr
+        self.fast_arg_info_cname = info_cname
+        self._fast_arg_tables_generated = True
+
+    def _generate_fast_argument_parsing_code(
+        self,
+        code:"CCodeWriter",
+        end_label:str,
+    ):
+        self._ensure_fast_arg_tables(code)
+        param_count = len(self.args)
+        code.putln("{")
+        if param_count:
+            entries = ", ".join(f"&values[{i}]" for i in range(param_count))
+            code.putln(
+                f"PyObject **__pyx_fastlocals[{param_count}] = {{{entries}}};")
+            locals_expr = "__pyx_fastlocals"
+        else:
+            code.putln("PyObject **__pyx_fastlocals = NULL;")
+            locals_expr = "__pyx_fastlocals"
+        code.putln(
+            f"int __pyx_fastparse_result = __Pyx_FastParseKeywords(&{self.fast_arg_info_cname}, "
+            f"{Naming.args_cname}, {Naming.nargs_cname}, {Naming.kwds_cname}, {locals_expr});")
+        code.putln("if (likely(__pyx_fastparse_result == __PYX_FASTPARSE_SUCCESS)) {")
+        self.generate_argument_defaults_assignment_code(self.args, code)
+        code.putln(f"goto {end_label};")
+        code.putln("}")
+        code.putln(
+            f"if (__pyx_fastparse_result == __PYX_FASTPARSE_ERROR) "
+            f"goto {code.error_label};")
+        code.putln("}")
+
+    def generate_vectorcall_function(self, env:"Scope", code:"CCodeWriter"):
+        if not self.fast_arg_parsing:
+            return None
+        lenv = self.target.local_scope
+        vectorcall_cname = punycodify_name(
+            Naming.vectorcall_prefix + self.target.entry.func_cname)
+        code.putln("#if CYTHON_METH_FASTCALL && CYTHON_VECTORCALL")
+        code.putln(
+            f"static PyObject *{vectorcall_cname}(PyObject *func, PyObject *const *args, "
+            f"size_t nargsf, PyObject *kwnames) {{")
+        code.enter_cfunc_scope(lenv)
+        code.return_from_error_cleanup_label = code.new_label()
+        self.generate_argument_declarations(lenv, code)
+        tempvardecl_code = code.insertion_point()
+        retval_init = ' = 0' if self.return_type.is_pyobject else ''
+        if not self.return_type.is_void:
+            code.putln('%s%s;' % (
+                self.return_type.declaration_code(Naming.retval_cname),
+                retval_init))
+        code.put_declare_refcount_context()
+        code.put_setup_refcount_context(EncodedString(f"{self.name} (vectorcall)"))
+        code.putln("__pyx_CyFunctionObject *cyfunc = (__pyx_CyFunctionObject *)func;")
+        code.putln(f"PyObject *{Naming.self_cname} = NULL;")
+        code.putln(f"PyObject *const *{Naming.args_cname} = args;")
+        code.putln(f"Py_ssize_t {Naming.nargs_cname} = PyVectorcall_NARGS(nargsf);")
+        code.putln(f"PyObject *{Naming.kwds_cname} = kwnames;")
+        code.putln(f"{Naming.kwvalues_cname} = NULL;")
+
+        code.putln(
+            f"switch (__Pyx_CyFunction_Vectorcall_CheckArgs(cyfunc, {Naming.nargs_cname}, {Naming.kwds_cname})) {{")
+        code.putln("case 1:")
+        code.putln(f"    {Naming.self_cname} = {Naming.args_cname}[0];")
+        code.putln(f"    {Naming.args_cname} += 1;")
+        code.putln(f"    {Naming.nargs_cname} -= 1;")
+        code.putln("    break;")
+        code.putln("case 0:")
+        code.putln("#if CYTHON_COMPILING_IN_LIMITED_API")
+        code.putln(
+            f"    {Naming.self_cname} = PyCFunction_GetSelf(((__pyx_CyFunctionObject*)cyfunc)->func);")
+        code.putln(
+            f"    if (unlikely(!{Naming.self_cname}) && PyErr_Occurred()) {code.error_goto(self.pos)}")
+        code.putln("#else")
+        code.putln(f"    {Naming.self_cname} = ((PyCFunctionObject*)cyfunc)->m_self;")
+        code.putln("#endif")
+        code.putln("    break;")
+        code.putln("default:")
+        code.putln("    return NULL;")
+        code.putln("}")
+
+        previous_cleanup_flag = self.needs_values_cleanup
+        self.needs_values_cleanup = True
+        self.generate_argument_values_setup_code(self.args, code, tempvardecl_code)
+        code.putln(
+            f"{Naming.kwvalues_cname} = __Pyx_KwValues_{self.signature.fastvar}("
+            f"{Naming.args_cname}, {Naming.nargs_cname});")
+
+        old_error_label = code.error_label
+        vectorcall_error_label = code.new_error_label()
+        code.error_label = vectorcall_error_label
+        end_label = code.new_label("vectorcall_argument_unpacking_done")
+        self._generate_fast_argument_parsing_code(code, end_label)
+        code.put_label(end_label)
+        self.generate_argument_type_tests(code)
+        self.generate_function_body(code)
+
+        tempvardecl_code.put_temp_declarations(code.funcstate)
+        code.mark_pos(self.pos)
+        code.putln("")
+        code.putln("/* vectorcall exit code */")
+        values_cleaned_up_label = code.new_label("vectorcall_cleaned_up")
+        if code.label_used(code.error_label):
+            code.put_goto(code.return_label)
+            code.put_label(code.error_label)
+            for cname, type in code.funcstate.all_managed_temps():
+                code.put_xdecref(cname, type)
+            err_val = self.error_value()
+            if err_val is not None:
+                code.putln(f"{Naming.retval_cname} = {err_val};")
+            self.generate_argument_values_cleanup_code(code)
+            code.put_goto(values_cleaned_up_label)
+
+        code.put_label(code.return_label)
+        self.generate_argument_values_cleanup_code(code)
+        code.put_label(values_cleaned_up_label)
+
+        for entry in lenv.var_entries:
+            if entry.is_arg:
+                if entry.xdecref_cleanup:
+                    code.put_var_xdecref(entry)
+                else:
+                    code.put_var_decref(entry)
+        var_entries_set = set(lenv.var_entries)
+        for arg in self.args:
+            if not arg.type.is_pyobject and arg.entry not in var_entries_set:
+                if arg.entry.xdecref_cleanup:
+                    code.put_var_xdecref(arg.entry)
+                else:
+                    code.put_var_decref(arg.entry)
+
+        code.put_finish_refcount_context()
+        if not self.return_type.is_void:
+            code.putln(f"return {Naming.retval_cname};")
+        else:
+            code.putln("Py_INCREF(Py_None);")
+            code.putln("return Py_None;")
+        code.putln('}')
+        code.exit_cfunc_scope()
+        code.error_label = old_error_label
+        code.putln("#endif /* CYTHON_METH_FASTCALL && CYTHON_VECTORCALL */")
+        self.needs_values_cleanup = previous_cleanup_flag
+        return vectorcall_cname
 
     def generate_arg_xdecref(self, arg, code):
         if arg:
@@ -4222,7 +4474,7 @@ class DefNodeWrapper(FuncDefNode):
                 f"{star_arg_cname} = {Naming.args_cname};")
             self.star_arg.entry.xdecref_cleanup = 0
 
-    def generate_tuple_and_keyword_parsing_code(self, args, code, decl_code):
+    def generate_tuple_and_keyword_parsing_code(self, args:list[CArgDeclNode], code:"CCodeWriter", decl_code:"CCodeWriter", values_already_setup:bool=False):
         code.globalstate.use_utility_code(
             UtilityCode.load_cached("fastcall", "FunctionArguments.c"))
 
@@ -4287,7 +4539,8 @@ class DefNodeWrapper(FuncDefNode):
         # C-typed default arguments are handled at conversion time,
         # so their array value is NULL in the end if no argument
         # was passed for them.
-        self.generate_argument_values_setup_code(all_args, code, decl_code)
+        if not values_already_setup:
+            self.generate_argument_values_setup_code(all_args, code, decl_code)
 
         # If all args are positional-only, we can raise an error
         # straight away if we receive a non-empty kw-dict.
@@ -5180,7 +5433,7 @@ class PyClassDefNode(ClassDefNode):
         self.decorators = decorators
         self.bases = bases
         from . import ExprNodes
-        if self.doc and Options.docstrings:
+        if self.doc and Directives.docstrings:
             doc = embed_position(self.pos, self.doc)
             doc_node = ExprNodes.UnicodeNode(pos, value=doc)
             self.doc_node = ExprNodes.NameNode(name=EncodedString('__doc__'), type=py_object_type, pos=pos)
@@ -5623,7 +5876,7 @@ class CClassDefNode(ClassDefNode):
                     is_frozen = frozen_flag and frozen_flag.is_literal and frozen_flag.value
                 scope.is_c_dataclass_scope = "frozen" if is_frozen else True
 
-        if self.doc and Options.docstrings:
+        if self.doc and Directives.docstrings:
             scope.doc = embed_position(self.pos, self.doc)
 
         if has_body:
@@ -5919,7 +6172,7 @@ class CClassDefNode(ClassDefNode):
             # a significant performance hit. (See trac #561.)
             for func in entry.type.scope.pyfunc_entries:
                 is_buffer = func.name in ('__getbuffer__', '__releasebuffer__')
-                if (func.is_special and Options.docstrings and
+                if (func.is_special and Directives.docstrings and
                         func.wrapperbase_cname and not is_buffer):
                     slot = TypeSlots.get_slot_table(
                         entry.type.scope.directives).get_slot_by_method_name(func.name)
@@ -10817,7 +11070,7 @@ class ErrorNode(Node):
 #
 #------------------------------------------------------------------------------------
 
-if Options.gcc_branch_hints:
+if Directives.gcc_branch_hints:
     branch_prediction_macros = """
 /* Test for GCC > 2.95 */
 #if defined(__GNUC__) \

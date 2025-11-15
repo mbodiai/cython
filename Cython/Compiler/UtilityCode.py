@@ -5,7 +5,7 @@ from .Errors import CompileError
 from . import Symtab
 from . import Naming
 from . import Code
-from . import Options
+from . import Options, Directives
 
 
 import os.path
@@ -259,7 +259,7 @@ class CythonUtilityCode(Code.UtilityCodeBase):
         other compiler directives. This function provides a sensible default list
         of directives to copy.
         """
-        utility_code_directives = dict(Options.get_directive_defaults())
+        utility_code_directives = dict(Directives.DIRECTIVE_DEFAULTS)
         inherited_directive_names = (
             'binding', 'always_allow_keywords', 'allow_none_for_extension_args',
             'auto_pickle', 'ccomplex',

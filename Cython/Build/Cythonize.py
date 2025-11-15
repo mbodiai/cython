@@ -12,7 +12,8 @@ from typing_extensions import Literal
 from .Dependencies import cythonize, extended_iglob
 from ..Utils import is_package_dir
 from ..Compiler import Options
-from ..Compiler.Options import CompilationOptions, DirectivesDict
+from ..Compiler.build_executable import CompilationOptions, default_options
+from ..Compiler import Directives as _DirectivesModule
 
 try:
     import multiprocessing
@@ -443,14 +444,14 @@ def parse_args(args):
 
     if options.lenient:
         # increase Python compatibility by ignoring compile time errors
-        Options.error_on_unknown_names = False
-        Options.error_on_uninitialized = False
+        _DirectivesModule.error_on_unknown_names = False
+        _DirectivesModule.error_on_uninitialized = False
 
     if options.annotate:
-        Options.annotate = options.annotate
+        _DirectivesModule.annotate = options.annotate
 
     if options.no_docstrings:
-        Options.docstrings = False
+        _DirectivesModule.docstrings = False
 
     return options, args
 

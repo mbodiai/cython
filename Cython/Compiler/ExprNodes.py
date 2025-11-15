@@ -10520,7 +10520,11 @@ class PyCFunctionNode(ExprNode, ModuleNameMixin):
 
         if def_node.is_coroutine:
             flags.append('__Pyx_CYFUNCTION_COROUTINE')
-
+        vectorcall_keywords = False
+        if def_node.py_wrapper and def_node.py_wrapper.vectorcall_cname:
+            vectorcall_keywords = def_node.py_wrapper.fast_arg_accepts_keywords
+            if vectorcall_keywords:
+                flags.append('__Pyx_CYFUNCTION_VECTORCALL_KEYWORDS')
         if flags:
             flags = ' | '.join(flags)
         else:
@@ -10582,6 +10586,14 @@ class PyCFunctionNode(ExprNode, ModuleNameMixin):
                 code.putln('__Pyx_CyFunction_SetAnnotationsDict(%s, %s);' % (
                     self.result(), self.annotations_dict.py_result()))
 
+        if (def_node.py_wrapper is not None
+                and def_node.py_wrapper.vectorcall_cname):
+            code.putln("#if CYTHON_METH_FASTCALL && CYTHON_VECTORCALL")
+            code.putln(
+                f"__Pyx_CyFunction_func_vectorcall({self.result()}) = "
+                f"{def_node.py_wrapper.vectorcall_cname};")
+            code.putln("#endif")
+
 
 class InnerFunctionNode(PyCFunctionNode):
     # Special PyCFunctionNode that depends on a closure class
@@ -10641,7 +10653,7 @@ class CodeObjectNode(ExprNode):
         # if we have args/kwargs, then the first two in var_entries are those
         local_vars = [arg for arg in def_node.local_scope.var_entries if arg.name]
         self.varnames = [
-            IdentifierStringNode(arg.pos, value=arg.name)
+            IdentifierStringNode(arg.pos, value=StringEncoding.encoded_string(arg.name, None))
             for arg in args + local_vars
         ]
 

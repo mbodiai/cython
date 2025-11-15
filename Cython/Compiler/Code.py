@@ -24,7 +24,7 @@ from contextlib import closing, contextmanager
 from collections import defaultdict
 
 from . import Naming
-from . import Options
+from . import Options, Directives
 from . import DebugFlags
 from . import StringEncoding
 from .. import Utils
@@ -893,7 +893,7 @@ class UtilityCode(UtilityCodeBase):
             self._put_code_section(globalstate[self.proto_block], globalstate, 'export')
         if self.impl and not has_shared_utility_code:
             self._put_code_section(globalstate['utility_code_def'], globalstate, 'impl', used_by=used_by)
-        if self.cleanup and Options.generate_cleanup_code:
+        if self.cleanup and Directives.generate_cleanup_code:
             self._put_code_section(globalstate['cleanup_globals'], globalstate, 'cleanup')
         if self.module_state_decls:
             self._put_code_section(globalstate['module_state_contents'], globalstate, 'module_state_decls')
@@ -1633,7 +1633,7 @@ class GlobalState:
             f"{Naming.modulestatetype_cname} *{Naming.modulestatevalue_cname})")
         w.putln(f"CYTHON_UNUSED_VAR({Naming.modulestatevalue_cname});")
 
-        if not Options.generate_cleanup_code:
+        if not Directives.generate_cleanup_code:
             del self.parts['cleanup_globals']
         else:
             w = self.parts['cleanup_globals']
@@ -1724,12 +1724,12 @@ class GlobalState:
             w.putln("}")
             w.exit_cfunc_scope()
 
-        if Options.generate_cleanup_code:
+        if Directives.generate_cleanup_code:
             w = self.parts['cleanup_globals']
             w.putln("}")
             w.exit_cfunc_scope()
 
-        if Options.generate_cleanup_code:
+        if Directives.generate_cleanup_code:
             w = self.parts['cleanup_module']
             w.putln("}")
             w.exit_cfunc_scope()
@@ -1973,7 +1973,7 @@ class GlobalState:
             self._generate_module_array_traverse_and_clear(struct_attr_cname, count, may_have_refcycles=False)
 
             cleanup_level = cleanup_level_for_type_prefix(prefix)
-            if cleanup_level is not None and cleanup_level <= Options.generate_cleanup_code:
+            if cleanup_level is not None and cleanup_level <= Directives.generate_cleanup_code:
                 part_writer = self.parts['cleanup_globals']
                 part_writer.put(f"for (size_t i=0; i<{count}; ++i) ")
                 part_writer.putln(
@@ -2005,7 +2005,7 @@ class GlobalState:
                 f'{init.name_in_main_c_code_module_state(cname)}.method_name = '
                 f'&{init.name_in_main_c_code_module_state(method_name_cname)};')
 
-        if Options.generate_cleanup_code:
+        if Directives.generate_cleanup_code:
             cleanup = self.parts['cleanup_globals']
             for cname in cnames:
                 cleanup.putln(f"Py_CLEAR({init.name_in_main_c_code_module_state(cname)}.method);")
@@ -2503,8 +2503,6 @@ class GlobalState:
             return
         if entry.utility_code:
             self.use_utility_code(entry.utility_code)
-        if entry.utility_code_definition:
-            self.use_utility_code(entry.utility_code_definition)
         from . import PyrexTypes
         for tp in PyrexTypes.get_all_subtypes(entry.type):
             if hasattr(tp, "entry") and tp.entry is not entry:
@@ -2596,7 +2594,7 @@ class CCodeWriter:
         result = CCodeWriter(create_from, buffer, copy_formatting)
         return result
 
-    def set_global_state(self, global_state):
+    def set_global_state(self, global_state:"GlobalState"):
         assert self.globalstate is None  # prevent overwriting once it's set
         self.globalstate = global_state
         self.code_config = global_state.code_config
@@ -2937,7 +2935,7 @@ class CCodeWriter:
         assert not utility.proto, utility.name
         utility._put_code_section(self, self.globalstate, "impl")
         utility._put_init_code_section(self.globalstate)
-        if utility.cleanup and Options.generate_cleanup_code:
+        if utility.cleanup and Directives.generate_cleanup_code:
             utility._put_code_section(
                 self.globalstate['cleanup_globals'], self.globalstate, "cleanup")
 
@@ -3032,7 +3030,7 @@ class CCodeWriter:
         self.putln("#define %s" % guard)
 
     def unlikely(self, cond):
-        if Options.gcc_branch_hints:
+        if Directives.gcc_branch_hints:
             return 'unlikely(%s)' % cond
         else:
             return cond

@@ -2,7 +2,7 @@ import inspect
 
 from .Visitor import CythonTransform
 from .StringEncoding import EncodedString
-from . import Options
+from . import Directives
 from . import PyrexTypes
 from ..CodeWriter import ExpressionWriter
 from .Errors import warning
@@ -184,7 +184,7 @@ class EmbedSignature(CythonTransform):
             return docfmt % signature
 
     def __call__(self, node):
-        if not Options.docstrings:
+        if not Directives.docstrings:
             return node
         else:
             return super().__call__(node)

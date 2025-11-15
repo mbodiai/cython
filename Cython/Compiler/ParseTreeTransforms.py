@@ -16,7 +16,7 @@ from . import PyrexTypes
 from . import Naming
 from . import ExprNodes
 from . import Nodes
-from . import Options
+from . import Options, Directives
 from . import Builtin
 from . import Errors
 
@@ -1148,19 +1148,19 @@ class InterpretCompilerDirectives(CythonTransform):
         self.cython_module_names = set()
         self.directive_names = {'staticmethod': 'staticmethod'}
         self.parallel_directives = {}
-        directives = Options.get_directive_defaults().copy()
+        directives = Directives.DIRECTIVE_DEFAULTS.copy()
         for key, value in compilation_directive_defaults.items():
             directives[str(key)] = copy.deepcopy(value)
         self.directives = directives
 
     def check_directive_scope(self, pos, directive, scope):
-        legal_scopes = Options.directive_scopes.get(directive, None)
+        legal_scopes = Directives.GLOBAL_DIRECTIVES.directive_scopes.get(directive, None)
         if legal_scopes and scope not in legal_scopes:
             self.context.nonfatal_error(PostParseError(pos, 'The %s compiler directive '
                                         'is not allowed in %s scope' % (directive, scope)))
             return False
         else:
-            if directive not in Options.directive_types:
+            if directive not in Directives.GLOBAL_DIRECTIVES.directive_types:
                 error(pos, "Invalid directive: '%s'." % (directive,))
             return True
 
@@ -1187,7 +1187,7 @@ class InterpretCompilerDirectives(CythonTransform):
                 extra = "Did you mean 'cython.%s' ?" % correct
                 break
         if not extra:
-            is_simple_cython_name = submodule in Options.directive_types
+            is_simple_cython_name = submodule in Directives.GLOBAL_DIRECTIVES.directive_types
             if not is_simple_cython_name and not submodule.startswith("_"):
                 # Try to find it in the Shadow module (i.e. the pure Python namespace of cython.*).
                 # FIXME: use an internal reference of "cython.*" names instead of Shadow.py
@@ -1230,7 +1230,7 @@ class InterpretCompilerDirectives(CythonTransform):
     # The following four functions track imports and cimports that
     # begin with "cython"
     def is_cython_directive(self, name):
-        return (name in Options.directive_types or
+        return (name in Directives.GLOBAL_DIRECTIVES.directive_types or
                 name in self.special_methods or
                 PyrexTypes.parse_basic_type(name))
 
@@ -1427,7 +1427,7 @@ class InterpretCompilerDirectives(CythonTransform):
             self.visitchild(node, 'function')
             optname = node.function.as_cython_attribute()
             if optname:
-                directivetype = Options.directive_types.get(optname)
+                directivetype = Directives.GLOBAL_DIRECTIVES.directive_types.get(optname)
                 if directivetype:
                     args, kwds = node.explicit_args_kwds()
                     directives = []
@@ -1436,7 +1436,7 @@ class InterpretCompilerDirectives(CythonTransform):
                         for keyvalue in kwds.key_value_pairs:
                             key, value = keyvalue
                             sub_optname = "%s.%s" % (optname, key.value)
-                            if Options.directive_types.get(sub_optname):
+                            if Directives.GLOBAL_DIRECTIVES.directive_types.get(sub_optname):
                                 directives.append(self.try_to_parse_directive(sub_optname, [value], None, keyvalue.pos))
                             else:
                                 key_value_pairs.append(keyvalue)
@@ -1452,11 +1452,11 @@ class InterpretCompilerDirectives(CythonTransform):
             self.visit(node)
             optname = node.as_cython_attribute()
             if optname:
-                directivetype = Options.directive_types.get(optname)
+                directivetype = Directives.GLOBAL_DIRECTIVES.directive_types.get(optname)
                 if directivetype is bool:
                     arg = ExprNodes.BoolNode(node.pos, value=True)
                     return [self.try_to_parse_directive(optname, [arg], None, node.pos)]
-                elif directivetype is None or directivetype is Options.DEFER_ANALYSIS_OF_ARGUMENTS:
+                elif directivetype is None or directivetype is Directives.DEFER_ANALYSIS_OF_ARGUMENTS:
                     return [(optname, None)]
                 else:
                     raise PostParseError(
@@ -1483,9 +1483,9 @@ class InterpretCompilerDirectives(CythonTransform):
                     pos, 'The exceptval directive takes 0 or 1 positional arguments and the boolean keyword "check"')
             return ('exceptval', (args[0] if args else None, check))
 
-        directivetype = Options.directive_types.get(optname)
+        directivetype = Directives.GLOBAL_DIRECTIVES.directive_types.get(optname)
         if len(args) == 1 and isinstance(args[0], ExprNodes.NoneNode):
-            return optname, Options.get_directive_defaults()[optname]
+            return optname, Directives.DIRECTIVE_DEFAULTS[optname]
         elif directivetype is bool:
             if kwds is not None or len(args) != 1 or not isinstance(args[0], ExprNodes.BoolNode):
                 raise PostParseError(pos,
@@ -1521,7 +1521,7 @@ class InterpretCompilerDirectives(CythonTransform):
                 raise PostParseError(pos,
                     'The %s directive takes one compile-time string argument' % optname)
             return (optname, directivetype(optname, str(args[0].value)))
-        elif directivetype is Options.DEFER_ANALYSIS_OF_ARGUMENTS:
+        elif directivetype is Directives.DEFER_ANALYSIS_OF_ARGUMENTS:
             # signal to pass things on without processing
             return (optname, (args, kwds.as_python_dict() if kwds else {}))
         else:
@@ -1534,9 +1534,10 @@ class InterpretCompilerDirectives(CythonTransform):
             return self.visit_Node(node)
 
         old_directives = self.directives
-        new_directives = Options.copy_inherited_directives(old_directives, **directives)
+        from .Directives import copy_inherited_directives
+        new_directives = copy_inherited_directives(old_directives, **directives)
         if contents_directives is not None:
-            new_contents_directives = Options.copy_inherited_directives(
+            new_contents_directives = copy_inherited_directives(
                 old_directives, **contents_directives)
         else:
             new_contents_directives = new_directives
@@ -1659,7 +1660,7 @@ class InterpretCompilerDirectives(CythonTransform):
                     optdict[name] = value
             else:
                 optdict[name] = value
-            if name not in Options.immediate_decorator_directives:
+            if name not in Directives.immediate_decorator_directives:
                 contents_optdict[name] = value
         return optdict, contents_optdict
 
@@ -3898,8 +3899,8 @@ class CreateClosureClasses(CythonTransform):
         if node.is_async_def or node.is_generator:
             # Generators need their closure intact during cleanup as they resume to handle GeneratorExit
             class_scope.directives['no_gc_clear'] = True
-        if Options.closure_freelist_size:
-            class_scope.directives['freelist'] = Options.closure_freelist_size
+        if Directives.closure_freelist_size:
+            class_scope.directives['freelist'] = Directives.closure_freelist_size
 
         if from_closure:
             assert cscope.is_closure_scope

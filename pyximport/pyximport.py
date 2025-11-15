@@ -53,7 +53,7 @@ from importlib.abc import MetaPathFinder
 from importlib.machinery import ExtensionFileLoader, SourceFileLoader
 from importlib.util import spec_from_file_location
 
-from Cython.Compiler.Options import Directives
+from Cython.Compiler import Directives
 
 mod_name = "pyximport"
 
@@ -97,7 +97,7 @@ def get_distutils_extension(modname, pyxfilename, language_level=None):
 #    extra = "_" + hashlib.md5(open(pyxfilename).read()).hexdigest()
 #    modname = modname + extra
     extension_mod,setup_args = handle_special_build(modname, pyxfilename)
-    if not extension_mod:
+        if not extension_mod:
         if not isinstance(pyxfilename, str):
             # distutils is stupid in Py2 and requires exactly 'str'
             # => encode accidentally coerced unicode strings back to str
@@ -105,7 +105,7 @@ def get_distutils_extension(modname, pyxfilename, language_level=None):
         from distutils.extension import Extension
         extension_mod = Extension(name = modname, sources=[pyxfilename])
         if language_level is not None:
-            extension_mod.cython_directives = Directives(language_level=language_level)
+            extension_mod.cython_directives = Directives.Directives(language_level=language_level)
     return extension_mod,setup_args
 
 

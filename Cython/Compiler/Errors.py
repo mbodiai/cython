@@ -16,7 +16,7 @@ threadlocal = _threadlocal()
 
 from ..Utils import open_new_file
 from . import DebugFlags
-from . import Options
+from . import Directives
 
 
 class PyrexError(Exception):
@@ -175,7 +175,7 @@ def report_error(err, use_stack=True):
             except UnicodeEncodeError:
                 echo_file.write(line.encode('ASCII', 'replace'))
         threadlocal.cython_errors_count += 1
-        if Options.fast_fail:
+        if Directives.fast_fail:
             raise AbortError("fatal errors")
 
 def error(position, message):
@@ -228,7 +228,7 @@ def message(position, message, level=1):
 def warning(position, message, level=0):
     if level < LEVEL:
         return
-    if Options.warning_errors and position:
+    if Directives.warning_errors and position:
         return error(position, message)
     warn = CompileWarning(position, message)
     line = "warning: %s\n" % warn

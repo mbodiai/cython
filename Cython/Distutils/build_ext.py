@@ -1,8 +1,10 @@
 import sys
-import os
-from typing import Any
+import os   
+from pathlib import Path
 
-from Cython.Compiler.Options import Directives
+from Cython.Compiler.Directives import DirectivesDict
+
+
 
 # Always inherit from the "build_ext" in distutils since setuptools already imports
 # it from Cython if available, and does the proper distutils fallback otherwise.
@@ -78,7 +80,7 @@ class build_ext(_build_ext):
             self.cython_include_dirs = \
                 self.cython_include_dirs.split(os.pathsep)
         if self.cython_directives is None:
-            self.cython_directives = {}
+            self.cython_directives = DirectivesDict()
 
     def get_extension_attr(self, extension, option_name, default=False):
         return getattr(self, option_name) or getattr(extension, option_name, default)
@@ -107,7 +109,7 @@ class build_ext(_build_ext):
         #    1. Start with the command line option.
         #    2. Add in any (unique) entries from the extension
         #         cython_directives (if Cython.Distutils.extension is used).
-        directives = dict(self.cython_directives)
+        directives = dict(self.cython_directives.dict())
         if hasattr(ext, "cython_directives"):
             directives.update(ext.cython_directives)
 
@@ -118,12 +120,26 @@ class build_ext(_build_ext):
             c_line_in_traceback = not ext.no_c_in_traceback
         else:
             c_line_in_traceback = None
+
+        # Decide where to put generated C/C++ sources from cythonize.
+        # - If cython_c_in_temp is set, respect build_temp as before.
+        # - Otherwise, default to a project-local "generated" directory.
+        if self.get_extension_attr(ext, 'cython_c_in_temp'):
+            build_dir = self.build_temp
+        else:
+            build_dir = str((Path.cwd() / "generated").resolve())
+        try:
+            os.makedirs(build_dir, exist_ok=True)
+        except Exception:
+            # If directory creation fails, fall back to previous behavior (None)
+            build_dir = None
+
         options = {
             'use_listing_file': self.get_extension_attr(ext, 'cython_create_listing'),
             'emit_linenums': self.get_extension_attr(ext, 'cython_line_directives'),
             'include_path': includes,
             'compiler_directives': directives,
-            'build_dir': self.build_temp if self.get_extension_attr(ext, 'cython_c_in_temp') else None,
+            'build_dir': build_dir,
             'generate_pxi': self.get_extension_attr(ext, 'cython_gen_pxi'),
             'gdb_debug': self.get_extension_attr(ext, 'cython_gdb'),
             'c_line_in_traceback': c_line_in_traceback,

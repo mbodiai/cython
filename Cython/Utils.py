@@ -3,13 +3,14 @@ Cython -- Things that don't belong anywhere else in particular
 """
 
 
-from functools import wraps
+from functools import lru_cache, wraps
 from pathlib import Path
 import cython
+from typing import Callable, ParamSpec, TypeVar, cast
 
 cython.declare(
     os=object, sys=object, re=object, io=object, glob=object, shutil=object, tempfile=object,
-    update_wrapper=object, partial=object, wraps=object, cython_version=object,
+    update_wrapper=object, partial=object, cython_version=object,
     _cache_function=object, _function_caches=list, _parse_file_version=object, _match_file_encoding=object,
 )
 
@@ -81,15 +82,13 @@ def try_finally_contextmanager(gen_func):
         return _TryFinallyGeneratorContextManager(gen_func(*args, **kwargs))
     return make_gen
 
-
-try:
-    from functools import cache as _cache_function
-except ImportError:
-    from functools import lru_cache
-    _cache_function = lru_cache(maxsize=None)
-
+P = ParamSpec("P")
+R = TypeVar("R")
+def _cache_function(f: Callable[P, R]) -> Callable[P, R]:
+    return cast(Callable[P, R], lru_cache(maxsize=None)(f))
 
 _function_caches = []
+
 
 
 def clear_function_caches():
@@ -100,7 +99,7 @@ def clear_function_caches():
 def cached_function(f):
     cf = _cache_function(f)
     _function_caches.append(cf)
-    cf.uncached = f  # needed by coverage plugin
+    cf.uncached = f  # needed by coverage plugin # type: ignore[attr-defined]
     return cf
 
 
@@ -269,6 +268,7 @@ def contains_init(dir_path):
 def is_package_dir(dir_path):
     return bool(contains_init(dir_path))
 
+Boolean = bool | int
 
 @cached_function
 def path_exists(path):

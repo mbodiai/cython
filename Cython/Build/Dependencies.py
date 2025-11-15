@@ -27,14 +27,13 @@ from ..Utils import (
     is_package_dir,
     write_depfile,
 )
-from ..Compiler import Errors
+from ..Compiler import Errors, Directives
 from ..Compiler.Main import Context
 from ..Compiler import Options
-from ..Compiler.Options import (
+from ..Compiler.build_executable import (
     CompilationOptions,
     CompilationOptionsKwargs,
     default_options,
-    get_directive_defaults,
 )
 
 join_path = cached_function(os.path.join)
@@ -42,7 +41,8 @@ copy_once_if_newer = cached_function(copy_file_to_dir_if_newer)
 safe_makedirs_once = cached_function(safe_makedirs)
 
 if TYPE_CHECKING:
-    from distutils.extension import Extension
+    from distutils.extension import Extension as DisUtilsExtension
+    from setuptools.extension import Extension as SetupToolsExtension
     from typing import Any
     from ..Compiler.Main import Context
 
@@ -951,7 +951,7 @@ def create_extension_list(
 
 # This is the user-exposed entry point.
 def cythonize(
-    module_list: "list[str] | list[Extension]|str",
+    module_list: "Iterable[str] | Iterable[DisUtilsExtension|SetupToolsExtension]|str",
     exclude: "list[str] | None" = None,
     nthreads: int | None = 0,
     aliases: dict[str, str] | None = None,
@@ -1080,7 +1080,7 @@ def cythonize(
 
     deps = create_dependency_tree(ctx, quiet=quiet)
     build_dir = compile_options.build_dir
-    if compile_options.cache and not (compile_options.annotate or Options.annotate):
+    if compile_options.cache and not (compile_options.annotate or Directives.annotate):
         # cache is enabled when:
         # * options.cache is True (the default path to the cache base dir is used)
         # * options.cache is the explicit path to the cache base dir

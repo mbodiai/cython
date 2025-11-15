@@ -25,7 +25,7 @@ from . import PyrexTypes
 from . import Visitor
 from . import Builtin
 from . import UtilNodes
-from . import Options
+from . import Options, Directives
 
 from .Code import UtilityCode, TempitaUtilityCode
 from .StringEncoding import EncodedString, bytes_literal, encoded_string
@@ -337,7 +337,7 @@ class IterationTransform(Visitor.EnvTransform):
                 return self._transform_reversed_iteration(node, iterable)
 
         # range() iteration?
-        if Options.convert_range and 1 <= arg_count <= 3 and (
+        if Directives.convert_range and 1 <= arg_count <= 3 and (
                 iterable.self is None and
                 function.is_name and function.name in ('range', 'xrange') and
                 function.entry and function.entry.is_builtin):
@@ -479,7 +479,8 @@ class IterationTransform(Visitor.EnvTransform):
         # analyse with boundscheck and wraparound
         # off (because we're confident we know the size)
         env = self.current_env()
-        new_directives = Options.copy_inherited_directives(env.directives, boundscheck=False, wraparound=False)
+        from .Directives import copy_inherited_directives
+        new_directives = copy_inherited_directives(env.directives, boundscheck=False, wraparound=False)
         target_assign = Nodes.CompilerDirectivesNode(
             target_assign.pos,
             directives=new_directives,

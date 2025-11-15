@@ -4,7 +4,7 @@ import shutil
 import tempfile
 
 from Cython.Compiler import (
-    MemoryView, Code, Options, Pipeline, Errors, Main, Symtab
+    MemoryView, Code, Options, Pipeline, Errors, Main, Symtab, Directives
 )
 from Cython.Compiler.StringEncoding import EncodedString
 from Cython.Compiler.Scanning import FileSourceDescriptor
@@ -44,11 +44,11 @@ def create_shared_library_pipeline(context, scope, options, result):
                     module_node.scope.use_utility_code(UtilityCode.load_cached(name, c_utility_file))
         return module_node
 
-    orig_cimport_from_pyx = Options.cimport_from_pyx
+    orig_cimport_from_pyx = Directives.cimport_from_pyx
 
     def set_cimport_from_pyx(cimport_from_pyx):
         def inner(node):
-            Options.cimport_from_pyx = cimport_from_pyx
+            Directives.cimport_from_pyx = cimport_from_pyx
             return node
         return inner
 

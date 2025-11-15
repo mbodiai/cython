@@ -285,7 +285,7 @@ def cycompile(input_file, options=()):
     _debug('Using Cython %s to compile %s', Version.version, input_file)
 
     # Create compilation options directly without using CmdLine
-    from ..Compiler.Options import CompilationOptions, default_options
+    from ..Compiler.build_executable import CompilationOptions, default_options
     comp_options = CompilationOptions(**default_options)
 
     # Apply essential options

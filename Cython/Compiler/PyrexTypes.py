@@ -12,19 +12,20 @@ from itertools import product
 from typing import Any, TYPE_CHECKING, Literal, TypeVar, cast, overload
 from typing_extensions import Final, TypeIs
 
-from Cython.Compiler.Options import Directives
+from Cython.Compiler.Directives import Directives
 from Cython.Utils import cached_function
-from .Code import UtilityCode, LazyUtilityCode, TempitaUtilityCode, AbstractUtilityCode
-from . import StringEncoding
-from . import Naming
+from Cython.Compiler.Code import UtilityCode, LazyUtilityCode, TempitaUtilityCode, AbstractUtilityCode
+from Cython.Compiler import StringEncoding, Naming
 
-from .Errors import error, CannotSpecialize, performance_hint
+from Cython.Compiler.Errors import error, CannotSpecialize, performance_hint
 if TYPE_CHECKING:
     from .Code import GlobalState, CCodeWriter
     from .Symtab import Entry, Scope,  CClassScope
     from .ExprNodes import PythranExpr
 
 T = TypeVar('T', bound='BaseType')
+
+
 
 
 def _type_flag(self: 'BaseType', name: str) -> bool:
@@ -219,6 +220,10 @@ class BaseType:
     _specialization_name = None
     default_format_spec = None
     is_builtin_type = 0
+
+    def declaration_code(self, entity_code:str, for_display:int=0, dll_linkage:str|None=None, pyrex:int=0)->str:
+        raise NotImplementedError("Declaration code not implemented for base type")
+
     def can_coerce_to_pyobject(self, env:"GlobalState")->bool|None:
         return False
 
@@ -350,6 +355,56 @@ class BaseType:
         Returns None if no check should be performed.
         """
         return None
+        
+    is_pyobject = 0
+    is_unspecified = 0
+    is_extension_type = 0
+    is_final_type = 0
+    is_builtin_type = 0
+    is_cython_builtin_type = 0
+    is_numeric = 0
+    is_int = 0
+    is_float = 0
+    is_complex = 0
+    is_void = 0
+    is_array = 0
+    is_ptr = 0
+    is_null_ptr = 0
+    is_reference = 0
+    is_fake_reference = 0
+    is_rvalue_reference = 0
+    is_const = 0
+    is_volatile = 0
+    is_cv_qualified = 0
+    is_cfunction = 0
+    is_struct_or_union = 0
+    is_cpp_class = 0
+    is_optional_cpp_class = 0
+    python_type_constructor_name = None
+    is_cpp_string = 0
+    is_struct = 0
+    is_enum = 0
+    is_cpp_enum = False
+    is_typedef = 0
+    is_string = 0
+    is_pyunicode_ptr = 0
+    is_unicode_char = 0
+    is_returncode = 0
+    is_error = 0
+    is_buffer = 0
+    is_ctuple = 0
+    is_memoryviewslice = 0
+    is_pythran_expr = 0
+    is_numpy_buffer = 0
+    is_unowned_view = False
+    is_cython_lock_type = False
+    has_attributes = 0
+    needs_refcounting = 0
+    refcounting_needs_gil = True
+    equivalent_type = None
+    default_value = ""
+    declaration_value = ""
+    
 
 class PyrexType(BaseType):
     is_pyobject = 0
@@ -1030,7 +1085,7 @@ class MemoryViewSliceType(PyrexType):
         if attribute == 'shape':
             scope.declare_var('shape',
                     c_array_type(c_py_ssize_t_type,
-                                 Options.buffer_max_dims),
+                                 Directives.buffer_max_dims),
                     pos,
                     cname='shape',
                     is_cdef=1)
@@ -1038,7 +1093,7 @@ class MemoryViewSliceType(PyrexType):
         elif attribute == 'strides':
             scope.declare_var('strides',
                     c_array_type(c_py_ssize_t_type,
-                                 Options.buffer_max_dims),
+                                 Directives.buffer_max_dims),
                     pos,
                     cname='strides',
                     is_cdef=1)
@@ -1046,7 +1101,7 @@ class MemoryViewSliceType(PyrexType):
         elif attribute == 'suboffsets':
             scope.declare_var('suboffsets',
                     c_array_type(c_py_ssize_t_type,
-                                 Options.buffer_max_dims),
+                                 Directives.buffer_max_dims),
                     pos,
                     cname='suboffsets',
                     is_cdef=1)
@@ -3381,10 +3436,10 @@ class CFuncType(CType):
     #  op_arg_struct    CPtrType   Pointer to optional argument struct
 
     is_cfunction = 1
-    cached_specialized_types = None
-    from_fused = False
-    is_const_method = False
-    op_arg_struct = None
+    cached_specialized_types: list["CFuncType"]|None = None
+    from_fused: Boolean = False
+    is_const_method: Boolean = False
+    op_arg_struct: "CPtrType|None" = None
 
     subtypes = ['return_type', 'args']
     args: list["CFuncTypeArg"]
@@ -5094,7 +5149,7 @@ class PythonTypeConstructorMixin:
     def set_python_type_constructor_name(self, name):
         self.python_type_constructor_name = name
 
-    def specialize_here(self, pos, env, template_values=None):
+    def specialize_here(self, pos, env, template_values:tuple[PyrexType,...]=tuple[PyrexType]()):
         # for a lot of the typing classes it doesn't really matter what the template is
         # (i.e. typing.Dict[int] is really just a dict)
         return self
@@ -5120,7 +5175,7 @@ class BuiltinTypeConstructorObjectType(BuiltinObjectType, PythonTypeConstructorM
 
 
 class PythonTupleTypeConstructor(BuiltinTypeConstructorObjectType):
-    def specialize_here(self, pos, env, template_values=None):
+    def specialize_here(self, pos:int, env:"GlobalState", template_values:tuple[PyrexType,...]=tuple[PyrexType]()):
         if (template_values and None not in template_values and
                 not any(v.is_pyobject for v in template_values)):
             entry = env.declare_tuple_type(pos, template_values)
@@ -5146,7 +5201,7 @@ class SpecialPythonTypeConstructor(PyObjectType, PythonTypeConstructorMixin):
     def resolve(self):
         return self
 
-    def specialize_here(self, pos, env, template_values=None):
+    def specialize_here(self, pos:int, env:"GlobalState", template_values:tuple[PyrexType,...]=tuple[PyrexType]()):
         if len(template_values) != 1:
             if self.modifier_name == "typing.Union":
                 return None
@@ -5873,13 +5928,6 @@ def simple_c_type(signed, longness, name):
     # Find type descriptor for simple type given name and modifiers.
     # Returns None if arguments don't make sense.
     return modifiers_and_name_to_type.get((signed, longness, name))
-
-@overload
-def parse_basic_type(name: str) -> "PyrexType | None": ...
-
-
-@overload
-def parse_basic_type(name: StringEncoding.EncodedString) -> "PyrexType | None": ...
 
 
 def parse_basic_type(name):

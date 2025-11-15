@@ -16,12 +16,11 @@ import os
 import sys
 from distutils.core import setup
 from Cython.Build import cythonize
-from Cython.Compiler import Options
-from Cython.Compiler.Options import Directives
+from Cython.Compiler import Options, Directives
 
 # improve Python compatibility by allowing some broken code
-Options.error_on_unknown_names = False
-Options.error_on_uninitialized = False
+Directives.error_on_unknown_names = False
+Directives.error_on_uninitialized = False
 
 exclude_patterns = ['**/test/**/*.py', '**/tests/**/*.py', '**/__init__.py']
 broken = [
@@ -39,7 +38,7 @@ broken = [
     'importlib/_bootstrap',
 ]
 
-default_directives = Directives(
+    default_directives = Directives.Directives(
     auto_cpdef=False,   # enable when it's safe, see long list of failures below
     binding=True,
     set_initial_path='SOURCEFILE')

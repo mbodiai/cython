@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
 
 from .. import Utils
-from . import Errors, Options
+from . import Errors, Options, Directives
 from .CmdLine import parse_command_line
 from .Errors import CompileError, PyrexError, error, warning
 from .Lexicon import (
@@ -28,7 +28,7 @@ from .Lexicon import (
     unicode_start_ch_any,
     unicode_start_ch_range,
 )
-from .Options import CompilationOptions, default_options
+from .Options import CompilationOptions
 from .Scanning import FileSourceDescriptor, PyrexScanner
 from .StringEncoding import EncodedString
 from .Symtab import ModuleScope
@@ -80,12 +80,12 @@ class Context:
     language_level: int | None = None  # warn when not set but default to Py2
     include_directories: list[str]
     future_directives: Any
-    compiler_directives: Options.Directives
+    compiler_directives: Directives.Directives
     options: CompilationOptions|None
     pxds: dict[str, tuple[list[Node], ModuleScope]]
     utility_pxds: dict[str, tuple[list[Node], ModuleScope]]
     _interned: dict[tuple[type, Any, Any], Any]
-    def __init__(self, include_directories: list[str], compiler_directives: Options.DirectivesDict|Options.Directives, cpp: bool = False,
+    def __init__(self, include_directories: list[str], compiler_directives: Directives.Directives | Directives.Directives, cpp: bool = False,
                  language_level: int | None = None, options: CompilationOptions | None = None):
         # cython_scope is a hack, set to False by subclasses, in order to break
         # an infinite loop.
@@ -97,7 +97,7 @@ class Context:
         self.modules["cython"] = self.cython_scope
         self.include_directories = include_directories
         self.future_directives = set()
-        self.compiler_directives = Options.Directives(**compiler_directives) if not  isinstance(compiler_directives, Options.Directives) else compiler_directives
+        self.compiler_directives = Directives.Directives(**compiler_directives) if not isinstance(compiler_directives, Directives.Directives) else compiler_directives
         self.cpp = cpp
         self.options = options
 
@@ -287,7 +287,7 @@ class Context:
         # directory is searched first for a non-dotted filename.
         pxd = self.search_include_directories(
             qualified_name, suffix=".pxd", source_pos=pos, sys_path=sys_path, source_file_path=source_file_path)
-        if pxd is None and Options.cimport_from_pyx:
+        if pxd is None and Directives.cimport_from_pyx:
             return self.find_pyx_file(qualified_name, pos, sys_path=sys_path)
         return pxd
 
@@ -715,7 +715,7 @@ def compile(source: str | list[str], options: CompilationOptions | None = None, 
     # unless annotations are generated
     cache = None
     if options.cache:
-        if options.annotate or Options.annotate:
+        if options.annotate or Directives.annotate:
             if options.verbose:
                 sys.stderr.write('Cache is ignored when annotations are enabled.\n')
         else:
@@ -820,7 +820,7 @@ def main(command_line = 0):
             print(f"{sys.argv[0]}: No such file or directory: '{e.filename}'", file=sys.stderr)
             sys.exit(1)
     else:
-        options = CompilationOptions(**default_options)
+        options = CompilationOptions()
         sources = args
 
     if options.show_version:

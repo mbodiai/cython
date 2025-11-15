@@ -19,6 +19,7 @@ from io import StringIO
 import re
 from unicodedata import lookup as lookup_unicodechar
 from functools import partial, reduce
+from typing import Any
 
 from .Scanning import PyrexScanner, FileSourceDescriptor, tentatively_scan
 from . import Nodes
@@ -31,7 +32,7 @@ from .ModuleNode import ModuleNode
 from .Errors import error, warning, CompileError
 from .. import Utils
 from . import Future
-from . import Options
+from . import Options, Directives
 
 
 _CDEF_MODIFIERS = ('inline', 'nogil', 'api')
@@ -4138,6 +4139,74 @@ _match_compiler_directive_comment = cython.declare(object, re.compile(
     r"^#\s*cython\s*:\s*((\w|[.])+\s*=.*)$").match)
 
 
+def _parse_directive_assignments(
+    spec: str,
+    *,
+    relaxed_bool: bool = False,
+    ignore_unknown: bool = False,
+    current_settings: Optional[dict] = None,
+) -> dict:
+    directives = Directives()
+    result: dict = dict(current_settings or {})
+    def _coerce_value(name: str, raw_value: str) -> Any:
+        type_info = Directives.directive_types.get(name)
+        if type_info is bool:
+            text = raw_value if not relaxed_bool else raw_value.lower()
+            truthy = {"true", "yes", "1"} if relaxed_bool else {"True"}
+            falsy = {"false", "no", "0"} if relaxed_bool else {"False"}
+            if text in truthy:
+                return True
+            if text in falsy:
+                return False
+            raise ValueError(
+                f"{name} directive must be set to True or False, got '{raw_value}'"
+            )
+        if type_info is int:
+            try:
+                return int(raw_value)
+            except ValueError:
+                raise ValueError(
+                    f"{name} directive must be set to an integer, got '{raw_value}'"
+                ) from None
+        if type_info is str:
+            return raw_value
+        if callable(type_info):
+            return type_info(name, raw_value)
+        return raw_value
+    for item in spec.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if "=" not in item:
+            raise ValueError(f'Expected "=" in option "{item}"')
+        name, raw_value = [s.strip() for s in item.split("=", 1)]
+        if name.endswith(".all"):
+            prefix = name[:-3]
+            found_any = False
+            for directive in directives:
+                if directive.startswith(prefix):
+                    found_any = True
+                    result[directive] = _coerce_value(directive, raw_value)
+            if not found_any and not ignore_unknown:
+                raise ValueError(f'Unknown option: "{name}"')
+            continue
+
+        if name not in directives:
+            if not ignore_unknown:
+                raise ValueError(f'Unknown option: "{name}"')
+            continue
+
+        dtype = Directives.directive_types.get(name)
+        if dtype is list:
+            if name in result and isinstance(result[name], list):
+                result[name].append(raw_value)
+            else:
+                result[name] = [raw_value]
+        else:
+            result[name] = _coerce_value(name, raw_value)
+    return result
+
+
 @cython.cfunc
 def p_compiler_directive_comments(s: PyrexScanner) -> dict:
     result = {}
@@ -4147,7 +4216,9 @@ def p_compiler_directive_comments(s: PyrexScanner) -> dict:
         if m:
             directives_string = m.group(1).strip()
             try:
-                new_directives = Options.parse_directive_list(directives_string, ignore_unknown=True)
+                new_directives = _parse_directive_assignments(
+                    directives_string, ignore_unknown=True
+                )
             except ValueError as e:
                 s.error(e.args[0], fatal=False)
                 s.next()
@@ -4156,7 +4227,7 @@ def p_compiler_directive_comments(s: PyrexScanner) -> dict:
             for name in new_directives:
                 if name not in result:
                     pass
-                elif Options.directive_types.get(name) is list:
+                elif Directives.GLOBAL_DIRECTIVES.directive_types.get(name) is list:
                     result[name] += new_directives[name]
                     new_directives[name] = result[name]
                 elif new_directives[name] == result[name]:
@@ -4200,7 +4271,7 @@ def p_module(s: PyrexScanner, pxd, full_module_name, ctx=Ctx):
         body = body,
         full_module_name = full_module_name,
         directive_comments = directive_comments,
-        directives = Options.get_directive_defaults(),
+        directives = Directives.DIRECTIVE_DEFAULTS,
     )
 
 

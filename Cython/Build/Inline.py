@@ -13,13 +13,13 @@ from datetime import datetime
 from distutils.command.build_ext import build_ext
 from distutils.core import Distribution, Extension
 from importlib.machinery import ExtensionFileLoader
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Callable, ParamSpec, Protocol, TypeVar
 import Cython
 import cython as cython_module
 
-from ..Compiler import Pipeline
+from ..Compiler import Pipeline, Directives
 from ..Compiler.Main import Context
-from ..Compiler.Options import CompilationOptions, default_options, get_directive_defaults, Directives
+from ..Compiler.build_executable import CompilationOptions, default_options
 from ..Compiler.ParseTreeTransforms import SkipDeclarations
 from ..Compiler.TreeFragment import parse_from_strings
 from ..Compiler.Visitor import EnvTransform
@@ -109,7 +109,7 @@ class UnboundSymbols(EnvTransform, SkipDeclarations):
 @cached_function
 def unbound_symbols(code, context=None):
     if context is None:
-        context = Context([], get_directive_defaults(),
+        context = Context([], Directives.DIRECTIVE_DEFAULTS,
                           options=CompilationOptions(**default_options))
     from ..Compiler.ParseTreeTransforms import AnalyseDeclarationsTransform
     tree = parse_from_strings('(tree fragment)', code)
@@ -164,15 +164,13 @@ def _get_build_extension():
     build_extension = build_ext(dist)
     build_extension.finalize_options()
     return build_extension
-def _get_build_extension_so_ext():
-    from distutils.sysconfig import get_config_var
-    return str(get_config_var('EXT_SUFFIX'))
+
 
 @cached_function
 def _create_context(cython_include_dirs):
     return Context(
         list(cython_include_dirs),
-        get_directive_defaults(),
+        Directives.Directives(),
         options=CompilationOptions(**default_options)
     )
 
@@ -208,7 +206,7 @@ def _inline_key(orig_code, arg_sigs, language_level):
     return hashlib.sha256(str(key).encode('utf-8')).hexdigest()
 
 
-def cython_inline(code, get_type=unsafe_type,
+def _cython_inline(code, get_type=unsafe_type,
                   lib_dir=None,
                   cython_include_dirs=None, cython_compiler_directives=None,
                   force=False, quiet=False, locals=None, globals=None, language_level=None,*,
@@ -250,9 +248,8 @@ def cython_inline(code, get_type=unsafe_type,
         _cython_inline_cache[orig_code] = _unbound_symbols = unbound_symbols(code)
         _populate_unbound(kwds, _unbound_symbols, locals, globals)
     except AssertionError:
-        if not quiet:
-            # Parsing from strings not fully supported (e.g. cimports).
-            print("Could not parse code as a string (to extract unbound symbols).")
+        # Parsing from strings not fully supported (e.g. cimports).
+        print("Could not parse code as a string (to extract unbound symbols).")
 
     cimports = []
     for name, arg in list(kwds.items()):
@@ -275,7 +272,8 @@ def cython_inline(code, get_type=unsafe_type,
             build_extension = _get_build_extension()
             cython_inline.so_ext = build_extension.get_ext_filename('')
 
-        lib_dir = Path(lib_dir or ".").resolve()
+        # Default inline artifacts to project-local 'generated' to avoid polluting package dirs
+        lib_dir = Path(lib_dir or (Path.cwd() / "generated")).resolve()
         module_path = lib_dir / f"{module_name}{cython_inline.so_ext}"
 
         if not lib_dir.exists():
@@ -342,6 +340,18 @@ def __invoke({params}):
     arg_list = [kwds[arg] for arg in arg_names]
     return module.__invoke(*arg_list)
 
+P = ParamSpec("P")
+T = TypeVar("T")
+def wraps(f:Callable[P,T])->Callable[[Callable[...,Any]],Callable[P,T]]:
+    return lambda f:f
+class CythonInline:
+    so_ext: str | None = None
+    @wraps(_cython_inline)
+    def __call__(self,*args, **kwargs):
+        return _cython_inline(*args, **kwargs)
+
+cython_inline = CythonInline()
+
 
 # Compile a full module-level Cython code string and import it.
 def cython_inline_module(
@@ -349,7 +359,7 @@ def cython_inline_module(
         lib_dir: str | Path | None = None,
         module_name: str | None = None,
         cython_include_dirs: Iterable[str] = (),
-        cython_compiler_directives: Directives | None = None,
+        cython_compiler_directives: Directives.Directives | None = None,
         force: bool = False,
         quiet: bool = False,
         *,
@@ -370,7 +380,7 @@ def cython_inline_module(
       'output_path'.
     """
     directives = cython_compiler_directives.copy() if cython_compiler_directives else {}
-    language_level = directives.get('language.level', '3')
+    language_level = directives.get('language_level', '3')
     key_hash = _inline_key(code, (), language_level)
 
     # Ensure platform-specific extension suffix is known.

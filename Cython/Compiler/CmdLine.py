@@ -11,7 +11,7 @@ from argparse import Action, ArgumentParser
 import rich_click as click
 
 from Cython import Utils
-from Cython.Compiler import Options
+from Cython.Compiler import Options, Directives
 
 
 # ANSI color codes for terminal output
@@ -137,9 +137,129 @@ def print_usage():
     print("  cython -a -X boundscheck=False mymodule.pyx")
     print("")
 
-    print(Colors.info("Environment variables:"))
-    print("  CYTHON_CACHE_DIR: the base directory containing Cython's caches.")
-    print("  CYTHONRC: path to the Cython configuration file.")
+print(Colors.info("Environment variables:"))
+print("  CYTHON_CACHE_DIR: the base directory containing Cython's caches.")
+print("  CYTHONRC: path to the Cython configuration file.")
+
+
+def _coerce_env_value(value: str) -> Any:
+    value = value.strip()
+    if not value:
+        raise ValueError("Empty compile-time env value")
+
+    if value[0] in "\"'":
+        if len(value) < 2 or value[-1] != value[0]:
+            raise ValueError("Unmatched quotes in compile-time env value")
+        inner = value[1:-1]
+        inner = inner.replace("\\\\", "\\")
+        inner = inner.replace("\\\"", "\"")
+        inner = inner.replace("\\'", "'")
+        return inner
+
+    if value.isdigit() or (value.startswith("-") and value[1:].isdigit()):
+        try:
+            return int(value)
+        except ValueError:
+            pass
+
+    try:
+        return float(value)
+    except ValueError:
+        pass
+
+    lowered = value.lower()
+    if lowered in ("true", "yes"):
+        return True
+    if lowered in ("false", "no"):
+        return False
+    if lowered in ("none", "null"):
+        return None
+
+    return value
+
+
+def _parse_compile_time_env_string(spec: str, env: Dict[str, Any]) -> Dict[str, Any]:
+    for item in spec.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if "=" not in item:
+            raise ValueError(f'Expected "=" in option "{item}"')
+        name, value = [part.strip() for part in item.split("=", 1)]
+        env[name] = _coerce_env_value(value)
+    return env
+
+
+def _coerce_directive_value(name: str, raw_value: str, relaxed_bool: bool) -> Any:
+    type_info = Directives.directive_types.get(name)
+    if type_info is bool:
+        text = raw_value if not relaxed_bool else raw_value.lower()
+        truthy = {"true", "yes", "1"} if relaxed_bool else {"True"}
+        falsy = {"false", "no", "0"} if relaxed_bool else {"False"}
+        if text in truthy:
+            return True
+        if text in falsy:
+            return False
+        raise ValueError(
+            f"{name} directive must be set to True or False, got '{raw_value}'"
+        )
+    if type_info is int:
+        try:
+            return int(raw_value)
+        except ValueError:
+            raise ValueError(
+                f"{name} directive must be set to an integer, got '{raw_value}'"
+            ) from None
+    if type_info is str:
+        return raw_value
+    if callable(type_info):
+        return type_info(name, raw_value)
+    return raw_value
+
+
+def _parse_directives_string(
+    spec: str,
+    *,
+    relaxed_bool: bool = False,
+    ignore_unknown: bool = False,
+    current_settings: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    directives = Directives()
+    result: Dict[str, Any] = dict(current_settings or {})
+    for item in spec.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if "=" not in item:
+            raise ValueError(f'Expected "=" in option "{item}"')
+        name, raw_value = [s.strip() for s in item.split("=", 1)]
+        if name.endswith(".all"):
+            prefix = name[:-3]
+            found_any = False
+            for directive in directives:
+                if directive.startswith(prefix):
+                    found_any = True
+                    result[directive] = _coerce_directive_value(
+                        directive, raw_value, relaxed_bool=relaxed_bool
+                    )
+            if not found_any and not ignore_unknown:
+                raise ValueError(f'Unknown option: "{name}"')
+            continue
+
+        if name not in directives:
+            if not ignore_unknown:
+                raise ValueError(f'Unknown option: "{name}"')
+            continue
+
+        dtype = Directives.directive_types.get(name)
+        if dtype is list:
+            if name in result and isinstance(result[name], list):
+                result[name].append(raw_value)
+            else:
+                result[name] = [raw_value]
+        else:
+            result[name] = _coerce_directive_value(name, raw_value, relaxed_bool)
+    return result
 
 
 # Trimmed handlers: only callbacks actually used by click
@@ -154,13 +274,20 @@ class OptionHandlers:
 
     @staticmethod
     def handle_version(options, value):
-        print_version()
+        Utils.print_version()
         options.show_version = 1
 
     # ---- option callbacks ----
     @staticmethod
     def handle_directive(ctx, param:click.Parameter, value:str):
-        return Options.parse_directive_list(value, relaxed_bool=True, current_settings=ctx.params.get('compiler_directives', {}))
+        try:
+            return _parse_directives_string(
+                value,
+                relaxed_bool=True,
+                current_settings=ctx.params.get('compiler_directives', {}),
+            )
+        except ValueError as exc:
+            raise click.BadParameter(str(exc), ctx=ctx, param=param) from exc
 
     @staticmethod
     def handle_compile_time_env(ctx, param, value):
@@ -169,7 +296,7 @@ class OptionHandlers:
             return env
         try:
             for env_str in value:
-                env = Options.parse_compile_time_env(env_str, current_settings=env)
+                env = _parse_compile_time_env_string(env_str, env)
             return env
         except ValueError as e:
             raise click.BadParameter(
@@ -181,8 +308,8 @@ class OptionHandlers:
         if not value or ctx.resilient_parsing:
             return
         if 'compiler_directives' not in ctx.params:
-            ctx.params['compiler_directives'] = Options.get_directive_defaults().copy()
-        ctx.params['compiler_directives'].update(Options.extra_warnings)
+            ctx.params['compiler_directives'] = Directives.DIRECTIVE_DEFAULTS.copy()
+        ctx.params['compiler_directives'].update(Directives.extra_warnings)
 
     @staticmethod
     def handle_gdb_outdir(ctx, param, value):
@@ -195,7 +322,7 @@ class OptionHandlers:
             os.makedirs(path_obj, exist_ok=True)
             return str(path_obj)
         except Exception as e:
-            raise click.BadParameter(f"Invalid path for --gdb-outdir: {e}", ctx=ctx, param=param)
+            raise click.BadParameter(f"Invalid path for --gdb-outdir: {e}", ctx=ctx, param=param) from None
 
     @staticmethod
     def handle_annotate_coverage(ctx, param, value):
@@ -206,16 +333,17 @@ class OptionHandlers:
 
 class ParseDirectivesAction(Action):
     def __call__(self, parser, namespace, values, option_string=None):
-        base = getattr(namespace, self.dest, None) or Options.get_directive_defaults().copy()
-        parsed = Options.parse_directive_list(values, relaxed_bool=True, current_settings=base)
+        base = getattr(namespace, self.dest, None) or Directives.DIRECTIVE_DEFAULTS.copy()
+        parsed = _parse_directives_string(values, relaxed_bool=True, current_settings=base)
         setattr(namespace, self.dest, parsed)
 
 
 class ParseCompileTimeEnvAction(Action):
     def __call__(self, parser, namespace, values, option_string=None):
         base = getattr(namespace, self.dest, None) or {}
-        parsed = Options.parse_compile_time_env(values, current_settings=base)
-        setattr(namespace, self.dest, parsed)
+        env = dict(base)
+        env = _parse_compile_time_env_string(values, env)
+        setattr(namespace, self.dest, env)
 
 
 class ParseOptionsAction(Action):
@@ -280,11 +408,13 @@ class ParseOptionsAction(Action):
 def cython_command(ctx: click.Context, sources, _version_flag_set, **kw):
     if _version_flag_set:
         Utils.print_version()
-        opts = Options.default_options
+        from .build_executable import default_options
+        opts = default_options
         opts.show_version = True
         ctx.obj = {'options': opts, 'sources': list(sources)}
         return
-    opts = Options.default_options
+    from .build_executable import default_options
+    opts = default_options
     opts.use_listing_file = kw.get('use_listing_file') or False
     includes = list(kw.get('include_path') or [])
     if includes:
@@ -297,16 +427,16 @@ def cython_command(ctx: click.Context, sources, _version_flag_set, **kw):
     opts.timestamps = bool(use_ts and not force)
     opts.verbose = int(kw.get('verbose') or 0)
     if kw.get('embed_pos_in_docstring'):
-        Options.embed_pos_in_docstring = True
+        Directives.embed_pos_in_docstring = True
     preimp = kw.get('pre_import')
     if preimp is not None:
-        Options.pre_import = preimp
+        Directives.pre_import = preimp
     if kw.get('strip_docstrings'):
-        Options.docstrings = False
+        Directives.docstrings = False
     if kw.get('annotate_html'):
-        Options.annotate = 'default'
+        Directives.annotate = 'default'
     if kw.get('annotate_fullc'):
-        Options.annotate = 'fullc'
+        Directives.annotate = 'fullc'
     opts.emit_linenums = bool(kw.get('emit_linenums'))
     opts.cplus = bool(kw.get('cplus'))
     if kw.get('lang_level_2'):
@@ -316,14 +446,14 @@ def cython_command(ctx: click.Context, sources, _version_flag_set, **kw):
     if kw.get('lang_level_3str'):
         opts.language_level = '3'
     if kw.get('lenient'):
-        Options.error_on_unknown_names = False
-        Options.error_on_uninitialized = False
+        Directives.error_on_unknown_names = False
+        Directives.error_on_uninitialized = False
     if kw.get('capi_reexport_cincludes'):
         opts.capi_reexport_cincludes = True
     if kw.get('fast_fail'):
-        Options.fast_fail = True
+        Directives.fast_fail = True
     if kw.get('warning_errors'):
-        Options.warning_errors = True
+        Directives.warning_errors = True
     directives = kw.get('compiler_directives')
     if isinstance(directives, dict):
         opts.compiler_directives = directives
@@ -342,7 +472,7 @@ def cython_command(ctx: click.Context, sources, _version_flag_set, **kw):
         opts.cache = True
     embed = kw.get('embed')
     if embed is not None:
-        Options.embed = embed
+        Directives.embed = embed
     if kw.get('gdb_debug'):
         opts.gdb_debug = True
     outdir = kw.get('output_dir')
@@ -351,14 +481,14 @@ def cython_command(ctx: click.Context, sources, _version_flag_set, **kw):
     if kw.get('c_line_in_traceback') is False:
         opts.c_line_in_traceback = False
     if kw.get('cimport_from_pyx'):
-        Options.cimport_from_pyx = True
+        Directives.cimport_from_pyx = True
     if kw.get('old_style_globals'):
-        Options.old_style_globals = True
+        Directives.old_style_globals = True
     if kw.get('convert_range'):
-        Options.convert_range = True
+        Directives.convert_range = True
     cleanup = kw.get('generate_cleanup_code')
     if cleanup is not None:
-        Options.generate_cleanup_code = cleanup
+        Directives.generate_cleanup_code = cleanup
     shared_c = kw.get('shared_c_file_path')
     if shared_c:
         opts.shared_c_file_path = shared_c
@@ -446,7 +576,8 @@ def parse_command_line(args):
             import errno
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), source)
 
-    options = Options.CompilationOptions(**Options.default_options)
+    from .build_executable import default_options
+    options = Options.CompilationOptions(**default_options)
     for name, value in vars(arguments).items():
         if name.startswith('debug'):
             from . import DebugFlags
@@ -466,7 +597,8 @@ def parse_command_line(args):
             parser.error("cython: Source file not allowed when using --generate-shared\n")
     elif len(sources) == 0 and not options.show_version:
         parser.error("cython: Need at least one source file\n")
-    if Options.embed and len(sources) > 1:
+    from .Directives import embed as global_embed
+    if global_embed and len(sources) > 1:
         parser.error("cython: Only one source file allowed when using --embed\n")
     if options.module_name:
         if options.timestamps:

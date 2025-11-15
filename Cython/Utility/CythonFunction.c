@@ -23,6 +23,7 @@ if (likely(__pyx_CyFunction_init($module_cname) == 0)); else
 #define __Pyx_CYFUNCTION_CLASSMETHOD   0x02
 #define __Pyx_CYFUNCTION_CCLASS        0x04
 #define __Pyx_CYFUNCTION_COROUTINE     0x08
+#define __Pyx_CYFUNCTION_VECTORCALL_KEYWORDS 0x10
 
 #define __Pyx_CyFunction_GetClosure(f) \
     (((__pyx_CyFunctionObject *) (f))->func_closure)
@@ -1043,10 +1044,18 @@ static CYTHON_INLINE int __Pyx_CyFunction_Vectorcall_CheckArgs(__pyx_CyFunctionO
         }
         ret = 1;
     }
-    if (unlikely(kwnames) && unlikely(__Pyx_PyTuple_GET_SIZE(kwnames))) {
-        __Pyx_CyFunction_raise_type_error(
-            cyfunc, "takes no keyword arguments");
-        return -1;
+    if (kwnames) {
+#if !CYTHON_ASSUME_SAFE_SIZE
+        Py_ssize_t kwcount = PyTuple_Size(kwnames);
+        if (unlikely(kwcount < 0)) return -1;
+#else
+        Py_ssize_t kwcount = PyTuple_GET_SIZE(kwnames);
+#endif
+        if (unlikely(kwcount) && !(cyfunc->flags & __Pyx_CYFUNCTION_VECTORCALL_KEYWORDS)) {
+            __Pyx_CyFunction_raise_type_error(
+                cyfunc, "takes no keyword arguments");
+            return -1;
+        }
     }
     return ret;
 }

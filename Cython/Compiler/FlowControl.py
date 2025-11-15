@@ -10,7 +10,7 @@ cython.declare(PyrexTypes=object, ExprNodes=object, Nodes=object, Builtin=object
 from . import Builtin
 from . import ExprNodes
 from . import Nodes
-from . import Options
+from . import Options, Directives
 from . import PyrexTypes
 
 from .Visitor import TreeVisitor, CythonTransform
@@ -611,7 +611,7 @@ def check_definitions(flow: ControlFlow, compiler_directives: dict):
                 pass  # Can be uninitialized here
             elif node.cf_is_null and not entry.in_closure:
                 if entry.error_on_uninitialized or (
-                        Options.error_on_uninitialized and (
+                        Directives.error_on_uninitialized and (
                         entry.type.is_pyobject or entry.type.is_unspecified)):
                     messages.error(
                         node.pos,

@@ -2,8 +2,9 @@
 #
 #   Cython Scanner
 #
+from __future__ import annotations
 
-
+from dataclasses import dataclass, field
 import cython
 
 cython.declare(make_lexicon=object, lexicon=object,
@@ -13,7 +14,7 @@ import os
 import platform
 from contextlib import contextmanager
 from pathlib import Path
-from typing import IO, TYPE_CHECKING
+from typing import IO, TYPE_CHECKING, Any
 from unicodedata import normalize
 
 from .. import Utils
@@ -68,7 +69,8 @@ pyx_reserved_words = py_reserved_words + [
 #------------------------------------------------------------------
 
 class CompileTimeScope:
-
+    entries: dict[str, Any]
+    outer: "CompileTimeScope|None"
     def __init__(self, outer=None):
         self.entries = {}
         self.outer = outer
@@ -296,7 +298,12 @@ class PyrexScanner(Scanner):
     #  compile_time_expr  boolean  In a compile-time expression context
     #  put_back_on_failure  list or None  If set, this records states so the tentatively_scan
     #                                       contextmanager can restore it
-
+    context: CompilationContext
+    included_files: list[str]
+    compile_time_env: CompileTimeScope
+    compile_time_eval: bool | int
+    compile_time_expr: bool | int   
+    async_enabled: bool | int
     def __init__(self, file:IO, filename:SourceDescriptor, parent_scanner:"PyrexScanner|None"=None,
                  scope:Scope|None=None, context:CompilationContext|None=None, source_encoding:str|None=None, parse_comments:bool=True, initial_pos:tuple[int, int, int]=None):
         Scanner.__init__(self, get_lexicon(), file, filename, initial_pos)
@@ -324,10 +331,10 @@ class PyrexScanner(Scanner):
             self.context = context
             self.included_files = scope.included_files
             self.compile_time_env = initial_compile_time_env()
-            self.compile_time_eval = 1
-            self.compile_time_expr = 0
-            if getattr(context.options, 'compile_time_env', None):
-                self.compile_time_env.update(context.options.compile_time_env)
+            self.compile_time_eval = True
+            self.compile_time_expr = False
+            if context and getattr(context.options, 'compile_time_env', None):
+                self.compile_time_env.update(getattr(context.options, 'compile_time_env', {}))
         self.parse_comments = parse_comments
         self.source_encoding = source_encoding
         self.trace = trace_scanner
@@ -338,7 +345,7 @@ class PyrexScanner(Scanner):
         self.ft_string_state_stack = []
         self.in_ft_string_expr_prescan = 0
 
-        self.put_back_on_failure = None
+        self.put_back_on_failure: list[tuple[str, str, tuple[int, int, int]]] | None = None
 
         self.begin('INDENT')
         self.sy = ''
@@ -669,11 +676,11 @@ def tentatively_scan(scanner: PyrexScanner):
     finally:
         release_errors(ignore=True)
 
-
+@dataclass(slots=True)
 class FTStringState:
-    def __init__(self, scanner_state):
-        self.scanner_state = scanner_state
-        self.bracket_states = []
+    scanner_state: str
+    bracket_states: list[FTStringBracketState] = field(default_factory=list["FTStringBracketState"])
+    
 
     def bracket_nesting_level(self):
         if not self.bracket_states:
@@ -694,13 +701,8 @@ class FTStringState:
     def pop_bracket_state(self):
         self.bracket_states.pop()
 
-
+@dataclass(slots=True)
 class FTStringBracketState:
-    # Because of the way this is accessed, it probably doesn't make sense as a cdef class
-    # so just use __slots__ to keep it compact.
-    __slots__ = ('bracket_nesting_level', 'in_format_specifier')
     bracket_nesting_level: int
-    in_format_specifier: bool
-    def __init__(self, bracket_nesting_level: int):
-        self.bracket_nesting_level = bracket_nesting_level
-        self.in_format_specifier = False
+    in_format_specifier: bool = False
+   

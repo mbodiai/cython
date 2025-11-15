@@ -294,14 +294,14 @@ class CythonTransform(VisitorTransform):
         self.context = context
 
     def __call__(self, node):
-        from . import Options
+        from . import Directives
         from .ModuleNode import ModuleNode
         if isinstance(node, ModuleNode):
             directives = node.directives
             if directives is None:
-                directives = Options.get_directive_defaults()
-            elif not isinstance(directives, Options.Directives):
-                normalized = Options.Directives()
+                directives = Directives.DIRECTIVE_DEFAULTS.copy()
+            elif not isinstance(directives, Directives.Directives):
+                normalized = Directives.Directives()
                 normalized.update(directives)
                 directives = normalized
             node.directives = directives

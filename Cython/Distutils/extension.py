@@ -7,7 +7,7 @@ __revision__ = "$Id:$"
 
 import distutils.extension as _Extension
 
-from Cython.Compiler.Options import Directives
+from Cython.Compiler.Directives import DirectivesDict as Directives
 
 
 class Extension(_Extension.Extension):

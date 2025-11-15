@@ -208,8 +208,8 @@ def compile_cython_modules(profile=False, coverage=False, compile_minimal=False,
     # Cython.Compiler.Main (which can trigger premature imports of compiled modules).
     build_ext = cy_build_ext
 
-    from Cython.Compiler.Options import get_directive_defaults
-    get_directive_defaults().update(
+    from Cython.Compiler.Directives import DIRECTIVE_DEFAULTS
+    DIRECTIVE_DEFAULTS.update(
         language_level=3,
         auto_pickle=False,
         binding=False,
@@ -217,10 +217,10 @@ def compile_cython_modules(profile=False, coverage=False, compile_minimal=False,
         autotestdict=False,
     )
     if profile:
-        get_directive_defaults()['profile'] = True
+        DIRECTIVE_DEFAULTS['profile'] = True
         sys.stderr.write("Enabled profiling for the Cython binary modules\n")
     if coverage:
-        get_directive_defaults()['linetrace'] = True
+        DIRECTIVE_DEFAULTS['linetrace'] = True
         sys.stderr.write("Enabled line tracing and profiling for the Cython binary modules\n")
 
     # not using cythonize() directly to let distutils decide whether building extensions was requested
