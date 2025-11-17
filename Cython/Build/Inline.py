@@ -618,9 +618,15 @@ def strip_common_indent(code):
             continue  # comment
         if min_indent is None or min_indent > indent:
             min_indent = indent
+    # If we only saw blank/comment lines, leave the code unchanged.
+    if min_indent is None:
+        return code
     for ix, line in enumerate(lines):
         match = _find_non_space(line)
-        if not match or not line or line[indent:indent+1] == '#':
+        if not match:
+            continue  # blank
+        indent = match.start()
+        if line[indent:indent+1] == '#':
             continue
         lines[ix] = line[min_indent:]
     return '\n'.join(lines)

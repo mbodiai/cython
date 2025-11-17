@@ -1,10 +1,17 @@
 # cython: language_level=3, auto_pickle=False, freethreading_compatible=True
 
-from cpython.ref cimport PyObject, Py_INCREF, Py_CLEAR, Py_XDECREF, Py_XINCREF
-from cpython.exc cimport PyErr_Fetch, PyErr_Restore
-from cpython.pystate cimport PyThreadState_Get
-
 cimport cython
+
+cdef extern from "Python.h":
+    ctypedef struct PyObject:
+        pass
+    void Py_INCREF(PyObject *o)
+    void Py_CLEAR(PyObject *o)
+    void Py_XDECREF(PyObject *o)
+    void Py_XINCREF(PyObject *o)
+    void PyErr_Fetch(PyObject **ptype, PyObject **pvalue, PyObject **ptraceback)
+    void PyErr_Restore(PyObject *type, PyObject *value, PyObject *traceback)
+    void *PyThreadState_Get()
 
 cdef extern from *:
     """
@@ -132,7 +139,7 @@ cdef PyObject* SetupContext(char* funcname, Py_ssize_t lineno, char* filename) e
     PyErr_Fetch(&type, &value, &tb)
     try:
         ctx = Context.__new__(Context, funcname, lineno, filename)
-        Py_INCREF(ctx)
+        Py_INCREF(<PyObject*>ctx)
         result = <PyObject*>ctx
     except Exception, e:
         report_unraisable(filename, lineno, e)

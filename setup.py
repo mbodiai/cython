@@ -110,8 +110,10 @@ def compile_cython_modules(profile=False, coverage=False, compile_minimal=False,
 
     compiled_modules = [
         "Cython.Plex.Actions",
+        "Cython.Plex.Scanners",
         "Cython.Compiler.LineTable",
         "Cython.Compiler.Visitor",
+        "Cython.Runtime.refnanny",
     ]
     if not compile_minimal:
         compiled_modules.extend([
@@ -171,6 +173,7 @@ def compile_cython_modules(profile=False, coverage=False, compile_minimal=False,
         extra_defines.append(('CYTHON_TRACE', '1'))
 
     extensions = []
+    cython_inc_dir = os.path.join(source_root, "Cython", "Includes")
     for module in compiled_modules:
         source_file = os.path.join(source_root, *module.split('.'))
         pyx_source_file = source_file + ".py"
@@ -185,6 +188,7 @@ def compile_cython_modules(profile=False, coverage=False, compile_minimal=False,
             module, sources=[pyx_source_file],
             define_macros=(defines + (extra_defines if '.refnanny' not in module else [])),
             depends=dep_files,
+            cython_include_dirs=[cython_inc_dir],
             **extra_extension_args))
         # XXX hack around setuptools quirk for '*.pyx' sources
         extensions[-1].sources[0] = pyx_source_file

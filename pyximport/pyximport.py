@@ -96,17 +96,17 @@ def get_distutils_extension(modname, pyxfilename, language_level=None):
 #        import md5 as hashlib
 #    extra = "_" + hashlib.md5(open(pyxfilename).read()).hexdigest()
 #    modname = modname + extra
-    extension_mod,setup_args = handle_special_build(modname, pyxfilename)
-        if not extension_mod:
+    extension_mod, setup_args = handle_special_build(modname, pyxfilename)
+    if not extension_mod:
         if not isinstance(pyxfilename, str):
             # distutils is stupid in Py2 and requires exactly 'str'
             # => encode accidentally coerced unicode strings back to str
             pyxfilename = pyxfilename.encode(sys.getfilesystemencoding())
         from distutils.extension import Extension
-        extension_mod = Extension(name = modname, sources=[pyxfilename])
+        extension_mod = Extension(name=modname, sources=[pyxfilename])
         if language_level is not None:
             extension_mod.cython_directives = Directives.Directives(language_level=language_level)
-    return extension_mod,setup_args
+    return extension_mod, setup_args
 
 
 def handle_special_build(modname, pyxfilename):

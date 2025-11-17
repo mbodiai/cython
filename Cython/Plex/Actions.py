@@ -5,6 +5,7 @@ Actions for use in token specifications
 """
 
 class Action:
+    __slots__ = ()
     def perform(self, token_stream, text):
         pass  # abstract
 
@@ -21,6 +22,8 @@ class Return(Action):
     be returned as the value of the associated token
     """
 
+    __slots__ = ("value",)
+
     def __init__(self, value):
         self.value = value
 
@@ -35,6 +38,8 @@ class Call(Action):
     """
     Internal Plex action which causes a function to be called.
     """
+
+    __slots__ = ("function",)
 
     def __init__(self, function):
         self.function = function
@@ -51,6 +56,8 @@ class Method(Action):
     Plex action that calls a specific method on the token stream,
     passing the matched text and any provided constant keyword arguments.
     """
+
+    __slots__ = ("name", "kwargs")
 
     def __init__(self, name, **kwargs):
         self.name = name
@@ -74,6 +81,8 @@ class Begin(Action):
     enter the state |state_name|. See the docstring of Plex.Lexicon
     for more information.
     """
+
+    __slots__ = ("state_name",)
 
     def __init__(self, state_name):
         self.state_name = state_name

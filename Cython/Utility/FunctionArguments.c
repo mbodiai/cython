@@ -106,6 +106,7 @@ static void __Pyx_RaiseArgtupleInvalid(
 
 //////////////////// RaiseKeywordRequired.proto ////////////////////
 
+#if !defined(__PYX_FASTARG_ERROR_HELPERS)
 static void __Pyx_RaiseKeywordRequired(const char* func_name, PyObject* kw_name); /*proto*/
 
 //////////////////// RaiseKeywordRequired ////////////////////
@@ -114,6 +115,7 @@ static void __Pyx_RaiseKeywordRequired(const char* func_name, PyObject* kw_name)
     PyErr_Format(PyExc_TypeError,
         "%s() needs keyword-only argument %U", func_name, kw_name);
 }
+#endif
 
 
 //////////////////// RaiseDoubleKeywords.proto ////////////////////
@@ -133,6 +135,7 @@ static void __Pyx_RaiseDoubleKeywordsError(
 
 //////////////////// RaiseUnexpectedKeywords.proto ////////////////////
 
+#if !defined(__PYX_FASTARG_ERROR_HELPERS)
 static void __Pyx_RaiseUnexpectedKeywordError(const char* func_name, PyObject* kw_name); /*proto*/
 
 //////////////////// RaiseUnexpectedKeywords ////////////////////
@@ -145,6 +148,7 @@ static void __Pyx_RaiseUnexpectedKeywordError(
         "%s() got an unexpected keyword argument '%U'",
         func_name, kw_name);
 }
+#endif
 
 
 //////////////////// RaiseMappingExpected.proto ////////////////////

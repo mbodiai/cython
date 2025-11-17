@@ -434,6 +434,9 @@ static CYTHON_INLINE int __Pyx_PyDict_GetItemRef(PyObject *dict, PyObject *key, 
   #define __Pyx_PyByteArray_GET_SIZE(o) PyByteArray_Size(o)
   #define __Pyx_PyUnicode_GET_LENGTH(o) PyUnicode_GetLength(o)
 #endif
+
+/* Import.AddModuleRef (legacy variant) */
+#define __PYX_HAVE__AddModuleRef 1
 #if __PYX_LIMITED_VERSION_HEX >= 0x030d0000
   #define __Pyx_PyImport_AddModuleRef(name) PyImport_AddModuleRef(name)
 #else

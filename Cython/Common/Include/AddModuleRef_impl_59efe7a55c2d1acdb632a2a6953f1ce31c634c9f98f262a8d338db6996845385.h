@@ -1,3 +1,5 @@
+#if !defined(__PYX_HAVE__AddModuleRef)
+
 #if CYTHON_COMPILING_IN_CPYTHON_FREETHREADING
   static PyObject *__Pyx_PyImport_AddModuleObjectRef(PyObject *name) {
       PyObject *module_dict = PyImport_GetModuleDict();
@@ -41,4 +43,6 @@
       return module;
   }
 #endif
+
+#endif /* !defined(__PYX_HAVE__AddModuleRef) */
 
