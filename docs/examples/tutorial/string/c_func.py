@@ -1,6 +1,6 @@
 from cython.cimports.libc.stdlib import malloc
 from cython.cimports.libc.string import strcpy, strlen
-
+import cython
 hello_world = cython.declare(cython.p_char, 'hello world')
 n = cython.declare(cython.Py_ssize_t, strlen(hello_world))
 

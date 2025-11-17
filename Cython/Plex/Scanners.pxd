@@ -6,9 +6,9 @@ from Cython.Plex.Actions cimport Action
 
 cdef class Scanner:
 
-    cdef public lexicon
-    cdef public stream
-    cdef public name
+    cdef public object lexicon
+    cdef public object stream
+    cdef public object name
     cdef public unicode buffer
     cdef public Py_ssize_t buf_start_pos
     cdef public Py_ssize_t next_pos
@@ -19,14 +19,14 @@ cdef class Scanner:
     cdef tuple current_scanner_position_tuple
     cdef public tuple last_token_position_tuple
     cdef public str text
-    cdef public initial_state # int?
-    cdef public state_name
+    cdef public object initial_state # int?
+    cdef public object state_name
     cdef public list queue
     cdef public bint trace
-    cdef public cur_char
+    cdef public object cur_char
     cdef public long input_state
 
-    cdef public level
+    cdef public object level
 
     @cython.locals(action=Action)
     cpdef tuple read(self)

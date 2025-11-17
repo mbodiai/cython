@@ -137,9 +137,6 @@ def cached_method(f):
     return wrapper
 
 
-def replace_suffix(path, newsuf):
-    return Path(path).with_suffix(newsuf)
-
 
 def open_new_file(path):
     if Path(path).exists():
@@ -210,6 +207,20 @@ def file_generated_by_this_cython(path):
 def file_newer_than(path, time):
     ftime = modification_time(path)
     return ftime > time
+
+
+def replace_suffix(path, newsuf):
+    """
+    Return *path* with its final suffix replaced by *newsuf*.
+
+    Mirrors the historical `Cython.Utils.replace_suffix` helper that works on
+    filesystem paths represented as strings.  This is used throughout the
+    compiler (e.g. when locating .pxd/.dep/.lis companions for a source file).
+    """
+    # Use pathlib for robustness but always return a plain string to match
+    # existing call sites and upstream behaviour.
+    p = Path(path)
+    return str(p.with_suffix(newsuf))
 
 
 def safe_makedirs(path):

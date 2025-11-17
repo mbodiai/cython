@@ -3,24 +3,14 @@
 #
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import (
-    Any,
-    List,
-    Optional,
-    Union,
-    Callable,
-    Type,
-    Tuple,
-    Literal,
-    Unpack,
-    TYPE_CHECKING,
-)
-from typing_extensions import TypedDict
+from collections.abc import Mapping, Callable
+from dataclasses import dataclass, field, asdict, is_dataclass
+from typing import Any, Literal, TYPE_CHECKING, get_type_hints
+from typing_extensions import TypedDict, Unpack
 from Cython.DataDict import DataDict
 
 
-embedding_file_name: Optional[str]
+embedding_file_name: str | None
 
 
 DirectiveScopeType = Literal["module", "function", "cclass", "class", "with statement"]
@@ -30,8 +20,8 @@ DirectiveScopeType = Literal["module", "function", "cclass", "class", "with stat
 
 @dataclass
 class AutotestdictDirectives(DataDict):
-    all: bool = True
-    cdef: bool = True
+    all: bool = field(default=True)
+    cdef: bool = field(default=True)
 
     class Dict(TypedDict):
         all: bool
@@ -40,8 +30,8 @@ class AutotestdictDirectives(DataDict):
 
 @dataclass
 class EmbedSignatureDirectives(DataDict):
-    enabled: bool = False
-    format: str = "c"
+    enabled: bool = field(default=False)
+    format: str = field(default="c")
 
     class Dict(TypedDict):
         enabled: bool
@@ -49,8 +39,8 @@ class EmbedSignatureDirectives(DataDict):
 
 @dataclass
 class OverflowCheckDirectives(DataDict):
-    enabled: bool = False
-    fold: bool = True
+    enabled: bool = field(default=False)
+    fold: bool = field(default=True)    
 
     class Dict(TypedDict):
         enabled: bool
@@ -59,8 +49,8 @@ class OverflowCheckDirectives(DataDict):
 
 @dataclass
 class InferTypesDirectives(DataDict):
-    enabled: bool = True
-    verbose: bool = False
+    enabled: bool = field(default=True)
+    verbose: bool = field(default=False)
 
     class Dict(TypedDict):
         enabled: bool
@@ -85,16 +75,16 @@ class Py2ImportDirectives(DataDict):
 
 @dataclass
 class WarnDirectives(DataDict):
-    all: bool = False
-    undeclared: bool = False
-    unreachable: bool = False
-    maybe_uninitialized: bool = False
-    unused: bool = False
-    unused_arg: bool = False
+    all: bool = field(default=False)
+    undeclared: bool = field(default=False)
+    unreachable: bool = field(default=False)
+    maybe_uninitialized: bool = field(default=False)
+    unused: bool = field(default=False)
+    unused_arg: bool = field(default=False)
     unused_result: bool = False
-    multiple_declarators: bool = False
-    deprecated_DEF: bool = False # noqa: N815
-    deprecated_IF: bool = False # noqa: N815
+    multiple_declarators: bool = field(default=False)
+    deprecated_DEF: bool = field(default=False)
+    deprecated_IF: bool = field(default=False)
 
     class Dict(TypedDict):
         all: bool
@@ -110,24 +100,30 @@ class WarnDirectives(DataDict):
 
 @dataclass
 class OptimizeDirectives(DataDict):
-    inline_defnode_calls: bool = True
-    unpack_method_calls: bool = True
-    unpack_method_calls_in_pyinit: bool = True
-    use_switch: bool = True
+    inline_defnode_calls: bool = field(default=True)    
+    unpack_method_calls: bool = field(default=True)
+    unpack_method_calls_in_pyinit: bool = field(default=True)
+    use_switch: bool = field(default=True)
+    # When True (default), DefNode wrappers that support fast-arg parsing still
+    # generate a legacy dict-based ParseKeywords/RejectKeywords fallback for
+    # non-fastcall runtimes.  When False, such wrappers rely solely on the
+    # fast-arg path and do not emit the older dict-based parsing code at all.
+    fast_arg_fallback: bool = field(default=False)
 
     class Dict(TypedDict):
         inline_defnode_calls: bool
         unpack_method_calls: bool
         unpack_method_calls_in_pyinit: bool
         use_switch: bool
+        fast_arg_fallback: bool
 
 
 @dataclass
 class ControlFlowDirectives(DataDict):
-    output: str = ""
-    annotate_defs: bool = False
-    dot_output: str = ""
-    dot_annotate_defs: bool = False
+    output: str = field(default="")
+    annotate_defs: bool = field(default=False)
+    dot_output: str = field(default="")     
+    dot_annotate_defs: bool = field(default=False)
 
     class Dict(TypedDict):
         output: str
@@ -137,22 +133,22 @@ class ControlFlowDirectives(DataDict):
 
 @dataclass
 class TestDirectives(DataDict):
-    assert_path_exists: List[str]
-    fail_if_path_exists: List[str]
-    assert_c_code_has: List[str]
-    fail_if_c_code_has: List[str]
+    assert_path_exists: list[str] = field(default_factory=list)
+    fail_if_path_exists: list[str] = field(default_factory=list)
+    assert_c_code_has: list[str] = field(default_factory=list)
+    fail_if_c_code_has: list[str] = field(default_factory=list) 
 
     class Dict(TypedDict):
-        assert_path_exists: List[str]
-        fail_if_path_exists: List[str]
-        assert_c_code_has: List[str]
-        fail_if_c_code_has: List[str]
+        assert_path_exists: list[str]
+        fail_if_path_exists: list[str]
+        assert_c_code_has: list[str]
+        fail_if_c_code_has: list[str]
 
 
 @dataclass
 class AutotestdictDirectiveScopes(DataDict):
-    all: DirectiveScopeType = "module"
-    cdef: DirectiveScopeType = "module"
+    all: DirectiveScopeType = field(default="module")  
+    cdef: DirectiveScopeType = field(default="module")
 
     class Dict(TypedDict):
         all: DirectiveScopeType
@@ -161,8 +157,8 @@ class AutotestdictDirectiveScopes(DataDict):
 
 @dataclass
 class DataclassDirectiveScopes(DataDict):
-    dataclass: DirectiveScopeType = "class"
-    field: DirectiveScopeType = "class"
+    dataclass: DirectiveScopeType = field(default="class")
+    field: DirectiveScopeType = field(default="class")
 
     class Dict(TypedDict):
         dataclass: DirectiveScopeType
@@ -170,10 +166,10 @@ class DataclassDirectiveScopes(DataDict):
 
 @dataclass
 class ControlFlowDirectiveScopes(DataDict):
-    output: DirectiveScopeType = "module"
-    annotate_defs: DirectiveScopeType = "module"
-    dot_output: DirectiveScopeType = "module"
-    dot_annotate_defs: DirectiveScopeType = "module"
+    output: DirectiveScopeType = field(default="module")    
+    annotate_defs: DirectiveScopeType = field(default="module")
+    dot_output: DirectiveScopeType = field(default="module")
+    dot_annotate_defs: DirectiveScopeType = field(default="module")
 
 
     class Dict(TypedDict):
@@ -197,7 +193,7 @@ DEFER_ANALYSIS_OF_ARGUMENTS = _DeferAnalysisOfArgumentsType()
 # ---------------------------------------------------------------------------
 
 # Forward reference string avoids the need to define the class before this alias
-DirectiveType = Union[Type, Callable[[str, Any], Any], "_DeferAnalysisOfArgumentsType", None]
+DirectiveType = type | Callable[[str, Any], Any] | _DeferAnalysisOfArgumentsType | None
 # Mapping from directive-name strings to their validation/typing helpers
 
 
@@ -401,6 +397,13 @@ class Directives(DataDict):
     linetrace: bool = False
     emit_code_comments: bool = True  # copy original source code into C code comments
     annotation_typing: bool = True  # read type declarations from Python function annotations
+    # decorator-style directives (accepted but mainly handled at parse/transform time)
+    cfunc: bool = False
+    ccall: bool = False
+    ufunc: bool = False
+    inline: bool = False
+    exceptval: Any | None = None
+    returns: Any | None = None
     infer_types: InferTypesDirectives = field(default_factory=InferTypesDirectives)
     autotestdict: AutotestdictDirectives = field(default_factory=AutotestdictDirectives)
     language_level: int | str = 3
@@ -427,6 +430,9 @@ class Directives(DataDict):
         False  # uses std::optional for C++ locals, so that they work more like Python locals
     )
     legacy_implicit_noexcept: bool = False
+    internal: bool = False
+    collection_type: str | None = None
+    total_ordering: bool = False
     c_compile_guard: str = ""
     set_initial_path: str | None = None  # SOURCEFILE or "/full/path/to/module"
     warn: WarnDirectives = field(default_factory=WarnDirectives)
@@ -434,10 +440,11 @@ class Directives(DataDict):
     optimize: OptimizeDirectives = field(default_factory=OptimizeDirectives)
     remove_unreachable: bool = True
     control_flow: ControlFlowDirectives = field(default_factory=ControlFlowDirectives)
-    test_assert_path_exists: List[str] = field(default_factory=list)
-    test_fail_if_path_exists: List[str] = field(default_factory=list)
-    test_assert_c_code_has: List[str] = field(default_factory=list)
-    test_fail_if_c_code_has: List[str] = field(default_factory=list)
+    test_assert_path_exists: list[str] = field(default_factory=list)
+    test_fail_if_path_exists: list[str] = field(default_factory=list)
+    test_assert_c_code_has: list[str] = field(default_factory=list)
+    test_fail_if_c_code_has: list[str] = field(default_factory=list)
+    test_body_needs_exception_handling: bool = False
     formal_grammar: bool = False
     overload_dispatch: bool = True
 
@@ -459,8 +466,20 @@ class Directives(DataDict):
             if isinstance(value, bool):
                 defaults = {field_name: value for field_name in annotation.__annotations__}
                 setattr(self, name, annotation(**defaults))
+                continue
+
+            nested_value: dict[str, Any]
+            if is_dataclass(value):
+                nested_value = asdict(value)
+            elif isinstance(value, Mapping):
+                nested_value = dict(value)
             else:
-                setattr(self, name, annotation(**value))
+                nested_value = {}
+                for field_name in annotation.__annotations__:
+                    if hasattr(value, field_name):
+                        nested_value[field_name] = getattr(value, field_name)
+
+            setattr(self, name, annotation(**nested_value))
 
     class Dict(TypedDict):
         binding: bool
@@ -489,6 +508,12 @@ class Directives(DataDict):
         linetrace: bool
         emit_code_comments: bool
         annotation_typing: bool
+        cfunc: bool
+        ccall: bool
+        ufunc: bool
+        inline: bool
+        exceptval: Any | None
+        returns: Any | None
         infer_types: InferTypesDirectives.Dict
         autotestdict: AutotestdictDirectives.Dict
         language_level: int | str
@@ -505,6 +530,9 @@ class Directives(DataDict):
         fast_gil: bool
         cpp_locals: bool
         legacy_implicit_noexcept: bool
+        internal: bool
+        collection_type: str | None
+        total_ordering: bool
         c_compile_guard: str
         set_initial_path: str | None
         warn: WarnDirectives.Dict
@@ -512,6 +540,12 @@ class Directives(DataDict):
         optimize: OptimizeDirectives.Dict
         remove_unreachable: bool
         control_flow: ControlFlowDirectives.Dict
+        test_assert_path_exists: list[str]
+        test_fail_if_path_exists: list[str]
+        test_assert_c_code_has: list[str]
+        test_fail_if_c_code_has: list[str]
+        test_body_needs_exception_handling: bool
+        formal_grammar: bool
 
     class Kwargs(TypedDict, total=False):
         binding: bool
@@ -540,6 +574,12 @@ class Directives(DataDict):
         linetrace: bool
         emit_code_comments: bool
         annotation_typing: bool
+        cfunc: bool
+        ccall: bool
+        ufunc: bool
+        inline: bool
+        exceptval: Any | None
+        returns: Any | None
         infer_types: InferTypesDirectives.Dict
         autotestdict: AutotestdictDirectives.Dict
         language_level: int | str
@@ -556,6 +596,9 @@ class Directives(DataDict):
         fast_gil: bool
         cpp_locals: bool
         legacy_implicit_noexcept: bool
+        internal: bool
+        collection_type: str | None
+        total_ordering: bool
         c_compile_guard: str
         set_initial_path: str | None
         warn: WarnDirectives.Dict
@@ -563,10 +606,11 @@ class Directives(DataDict):
         optimize: OptimizeDirectives.Dict
         remove_unreachable: bool
         control_flow: ControlFlowDirectives.Dict
-        test_assert_path_exists: List[str]
-        test_fail_if_path_exists: List[str]
-        test_assert_c_code_has: List[str]
-        test_fail_if_c_code_has: List[str]
+        test_assert_path_exists: list[str]
+        test_fail_if_path_exists: list[str]
+        test_assert_c_code_has: list[str]
+        test_fail_if_c_code_has: list[str]
+        test_body_needs_exception_handling: bool
         formal_grammar: bool
         overload_dispatch: bool
 
@@ -577,9 +621,9 @@ class DirectivesKwargs(Directives.Kwargs):...
 def _copy_inherited_directives(
     outer_directives: Directives, **new_directives: Unpack[Directives.Kwargs]
 ) -> Directives:
-    new_directives_out = Directives(**outer_directives.dict())
+    new_directives_out = Directives(**outer_directives)
 
-    removal_keys: Tuple[RemovalKey, ...] = (
+    removal_keys: tuple[RemovalKey, ...] = (
         "test_assert_path_exists",
         "test_fail_if_path_exists",
         "test_assert_c_code_has",
@@ -738,13 +782,13 @@ class GlobalDirectives(DataDict):
     #: Whether or not to include docstring in the Python extension. If False, the binary size
     #: will be smaller, but the ``__doc__`` attribute of any class or function will be an
     #: empty string.
-    docstrings: bool = True
+    docstrings: bool
 
     #: Embed the source code position in the docstrings of functions and classes.
-    embed_pos_in_docstring: bool = False
+    embed_pos_in_docstring: bool
 
     # undocumented
-    pre_import: Optional[str] = None
+    pre_import: str | None
 
     #: Decref global variables in each module on exit for garbage collection.
     #: 0: None, 1+: interned objects, 2+: cdef globals, 3+: types objects
@@ -754,38 +798,38 @@ class GlobalDirectives(DataDict):
     #: variables or types may no longer be safe when enabling the respective level since
     #: there is no guaranteed order in which the (reference counted) objects will
     #: be cleaned up.  The order can change due to live references and reference cycles.
-    generate_cleanup_code: Union[bool, int] = False
+    generate_cleanup_code: bool | int
 
     #: Should tp_clear() set object fields to None instead of clearing them to NULL?
-    clear_to_none: bool = True
+    clear_to_none: bool
 
     #: Generate an annotated HTML version of the input source files for
     #: debugging and optimisation purposes.
     #: This has the same effect as the ``annotate`` argument in :func:`cythonize`.
-    annotate: bool = False
+    annotate: bool
 
     # When annotating source files in HTML, include coverage information from
     # this file.
-    annotate_coverage_xml: Optional[str] = None
+    annotate_coverage_xml: str | None
 
     #: This will abort the compilation on the first error occurred rather than trying
     #: to keep going and printing further error messages.
-    fast_fail: bool = False
+    fast_fail: bool
 
     #: Turn all warnings into errors.
-    warning_errors: bool = False
+    warning_errors: bool
 
     #: Make unknown names an error.  Python raises a NameError when
     #: encountering unknown names at runtime, whereas this option makes
     #: them a compile time error.  If you want full Python compatibility,
     #: you should disable this option and also 'cache_builtins'.
-    error_on_unknown_names: bool = True
+    error_on_unknown_names: bool
 
     #: Make uninitialized local variable reference a compile time error.
     #: Python raises UnboundLocalError at runtime, whereas this option makes
     #: them a compile time error. Note that this option affects only variables
     #: of "python object" type.
-    error_on_uninitialized: bool = True
+    error_on_uninitialized: bool
 
     #: This will convert statements of the form ``for i in range(...)``
     #: to ``for i from ...`` when ``i`` is a C integer type, and the direction
@@ -794,7 +838,7 @@ class GlobalDirectives(DataDict):
     #: i to overflow. Specifically, if this option is set, an error will be
     #: raised before the loop is entered, whereas without this option the loop
     #: will execute until an overflowing value is encountered.
-    convert_range: bool = True
+    convert_range: bool
 
     #: Perform lookups on builtin names only once, at module initialisation
     #: time.  This will prevent the module from getting imported if a
@@ -804,16 +848,16 @@ class GlobalDirectives(DataDict):
     #: from their Python 2 names to their Python 3 names by Cython
     #: when building in Python 3.x,
     #: so that they do not get in the way even if this option is enabled.
-    cache_builtins: bool = True
+    cache_builtins: bool
 
     #: Generate branch prediction hints to speed up error handling etc.
-    gcc_branch_hints: bool = True
+    gcc_branch_hints: bool
 
     #: Enable this to allow one to write ``your_module.foo = ...`` to overwrite the
     #: definition if the cpdef function foo, at the cost of an extra dictionary
     #: lookup on every call.
     #: If this is false it generates only the Python wrapper and no override check.
-    lookup_module_cpdef: bool = False
+    lookup_module_cpdef: bool
 
     #: Whether or not to embed the Python interpreter, for use in making a
     #: standalone executable or calling from external libraries.
@@ -824,18 +868,18 @@ class GlobalDirectives(DataDict):
     #: If true, the initialisation function is the C main() function, but
     #: this option can also be set to a non-empty string to provide a function name explicitly.
     #: Default is False.
-    embed: Optional[Union[bool, str]] = None
+    embed: bool | str | None
 
     #: Allows cimporting from a pyx file without a pxd file.
-    cimport_from_pyx: bool = False
+    cimport_from_pyx: bool
 
     #: Maximum number of dimensions for buffers -- set lower than number of
     #: dimensions in numpy, as
     #: slices are passed by value and involve a lot of copying.
-    buffer_max_dims: int = 8
+    buffer_max_dims: int
 
     #: Number of function closure instances to keep in a freelist (0: no freelists)
-    closure_freelist_size: int = 8
+    closure_freelist_size: int
 
     #: Allow old style globals lookup (for backwards compatibility)
     old_style_globals: bool = False
@@ -850,7 +894,10 @@ class GlobalDirectives(DataDict):
         module-level sources of truth for types/scopes and helpers.
         """
         # Reuse the module-level mappings to avoid divergence.
-        self.directive_types = type(Directives()).__annotations__
+        # Use evaluated type hints so that annotations from
+        # ``from __future__ import annotations`` are resolved to real
+        # runtime types (e.g. ``bool`` instead of the string ``\"bool\"``).
+        self.directive_types = get_type_hints(Directives)
         # Use the class method to avoid forward-reference issues during import
         self.directive_scopes = DirectiveScopes()
         self.immediate_decorator_directives = immediate_decorator_directives
@@ -866,9 +913,31 @@ class GlobalDirectives(DataDict):
 
 
 # Create a global wrapper (no overrides) for consumers that expect an object.
-GLOBAL_DIRECTIVES = GlobalDirectives()
+GLOBAL_DIRECTIVES = GlobalDirectives(
+    docstrings=docstrings,
+    embed_pos_in_docstring=embed_pos_in_docstring,
+    pre_import=pre_import,
+    generate_cleanup_code=generate_cleanup_code,
+    clear_to_none=clear_to_none,
+    annotate=annotate,
+    annotate_coverage_xml=annotate_coverage_xml,
+    fast_fail=fast_fail,
+    warning_errors=warning_errors,
+    error_on_unknown_names=error_on_unknown_names,
+    error_on_uninitialized=error_on_uninitialized,
+    convert_range=convert_range,
+    cache_builtins=cache_builtins,
+    gcc_branch_hints=gcc_branch_hints,
+    lookup_module_cpdef=lookup_module_cpdef,
+    embed=embed,
+    cimport_from_pyx=cimport_from_pyx,
+    buffer_max_dims=buffer_max_dims,
+    closure_freelist_size=closure_freelist_size,
+)
 
 DIRECTIVE_DEFAULTS = Directives()
+directive_types = GLOBAL_DIRECTIVES.directive_types
+directive_scopes = GLOBAL_DIRECTIVES.directive_scopes
 
 
 if not TYPE_CHECKING:
@@ -885,3 +954,6 @@ if not TYPE_CHECKING:
     OverflowCheckDirectivesDict = OverflowCheckDirectives
     WarnDirectivesDict = WarnDirectives
     DirectivesDict = Directives
+
+if __name__ == "__main__":
+    d = AutotestdictDirectives()

@@ -1,6 +1,7 @@
 import sys
 import os   
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from Cython.Compiler.Directives import DirectivesDict
 
@@ -19,20 +20,23 @@ if _build_ext_module is None:
         # Python 3.12 no longer has distutils, but setuptools can replace it.
         try:
             import setuptools.command.build_ext as _build_ext_module
-        except ImportError:
-            raise ImportError("'distutils' cannot be imported. Please install setuptools.")
+        except ImportError as e:
+            raise ImportError("'distutils' cannot be imported. Please install setuptools.") from e
 
-
-# setuptools remembers the original distutils "build_ext" as "_du_build_ext"
-_build_ext = getattr(_build_ext_module, '_du_build_ext', None)
-if _build_ext is None:
-    _build_ext = getattr(_build_ext_module, 'build_ext', None)
-if _build_ext is None:
-    from distutils.command.build_ext import build_ext as _build_ext
+if TYPE_CHECKING:
+     from distutils.command.build_ext import build_ext as _build_ext
+else:
+    # setuptools remembers the original distutils "build_ext" as "_du_build_ext"
+    _build_ext = getattr(_build_ext_module, '_du_build_ext', None)
+    if _build_ext is None:
+        _build_ext = getattr(_build_ext_module, 'build_ext', None)
+    if _build_ext is None:
+        from distutils.command.build_ext import build_ext as _build_ext
 
 
 class build_ext(_build_ext):
-
+    verbose:int
+    force:bool
     user_options = _build_ext.user_options + [
         ('cython-cplus', None,
              "generate C++ source files"),
@@ -93,7 +97,7 @@ class build_ext(_build_ext):
         #    2.    Add in any (unique) paths from the extension
         #        cython_include_dirs (if Cython.Distutils.extension is used).
         #    3.    Add in any (unique) paths from the extension include_dirs
-        includes = list(self.cython_include_dirs)
+        includes = list(self.cython_include_dirs or [])
         for include_dir in getattr(ext, 'cython_include_dirs', []):
             if include_dir not in includes:
                 includes.append(include_dir)
@@ -109,7 +113,7 @@ class build_ext(_build_ext):
         #    1. Start with the command line option.
         #    2. Add in any (unique) entries from the extension
         #         cython_directives (if Cython.Distutils.extension is used).
-        directives = dict(self.cython_directives.dict())
+        directives = self.cython_directives or DirectivesDict()
         if hasattr(ext, "cython_directives"):
             directives.update(ext.cython_directives)
 
@@ -148,8 +152,44 @@ class build_ext(_build_ext):
         }
 
         new_ext = cythonize(
-            ext,force=self.force, quiet=self.verbose == 0, **options
+            ext, force=self.force, quiet=self.verbose == 0, **options
         )[0]
+
+        # Keep the cythonised sources, but patch up any known bootstrap
+        # mismatches in the generated C before compiling.  In particular,
+        # wire the legacy ``__pyx_string_tab`` alias to the module-state
+        # string table so that the ``__pyx_k*`` macros used in static
+        # initialisers (fast-arg metadata etc.) have a valid target.
+        for i, src in enumerate(new_ext.sources):
+            if not src.endswith((".c", ".cpp", ".cc", ".cxx")):
+                continue
+            try:
+                with open(src, "r", encoding="utf-8") as f:
+                    code = f.read()
+            except OSError:
+                continue
+            if "__pyx_string_tab" not in code or "/* #### Code section: constant_name_defines ### */" not in code:
+                continue
+            if "static PyObject **__pyx_string_tab;" in code:
+                # Already patched.
+                continue
+            updated = code
+            updated = updated.replace(
+                "/* #### Code section: string_decls ### */",
+                "/* #### Code section: string_decls ### */\nstatic PyObject **__pyx_string_tab;",
+                1,
+            )
+            updated = updated.replace(
+                "PyObject **stringtab = __pyx_mstate->__pyx_string_tab;",
+                "PyObject **stringtab = __pyx_mstate->__pyx_string_tab;\n    __pyx_string_tab = stringtab;",
+                1,
+            )
+            if updated != code:
+                try:
+                    with open(src, "w", encoding="utf-8") as f:
+                        f.write(updated)
+                except OSError:
+                    pass
 
         ext.sources = new_ext.sources
         super().build_extension(ext)

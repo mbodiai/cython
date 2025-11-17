@@ -61,12 +61,6 @@ typedef struct {
     Py_ssize_t required_kwonly;
     const char *func_name;
 } __Pyx_FastArgInfo;
-
-/* Error helpers used by the fast-arg parser.  Their definitions live in
- * FunctionArguments.c, but we need forward declarations here.
- */
-static void __Pyx_RaiseUnexpectedKeywordError(const char* func_name, PyObject* kw_name); /*proto*/
-static void __Pyx_RaiseKeywordRequired(const char* func_name, PyObject* kw_name); /*proto*/
 static CYTHON_INLINE Py_ssize_t __Pyx_FastArg_FindKeyword(
     PyObject *name,
     const __Pyx_ParamMeta *params,

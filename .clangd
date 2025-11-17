@@ -1,0 +1,15 @@
+CompileFlags:
+  Add:
+    # Generic, project-wide flags for clangd:
+    # - target CPython
+    # - use this project's Python headers from the uv-managed 3.11 in .venv
+    # - always see the real CPython C-API when parsing any C file
+    # - make sure common Cython macros are always known to clangd
+    - -DCYTHON_COMPILING_IN_CPYTHON=1
+    - -DCYTHON_INLINE=inline
+    - -DCYTHON_FORMAT_SSIZE_T=\"z\"
+    - -I/Users/sebastian/.local/share/uv/python/cpython-3.11.13-macos-aarch64-none/include/python3.11
+    - -include
+    - Python.h
+
+

@@ -3,10 +3,11 @@
 import copy
 from typing import Any, Self
 
-
 class DataDict(dict):
     def copy(self) -> Self:
-        return type(self)(**self)
+        cp = type(self)()
+        cp.update(self)
+        return cp
 
     def __deepcopy__(self, memo):
         cls = type(self)
@@ -22,7 +23,7 @@ class DataDict(dict):
             return dict.__getitem__(self, name)
         raise AttributeError(f"{self.__class__.__name__} has no attribute {name}")
 
-    def __contains__(self, key: object) -> bool:
+    def __contains__(self, key: Any) -> bool:
         if not isinstance(key, str):
             return False
         cur = self
@@ -35,14 +36,14 @@ class DataDict(dict):
                 return False
         return dict.__contains__(cur, key) or key in getattr(type(self), "__dataclass_fields__", [])
 
-    def __setattr__(self, name: str, value):
+    def __setattr__(self, name: str, value: Any) -> None:
         if name in getattr(type(self), "__dataclass_fields__", []):
             object.__setattr__(self, name, value)
             dict.__setitem__(self, name, value)
         else:
             object.__setattr__(self, name, value)
 
-    def __getitem__(self, key: str):
+    def __getitem__(self, key: str) -> Any:
         cur = self
         while "." in key:
             head, key = key.split(".", 1)
@@ -60,7 +61,7 @@ class DataDict(dict):
             return val
         raise KeyError(key)
 
-    def __setitem__(self, key: str, value):
+    def __setitem__(self, key: str, value: Any) -> None:
         # Support dotted assignment into nested mappings
         if "." in key:
             head, tail = key.split(".", 1)

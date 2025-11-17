@@ -1146,12 +1146,10 @@ class InterpretCompilerDirectives(CythonTransform):
     def __init__(self, context, compilation_directive_defaults):
         super().__init__(context)
         self.cython_module_names = set()
-        self.directive_names = {'staticmethod': 'staticmethod'}
+        self.directive_names = {}
         self.parallel_directives = {}
-        directives = Directives.DIRECTIVE_DEFAULTS.copy()
-        for key, value in compilation_directive_defaults.items():
-            directives[str(key)] = copy.deepcopy(value)
-        self.directives = directives
+        self.directives = Directives.Directives()
+        self.directives.update(compilation_directive_defaults)
 
     def check_directive_scope(self, pos, directive, scope):
         legal_scopes = Directives.GLOBAL_DIRECTIVES.directive_scopes.get(directive, None)
@@ -1160,7 +1158,8 @@ class InterpretCompilerDirectives(CythonTransform):
                                         'is not allowed in %s scope' % (directive, scope)))
             return False
         else:
-            if directive not in Directives.GLOBAL_DIRECTIVES.directive_types:
+            if (directive not in Directives.GLOBAL_DIRECTIVES.directive_types and
+                    directive not in Directives.immediate_decorator_directives):
                 error(pos, "Invalid directive: '%s'." % (directive,))
             return True
 
@@ -1453,17 +1452,35 @@ class InterpretCompilerDirectives(CythonTransform):
             optname = node.as_cython_attribute()
             if optname:
                 directivetype = Directives.GLOBAL_DIRECTIVES.directive_types.get(optname)
-                if directivetype is bool:
+
+                # Decorator-style directives: allow bare usage (no call syntax) by
+                # treating them as if they had a single boolean argument True.
+                # This keeps semantics for decorators like ``@cython.cfunc`` while
+                # preserving the call-only requirement for other directives.
+                decorator_directives = {"cfunc", "ccall", "inline"}
+                if directivetype is bool or optname in decorator_directives:
                     arg = ExprNodes.BoolNode(node.pos, value=True)
                     return [self.try_to_parse_directive(optname, [arg], None, node.pos)]
-                elif directivetype is None or directivetype is Directives.DEFER_ANALYSIS_OF_ARGUMENTS:
+
+                if directivetype is None or directivetype is Directives.DEFER_ANALYSIS_OF_ARGUMENTS:
                     return [(optname, None)]
-                else:
-                    raise PostParseError(
-                        node.pos, "The '%s' directive should be used as a function call." % optname)
+
+                raise PostParseError(
+                    node.pos, "The '%s' directive should be used as a function call." % optname)
         return None
 
     def try_to_parse_directive(self, optname, args, kwds, pos):
+        # Decorator-style directives that conceptually take a single boolean argument,
+        # e.g. ``@cython.cfunc``.  Treat bare decorator usage as ``True`` and parse
+        # them before the generic type-based logic below.
+        if optname in ("cfunc", "ccall", "inline"):
+            if kwds is not None or len(args) != 1 or not isinstance(args[0], ExprNodes.BoolNode):
+                raise PostParseError(
+                    pos,
+                    "The %s directive takes one compile-time boolean argument" % optname,
+                )
+            return (optname, args[0].value)
+
         if optname == 'np_pythran' and not self.context.cpp:
             raise PostParseError(pos, 'The %s directive can only be used in C++ mode.' % optname)
         elif optname == 'exceptval':
@@ -1629,7 +1646,7 @@ class InterpretCompilerDirectives(CythonTransform):
                                 value = args[0].value
                             directive = (name, value)
                         if current_opt_dict.get(name, missing) != value:
-                            if name == 'cfunc' and 'ufunc' in current_opt_dict:
+                            if name == 'cfunc' and current_opt_dict.get('ufunc', False):
                                 error(dec.pos, "Cannot apply @cfunc to @ufunc, please reverse the decorators.")
                             directives.append(directive)
                             current_opt_dict[name] = value
@@ -2803,7 +2820,9 @@ if VALUE is not None:
 
         self.seen_vars_stack.pop()
 
-        if "ufunc" in lenv.directives:
+        # Only convert to a ufunc when the directive is explicitly enabled.
+        # Using the mapping's truth value avoids DataDict.__contains__ quirks.
+        if lenv.directives.get("ufunc"):
             from . import UFuncs
             return UFuncs.convert_to_ufunc(node)
         return node
@@ -3418,7 +3437,7 @@ class AdjustDefByDirectives(CythonTransform, SkipDeclarations):
 
     def visit_DefNode(self, node):
         modifiers = []
-        if 'inline' in self.directives:
+        if self.directives.get('inline'):
             modifiers.append('inline')
         nogil = self.directives.get('nogil')
         with_gil = self.directives.get('with_gil')
@@ -3433,10 +3452,12 @@ class AdjustDefByDirectives(CythonTransform, SkipDeclarations):
         elif except_val is None:
             # backward compatible default: no exception check, unless there's also a "@returns" declaration
             except_val = (None, True if return_type_node else False)
-        if self.directives.get('c_compile_guard') and 'cfunc' not in self.directives:
+        cfunc_active = bool(self.directives.get('cfunc'))
+        ccall_active = bool(self.directives.get('ccall'))
+        if self.directives.get('c_compile_guard') and not cfunc_active:
             error(node.pos, "c_compile_guard only allowed on C functions")
-        if 'ccall' in self.directives:
-            if 'cfunc' in self.directives:
+        if ccall_active:
+            if cfunc_active:
                 error(node.pos, "cfunc and ccall directives cannot be combined")
             if with_gil:
                 error(node.pos, "ccall functions cannot be declared 'with_gil'")
@@ -3444,7 +3465,7 @@ class AdjustDefByDirectives(CythonTransform, SkipDeclarations):
                 overridable=True, modifiers=modifiers, nogil=nogil,
                 returns=return_type_node, except_val=except_val, has_explicit_exc_clause=has_explicit_exc_clause)
             return self.visit(node)
-        if 'cfunc' in self.directives:
+        if cfunc_active:
             if self.in_py_class:
                 error(node.pos, "cfunc directive is not allowed here")
             else:

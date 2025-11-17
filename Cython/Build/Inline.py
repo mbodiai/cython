@@ -19,7 +19,7 @@ import cython as cython_module
 
 from ..Compiler import Pipeline, Directives
 from ..Compiler.Main import Context
-from ..Compiler.build_executable import CompilationOptions, default_options
+from ..Compiler.Options import DEFAULT_COMPILATION_OPTIONS
 from ..Compiler.ParseTreeTransforms import SkipDeclarations
 from ..Compiler.TreeFragment import parse_from_strings
 from ..Compiler.Visitor import EnvTransform
@@ -109,8 +109,11 @@ class UnboundSymbols(EnvTransform, SkipDeclarations):
 @cached_function
 def unbound_symbols(code, context=None):
     if context is None:
-        context = Context([], Directives.DIRECTIVE_DEFAULTS,
-                          options=CompilationOptions(**default_options))
+        context = Context(
+            [],
+            Directives.DIRECTIVE_DEFAULTS,
+            options=DEFAULT_COMPILATION_OPTIONS,
+        )
     from ..Compiler.ParseTreeTransforms import AnalyseDeclarationsTransform
     tree = parse_from_strings('(tree fragment)', code)
     for phase in Pipeline.create_pipeline(context, 'pyx'):
@@ -171,7 +174,7 @@ def _create_context(cython_include_dirs):
     return Context(
         list(cython_include_dirs),
         Directives.Directives(),
-        options=CompilationOptions(**default_options)
+        options=DEFAULT_COMPILATION_OPTIONS,
     )
 
 

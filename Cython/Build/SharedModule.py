@@ -1,14 +1,12 @@
 import os
-import re
 import shutil
 import tempfile
 
 from Cython.Compiler import (
-    MemoryView, Code, Options, Pipeline, Errors, Main, Symtab, Directives
+    MemoryView, Code, Pipeline, Errors, Main, Symtab, Directives
 )
 from Cython.Compiler.StringEncoding import EncodedString
 from Cython.Compiler.Scanning import FileSourceDescriptor
-
 
 def create_shared_library_pipeline(context, scope, options, result):
 

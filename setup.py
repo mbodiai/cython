@@ -110,24 +110,13 @@ def compile_cython_modules(profile=False, coverage=False, compile_minimal=False,
 
     compiled_modules = [
         "Cython.Plex.Actions",
-        "Cython.Plex.Scanners",
-        "Cython.Compiler.FlowControl",
         "Cython.Compiler.LineTable",
-        "Cython.Compiler.Scanning",
         "Cython.Compiler.Visitor",
-        "Cython.Runtime.refnanny",
     ]
     if not compile_minimal:
         compiled_modules.extend([
-            "Cython.Plex.Machines",
-            "Cython.Plex.Transitions",
-            "Cython.Plex.DFA",
             "Cython.Compiler.Code",
-            "Cython.Compiler.FusedNode",
-            "Cython.Compiler.Parsing",
-            "Cython.Tempita._tempita",
             "Cython.StringIOTree",
-            "Cython.Utils",
         ])
     if compile_more and not compile_minimal:
         compiled_modules.extend([
@@ -471,7 +460,6 @@ def run_build():
         classifiers=[
             dev_status(version),
             "Intended Audience :: Developers",
-            "License :: OSI Approved :: Apache Software License",
             "Operating System :: OS Independent",
             "Programming Language :: Python",
             "Programming Language :: Python :: 3",

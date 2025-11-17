@@ -11,10 +11,11 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 import contextlib
+import dataclasses
 import os
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
 
@@ -62,8 +63,7 @@ module_name_pattern = re.compile(f"{py2_module_name_pattern}(\\.{py2_module_name
 
 
 standard_include_path = Path(__file__).parent.parent.resolve() / 'Includes'
-
-
+@dataclasses.dataclass
 class Context:
     #  This class encapsulates the context needed for compiling
     #  one or more Cython implementation files along with their
@@ -76,15 +76,17 @@ class Context:
     #  future_directives     [object]
     #  language_level        int     currently 2 or 3 for Python 2/3
 
-    cython_scope: BuiltinScope | CythonScope | None = None
+    cython_scope: BuiltinScope | CythonScope | ModuleScope | None = None
     language_level: int | None = None  # warn when not set but default to Py2
-    include_directories: list[str]
-    future_directives: Any
-    compiler_directives: Directives.Directives
-    options: CompilationOptions|None
-    pxds: dict[str, tuple[list[Node], ModuleScope]]
-    utility_pxds: dict[str, tuple[list[Node], ModuleScope]]
-    _interned: dict[tuple[type, Any, Any], Any]
+    include_directories: list[str] = field(default_factory=list)
+    future_directives: set = field(default_factory=set)
+    compiler_directives: Directives.Directives = field(default_factory=Directives.Directives)
+    options: CompilationOptions=field(default_factory=CompilationOptions)
+    pxds: dict[str, tuple[list[Node], ModuleScope]] = field(default_factory=dict)
+    utility_pxds: dict[str, tuple[list[Node], ModuleScope]] = field(default_factory=dict)
+    _interned: dict[tuple[type, Any, Any], Any] = field(default_factory=dict)
+    modules: dict[str, ModuleScope|BuiltinScope|CythonScope] = field(default_factory=dict)
+
     def __init__(self, include_directories: list[str], compiler_directives: Directives.Directives | Directives.Directives, cpp: bool = False,
                  language_level: int | None = None, options: CompilationOptions | None = None):
         # cython_scope is a hack, set to False by subclasses, in order to break
@@ -92,14 +94,15 @@ class Context:
         # Better code organization would fix it.
 
         from . import Builtin, CythonScope
-        self.modules:dict[str, BuiltinScope | CythonScope] = {"__builtin__" : Builtin.builtin_scope}
+        self.modules = {"__builtin__" : Builtin.builtin_scope}
         self.cython_scope = CythonScope.create_cython_scope(self)
         self.modules["cython"] = self.cython_scope
         self.include_directories = include_directories
         self.future_directives = set()
-        self.compiler_directives = Directives.Directives(**compiler_directives) if not isinstance(compiler_directives, Directives.Directives) else compiler_directives
+        self.compiler_directives = Directives.Directives()
+        self.compiler_directives.update(compiler_directives)
         self.cpp = cpp
-        self.options = options
+        self.options = options or CompilationOptions()
 
         self.pxds = {}  # full name -> node tree
         self.utility_pxds = {}  # pxd name -> node tree
@@ -114,7 +117,7 @@ class Context:
 
     @classmethod
     def from_options(cls, options:CompilationOptions) -> Self:
-        return cls(options.include_path, options.compiler_directives,
+        return cls(options.include_path, Directives.Directives(**options.compiler_directives),
                    options.cplus, options.language_level, options=options)
 
     @property
@@ -456,25 +459,25 @@ class Context:
             result.c_file = None
 
 
-def get_output_filename(source_filename:str, cwd:str, options:CompilationOptions):
+def get_output_filename(source_filename:Path|str, cwd:Path|str, options:CompilationOptions):
     c_suffix = ".cpp" if options.cplus else ".c"
-    suggested_file_name = Utils.replace_suffix(source_filename, c_suffix)
+    suggested_file_name = Path(str(source_filename)).with_suffix(c_suffix)
     if options.output_file:
-        out_path = Path(cwd).resolve() / options.output_file
+        out_path = Path(str(cwd)).resolve() / options.output_file
         if out_path.is_dir():
-            return str(out_path / Path(suggested_file_name).name)
-        return str(out_path)
+            return out_path / Path(suggested_file_name).name
+        return out_path
 
     return suggested_file_name
 
 
 def create_default_resultobj(compilation_source:CompilationSource, options:CompilationOptions):
     result = CompilationResult()
-    result.main_source_file = str(compilation_source.source_desc.filename)
+    result.main_source_file = Path(str(compilation_source.source_desc.filename)) if compilation_source.source_desc.filename else None
     result.compilation_source = compilation_source
     source_desc = compilation_source.source_desc
-    result.c_file = get_output_filename(str(source_desc.filename),
-                        str(compilation_source.cwd), options)
+    result.c_file = get_output_filename(source_desc.filename,
+                        compilation_source.cwd, options)
     result.embedded_metadata = options.embedded_metadata
     return result
 
@@ -548,7 +551,10 @@ def run_pipeline(source:str, options:CompilationOptions, full_module_name:str, c
         warning((compilation_source.source_desc, 1, 0),
                 f"Dotted filenames ('{Path(abs_path).name}') are deprecated."
                 " Please use the normal Python package directory layout.", level=1)
-    if re.search("[.]c(pp|[+][+]|xx)$", result.c_file or "", re.RegexFlag.IGNORECASE) and not context.cpp:
+    c_file_name = ""
+    if result.c_file:
+        c_file_name = str(result.c_file)
+    if re.search("[.]c(pp|[+][+]|xx)$", c_file_name, re.RegexFlag.IGNORECASE) and not context.cpp:
         warning((compilation_source.source_desc, 1, 0),
                 "Filename implies a c++ file but Cython is not in c++ mode.",
                 level=1)
@@ -590,14 +596,14 @@ class CompilationResult:
     compilation_source CompilationSource
     """
 
-    c_file: str | None = None
-    h_file: str | None = None
-    i_file: str | None = None
-    api_file: str | None = None
-    listing_file: str | None = None
-    object_file: str | None = None
-    extension_file: str | None = None
-    main_source_file: str | None = None
+    c_file: Path | None = None
+    h_file: Path | None = None
+    i_file: Path | None = None
+    api_file: Path | None = None
+    listing_file: Path | None = None
+    object_file: Path | None = None
+    extension_file: Path | None = None
+    main_source_file: Path | None = None
     num_errors: int = 0
     compilation_source: CompilationSource | None = None
     embedded_metadata: dict[str, Any]| None = None

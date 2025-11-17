@@ -5,11 +5,14 @@ from . import (ExprNodes, PyrexTypes,
                ParseTreeTransforms, StringEncoding, Errors,
                Naming)
 from .ExprNodes import CloneNode, CodeObjectNode, ProxyNode, TupleNode
-from .Nodes import FuncDefNode, StatListNode, DefNode
+from .Nodes import FuncDefNode, StatListNode, DefNode, AssignmentNode, DecoratorNode
 from ..Utils import OrderedSet
 from .Errors import error, CannotSpecialize
+from typing import TYPE_CHECKING
 
-
+if TYPE_CHECKING:
+    from .ExprNodes import PyCFunctionNode
+    from .Nodes import Node
 class FusedCFuncDefNode(StatListNode):
     """
     This node replaces a function with fused arguments. It deep-copies the
@@ -38,12 +41,12 @@ class FusedCFuncDefNode(StatListNode):
     """
 
     __signatures__ = None
-    resulting_fused_function = None
-    fused_func_assignment = None
-    py_func = None
-    defaults_tuple = None
-    decorators = None
-
+    resulting_fused_function:"PyCFunctionNode|None" = None
+    fused_func_assignment:"AssignmentNode|None" = None
+    py_func:bool|None = None
+    defaults_tuple:"TupleNode|None" = None
+    decorators:list["DecoratorNode"] = []
+    node:"Node"
     child_attrs = StatListNode.child_attrs + [
         '__signatures__', 'resulting_fused_function', 'fused_func_assignment']
 
@@ -682,7 +685,10 @@ class FusedCFuncDefNode(StatListNode):
                 if buffer_types or pythran_types:
                     mapper_arg_names.append('ndarray')
 
-                mapper_sig = ', '.join(f"{atype} {aname}" for atype, aname in zip(mapper_arg_types, mapper_arg_names))
+                parts = []
+                for atype, aname in zip(mapper_arg_types, mapper_arg_names):
+                    parts.append(f"{atype} {aname}")
+                mapper_sig = ', '.join(parts)
                 mapper_args = ', '.join(mapper_arg_names)
 
                 mapper_decl_code = type_mapper.insertion_point()
@@ -903,11 +909,11 @@ class FusedCFuncDefNode(StatListNode):
         signatures = [StringEncoding.EncodedString(node.specialized_signature_string)
                       for node in nodes]
         keys = [ExprNodes.UnicodeNode(node.pos, value=sig)
-                for node, sig in zip(nodes, signatures)]
+                for node, sig in zip(nodes, signatures,strict=False)]
         values = [ExprNodes.PyCFunctionNode.from_defnode(node, binding=True)
                   for node in nodes]
 
-        self.__signatures__ = ExprNodes.DictNode.from_pairs(self.pos, zip(keys, values))
+        self.__signatures__ = ExprNodes.DictNode.from_pairs(self.pos, zip(keys, values,strict=False))
 
         self.specialized_pycfuncs = values
         for pycfuncnode in values:
@@ -920,11 +926,12 @@ class FusedCFuncDefNode(StatListNode):
             self.py_func.pymethdef_required = True
             self.fused_func_assignment.generate_function_definitions(env, code)
 
-from . import Options, Directives
+        # Import here to avoid cyclic imports at module load time.
+        from . import Options
         for stat in self.stats:
             if isinstance(stat, FuncDefNode) and (
                     stat.entry.used or
-                    (Directives.cimport_from_pyx and not stat.entry.visibility == 'extern')):
+                    (Options.cimport_from_pyx and not stat.entry.visibility == 'extern')):
                 code.mark_pos(stat.pos)
                 stat.generate_function_definitions(env, code)
 

@@ -8,13 +8,12 @@ from io import StringIO
 from os.path import relpath as _relpath
 from .Cache import Cache, FingerprintFlags
 
-
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Unpack
+from typing import TYPE_CHECKING, Any
 
 try:
     import pythran
-except:
+except Exception:  # match upstream behaviour: optional dependency
     pythran = None
 
 from .. import Utils
@@ -29,11 +28,9 @@ from ..Utils import (
 )
 from ..Compiler import Errors, Directives
 from ..Compiler.Main import Context
-from ..Compiler import Options
-from ..Compiler.build_executable import (
+from ..Compiler.Options import (
     CompilationOptions,
-    CompilationOptionsKwargs,
-    default_options,
+    DEFAULT_COMPILATION_OPTIONS,
 )
 
 join_path = cached_function(os.path.join)
@@ -69,7 +66,7 @@ def extended_iglob(pattern):
     # because '/' is generally common for relative paths.
     if "**/" in pattern or os.sep == "\\" and "**\\" in pattern:
         seen = set()
-        first, rest = re.split(r"\*\*[%s]" % ("/\\\\" if os.sep == "\\" else "/"), pattern, 1)
+        first, rest = re.split(r"\*\*[%s]" % ("/\\\\" if os.sep == "\\" else "/"),string=pattern, maxsplit=1)
         if first:
             first = iglob(first + os.sep)
         else:
@@ -749,8 +746,7 @@ def create_dependency_tree(ctx=None, quiet=False):
     if _dep_tree is None:
         if ctx is None:
             ctx = Context(
-                ["."], get_directive_defaults(), options=CompilationOptions(**default_options)
-            )
+                ["."], Directives.DIRECTIVE_DEFAULTS, options=CompilationOptions())
         _dep_tree = DependencyTree(ctx, quiet=quiet)
     return _dep_tree
 
@@ -957,8 +953,8 @@ def cythonize(
     aliases: dict[str, str] | None = None,
     force: bool | None = None,
     language: "str | None" = None,
-    exclude_failures=False,
-    show_all_warnings=False,
+    exclude_failures: bool = False,
+    show_all_warnings: bool = False,
     **options: "Unpack[CompilationOptionsKwargs]",
 ):
     """
@@ -1101,11 +1097,27 @@ def cythonize(
             copy_once_if_newer(filepath_abs, mod_dir)
 
     def file_in_build_dir(c_file):
+        """Map an output C file into the selected build_dir.
+
+        For absolute paths we prefer a *project-relative* layout that mirrors
+        the source tree, rather than embedding the full absolute path inside
+        build_dir (which previously produced ``generated/Users/...`` trees).
+        """
         if not build_dir:
             return c_file
         if os.path.isabs(c_file):
-            c_file = os.path.splitdrive(c_file)[1]
-            c_file = c_file.split(os.sep, 1)[1]
+            # Make the path relative to the current working directory if
+            # possible (i.e. when building from the project root).  This gives
+            # us a clean "generated/<relative-path>" layout similar to
+            # mbcore.generate, without leaking absolute paths.
+            cwd = os.getcwd()
+            try:
+                c_file = _relpath(c_file, cwd)
+            except ValueError:
+                # Fallback: preserve previous behaviour of stripping the drive
+                # and leading separator so that we still end up under build_dir.
+                c_file = os.path.splitdrive(c_file)[1]
+                c_file = c_file.split(os.sep, 1)[1]
         c_file = os.path.join(build_dir, c_file)
         dir = os.path.dirname(c_file)
         safe_makedirs_once(dir)
@@ -1443,5 +1455,4 @@ def cythonize_one_helper(m):
 def _init_multiprocessing_helper():
     # KeyboardInterrupt kills workers, so don't let them get it
     import signal
-
     signal.signal(signal.SIGINT, signal.SIG_IGN)

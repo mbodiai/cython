@@ -5,7 +5,9 @@
 
 
 # This should be done automatically
+
 import cython
+import dataclasses
 cython.declare(Nodes=object, ExprNodes=object, EncodedString=object,
                bytes_literal=object, StringEncoding=object,
                FileSourceDescriptor=object, lookup_unicodechar=object,
@@ -19,7 +21,7 @@ from io import StringIO
 import re
 from unicodedata import lookup as lookup_unicodechar
 from functools import partial, reduce
-from typing import Any
+from typing import Any, Optional
 
 from .Scanning import PyrexScanner, FileSourceDescriptor, tentatively_scan
 from . import Nodes
@@ -29,38 +31,33 @@ from . import Builtin
 from . import StringEncoding
 from .StringEncoding import EncodedString, bytes_literal
 from .ModuleNode import ModuleNode
-from .Errors import error, warning, CompileError
-from .. import Utils
+from .Errors import error, warning
 from . import Future
-from . import Options, Directives
+from . import Directives
 
 
 _CDEF_MODIFIERS = ('inline', 'nogil', 'api')
 statement_terminators = cython.declare(frozenset, frozenset((
     ';', 'NEWLINE', 'EOF')))
-
+@dataclasses.dataclass
 class Ctx:
     #  Parsing context
-    level = 'other'
-    visibility = 'private'
-    cdef_flag = False
-    typedef_flag = False
-    api = False
-    overridable = False
-    nogil = False
-    namespace = None
-    templates = None
-    allow_struct_enum_decorator = False
+    level: str = 'other'
+    visibility: str = 'private'
+    cdef_flag: bool | int = False
+    typedef_flag: bool | int = False
+    api: bool    = False
+    overridable: bool | int = False
+    nogil: bool | int = False
+    namespace: str | None = None
+    templates: list[str] | None = None
+    allow_struct_enum_decorator: bool = False
+    modifiers: Any = None
 
-    def __init__(self, **kwds):
-        self.__dict__.update(kwds)
 
-    def __call__(self, **kwds):
-        ctx = Ctx()
-        d = ctx.__dict__
-        d.update(self.__dict__)
-        d.update(kwds)
-        return ctx
+    __call__ = clone = dataclasses.replace
+
+
 
 
 @cython.cfunc
@@ -99,7 +96,7 @@ def p_binop_operator(s: PyrexScanner) -> tuple:
 
 
 # signature is currently overridden in pxd file
-def p_binop_expr(s: PyrexScanner, ops, p_sub_expr):
+def p_binop_expr(s: "PyrexScanner", ops, p_sub_expr):
     n1 = p_sub_expr(s)
     while s.sy in ops:
         op, pos = p_binop_operator(s)
@@ -196,7 +193,7 @@ def p_or_test(s: PyrexScanner):
 
 
 # signature is currently overridden in pxd file
-def p_rassoc_binop_expr(s: PyrexScanner, op, p_subexpr):
+def p_rassoc_binop_expr(s: "PyrexScanner", op, p_subexpr):
     n1 = p_subexpr(s)
     if s.sy == op:
         pos = s.position()
@@ -585,7 +582,7 @@ def p_call_parse_args(s: PyrexScanner, allow_genexp: cython.bint = True):
                 if keyword_args:
                     s.error("Non-keyword arg following keyword arg", pos=arg.pos)
                 if positional_args and not last_was_tuple_unpack:
-                    positional_args[-1].append(arg)
+                    positional_args[len(positional_args) - 1].append(arg)
                 else:
                     positional_args.append([arg])
                 last_was_tuple_unpack = False
@@ -790,7 +787,8 @@ def p_atom(s: PyrexScanner):
         s.next()
         return ExprNodes.FloatNode(pos, value = value)
     elif sy == 'IMAG':
-        value = s.systring[:-1]
+        sy_imag = s.systring
+        value = sy_imag[:len(sy_imag) - 1]
         s.next()
         return ExprNodes.ImagNode(pos, value = value)
     elif sy == 'BEGIN_STRING' or sy == 'BEGIN_FT_STRING':
@@ -859,12 +857,12 @@ def p_int_literal(s: PyrexScanner):
     s.next()
     unsigned = ""
     longness = ""
-    while value[-1] in "UuLl":
-        if value[-1] in "Ll":
+    while value[len(value) - 1] in "UuLl":
+        if value[len(value) - 1] in "Ll":
             longness += "L"
         else:
             unsigned += "U"
-        value = value[:-1]
+        value = value[:len(value) - 1]
     # '3L' is ambiguous in Py2 but not in Py3.  '3U' and '3LL' are
     # illegal in Py2 Python files.  All suffixes are illegal in Py3
     # Python files.
@@ -973,7 +971,7 @@ def p_cat_string_literal(s: PyrexScanner) -> tuple:
         unicode_value = EncodedString(''.join([u for u in ustrings if u is not None]))
     if kind == 'f':
         unicode_value = []
-        for u, pos in zip(ustrings, positions):
+        for u, pos in zip(ustrings, positions, strict=False):
             if isinstance(u, list):
                 unicode_value += u
             else:
@@ -1341,11 +1339,12 @@ def _append_escape_sequence(kind, builder, escape_sequence: str, s: PyrexScanner
         if c == 'N':
             uchar = None
             try:
-                uchar = lookup_unicodechar(escape_sequence[3:-1])
+                name_slice = escape_sequence[3:len(escape_sequence) - 1]
+                uchar = lookup_unicodechar(name_slice)
                 chrval = ord(uchar)
             except KeyError:
                 s.error("Unknown Unicode character name %s" %
-                        repr(escape_sequence[3:-1]).lstrip('u'), fatal=False)
+                        repr(name_slice).lstrip('u'), fatal=False)
         elif len(escape_sequence) in (6, 10):
             chrval = int(escape_sequence[2:], 16)
             if chrval > 1114111:  # sys.maxunicode:
@@ -1484,7 +1483,7 @@ def p_dict_or_set_maker(s: PyrexScanner):
                 value = p_test(s)
                 item = ExprNodes.DictItemNode(key.pos, key=key, value=value)
             if last_was_simple_item:
-                parts[-1].append(item)
+                parts[len(parts) - 1].append(item)
             else:
                 parts.append([item])
                 last_was_simple_item = True
@@ -1722,7 +1721,8 @@ def p_expression_or_assignment(s: PyrexScanner):
                     index=make_slice_node(lhs.pos, lhs.start, lhs.stop))
             elif not isinstance(lhs, (ExprNodes.AttributeNode, ExprNodes.IndexNode, ExprNodes.NameNode)):
                 error(lhs.pos, "Illegal operand for inplace operation.")
-            operator = s.sy[:-1]
+            op_text = s.sy
+            operator = op_text[:len(op_text) - 1]
             s.next()
             if s.sy == 'yield':
                 rhs = p_yield_expression(s)
@@ -1732,11 +1732,11 @@ def p_expression_or_assignment(s: PyrexScanner):
         expr = expr_list[0]
         return Nodes.ExprStatNode(expr.pos, expr=expr)
 
-    rhs = expr_list[-1]
+    rhs = expr_list[len(expr_list) - 1]
     if len(expr_list) == 2:
         return Nodes.SingleAssignmentNode(rhs.pos, lhs=expr_list[0], rhs=rhs, first=has_annotation)
     else:
-        return Nodes.CascadedAssignmentNode(rhs.pos, lhs_list=expr_list[:-1], rhs=rhs)
+        return Nodes.CascadedAssignmentNode(rhs.pos, lhs_list=expr_list[:len(expr_list) - 1], rhs=rhs)
 
 
 @cython.cfunc
@@ -2716,7 +2716,6 @@ def p_positional_and_keyword_args(s: PyrexScanner, end_sy_set, templates = None)
                 parsed_type = True
             keyword_node = ExprNodes.IdentifierStringNode(arg.pos, value=ident)
             keyword_args.append((keyword_node, arg))
-            was_keyword = True
 
         else:
             if looking_at_expr(s):
@@ -2937,7 +2936,7 @@ def is_memoryviewslice_access(s: PyrexScanner) -> cython.bint:
         if s.sy == ':':
             retval = True
 
-    for sv in saved[::-1]:
+    for sv in reversed(saved):
         s.put_back(*sv)
 
     return retval
@@ -4126,7 +4125,6 @@ def _extract_docstring(node) -> tuple:
     return doc, node
 
 
-@cython.ccall
 def p_code(s: PyrexScanner, level=None, ctx=Ctx):
     body = p_statement_list(s, ctx(level = level), first_statement=True)
     if s.sy != 'EOF':
@@ -4146,14 +4144,14 @@ def _parse_directive_assignments(
     ignore_unknown: bool = False,
     current_settings: Optional[dict] = None,
 ) -> dict:
-    directives = Directives()
+    directives = Directives.Directives()
     result: dict = dict(current_settings or {})
-    def _coerce_value(name: str, raw_value: str) -> Any:
+    def _coerce_value(name: str, raw_value: str, relaxed: bool) -> Any:
         type_info = Directives.directive_types.get(name)
         if type_info is bool:
-            text = raw_value if not relaxed_bool else raw_value.lower()
-            truthy = {"true", "yes", "1"} if relaxed_bool else {"True"}
-            falsy = {"false", "no", "0"} if relaxed_bool else {"False"}
+            text = raw_value if not relaxed else raw_value.lower()
+            truthy = {"true", "yes", "1"} if relaxed else {"True"}
+            falsy = {"false", "no", "0"} if relaxed else {"False"}
             if text in truthy:
                 return True
             if text in falsy:
@@ -4181,12 +4179,12 @@ def _parse_directive_assignments(
             raise ValueError(f'Expected "=" in option "{item}"')
         name, raw_value = [s.strip() for s in item.split("=", 1)]
         if name.endswith(".all"):
-            prefix = name[:-3]
+            prefix = name[:len(name) - 3]
             found_any = False
             for directive in directives:
                 if directive.startswith(prefix):
                     found_any = True
-                    result[directive] = _coerce_value(directive, raw_value)
+                    result[directive] = _coerce_value(directive, raw_value, relaxed_bool)
             if not found_any and not ignore_unknown:
                 raise ValueError(f'Unknown option: "{name}"')
             continue
@@ -4203,7 +4201,7 @@ def _parse_directive_assignments(
             else:
                 result[name] = [raw_value]
         else:
-            result[name] = _coerce_value(name, raw_value)
+            result[name] = _coerce_value(name, raw_value, relaxed_bool)
     return result
 
 
@@ -4598,7 +4596,8 @@ def p_literal_pattern(s: PyrexScanner):
             s.error("Expected imaginary number")
         else:
             add_pos = s.position()
-            value = s.systring[:-1]
+            imag_text = s.systring
+            value = imag_text[:len(imag_text) - 1]
             s.next()
             res = ExprNodes.binop_node(
                 add_pos,
@@ -4608,7 +4607,8 @@ def p_literal_pattern(s: PyrexScanner):
             )
 
     if res is None and sy == 'IMAG':
-        value = s.systring[:-1]
+        imag_text = s.systring
+        value = imag_text[:len(imag_text) - 1]
         s.next()
         res = ExprNodes.ImagNode(pos, value=sign+value)
         if sign == "-":

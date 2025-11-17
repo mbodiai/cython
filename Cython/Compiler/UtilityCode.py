@@ -203,7 +203,11 @@ class CythonUtilityCode(Code.UtilityCodeBase):
         self.tree = tree
         return tree
 
-    def put_code(self, output):
+    def put_code(self, output, used_by=None):
+        # Cython utility code is injected into the compiler AST via
+        # ``get_tree()``/pipeline merging rather than emitted here, so this is
+        # intentionally a no-op.  The ``used_by`` argument is accepted for
+        # compatibility with the ``UtilityCodeBase.put_code`` API.
         pass
 
     @classmethod
@@ -238,7 +242,7 @@ class CythonUtilityCode(Code.UtilityCodeBase):
         entries.pop('__doc__')
 
         for entry in entries.values():
-            entry.utility_code_definition = self
+            entry.utility_code = self
             entry.used = used
 
         original_scope = tree.scope
@@ -259,18 +263,15 @@ class CythonUtilityCode(Code.UtilityCodeBase):
         other compiler directives. This function provides a sensible default list
         of directives to copy.
         """
-        utility_code_directives = dict(Directives.DIRECTIVE_DEFAULTS)
+        utility_code_directives = Directives.DIRECTIVE_DEFAULTS.copy()
         inherited_directive_names = (
             'binding', 'always_allow_keywords', 'allow_none_for_extension_args',
             'auto_pickle', 'ccomplex',
             'c_string_type', 'c_string_encoding',
             'optimize.inline_defnode_calls', 'optimize.unpack_method_calls',
             'optimize.unpack_method_calls_in_pyinit', 'optimize.use_switch')
-        for name in inherited_directive_names:
-            if name in current_directives:
-                utility_code_directives[name] = current_directives[name]
+        utility_code_directives.update({name: current_directives[name] for name in inherited_directive_names if name in current_directives})
         return utility_code_directives
-
 
 class TemplatedFileSourceDescriptor(FileSourceDescriptor):
 

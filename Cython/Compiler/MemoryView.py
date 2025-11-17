@@ -1,3 +1,4 @@
+from typing import TYPE_CHECKING
 from .Errors import CompileError, error
 from . import ExprNodes
 from .ExprNodes import IntNode, NameNode, AttributeNode
@@ -8,6 +9,9 @@ from .UtilityCode import CythonUtilityCode, CythonSharedUtilityCode
 from . import Buffer
 from . import Naming
 from . import PyrexTypes
+
+if TYPE_CHECKING:
+    from .PyrexTypes import MemoryViewSliceType
 
 START_ERR = "Start must not be given."
 STOP_ERR = "Axis specification only allowed in the 'step' slot."
@@ -111,7 +115,7 @@ def get_buf_flags(specs):
     elif is_f_contig:
         return memview_f_contiguous
 
-    access, packing = zip(*specs)
+    access, _packing = zip(*specs,strict=False)
 
     if 'full' in access or 'ptr' in access:
         return memview_full_access
@@ -119,7 +123,7 @@ def get_buf_flags(specs):
         return memview_strided_access
 
 
-def insert_newaxes(memoryviewtype, n):
+def insert_newaxes(memoryviewtype:"MemoryViewSliceType", n:int)->"MemoryViewSliceType":
     axes = [('direct', 'strided')] * n
     axes.extend(memoryviewtype.axes)
     return PyrexTypes.MemoryViewSliceType(memoryviewtype.dtype, axes)

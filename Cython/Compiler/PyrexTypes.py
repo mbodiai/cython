@@ -9,10 +9,10 @@ import re
 
 from functools import partial, reduce
 from itertools import product
-from typing import Any, TYPE_CHECKING, Literal, TypeVar, cast, overload
+from typing import Any, TYPE_CHECKING, Generic, Literal, TypeVar, cast, overload
 from typing_extensions import Final, TypeIs
 
-from Cython.Compiler.Directives import Directives
+from Cython.Compiler import Directives
 from Cython.Utils import cached_function
 from Cython.Compiler.Code import UtilityCode, LazyUtilityCode, TempitaUtilityCode, AbstractUtilityCode
 from Cython.Compiler import StringEncoding, Naming
@@ -210,7 +210,8 @@ def is_builtin_type(self) -> TypeIs[BuiltinObjectType]:
 def is_fused(self) -> TypeIs[FusedType]:
     return bool(self.get_fused_types())
 
-class BaseType:
+ScopeT = TypeVar('ScopeT', bound='Scope')
+class BaseType(Generic[ScopeT]):
     #
     #  Base class for all Cython types including pseudo-types.
 
@@ -220,7 +221,7 @@ class BaseType:
     _specialization_name = None
     default_format_spec = None
     is_builtin_type = 0
-
+    scope: ScopeT
     def declaration_code(self, entity_code:str, for_display:int=0, dll_linkage:str|None=None, pyrex:int=0)->str:
         raise NotImplementedError("Declaration code not implemented for base type")
 
@@ -305,13 +306,13 @@ class BaseType:
         return self
 
     @property
-    def is_fused(self):
+    def is_fused(self) -> bool|int:
         """
         Whether this type or any of its subtypes is a fused type
         """
         # Add this indirection for the is_fused property to allow overriding
         # get_fused_types in subclasses.
-        return self.get_fused_types()
+        return bool(self.get_fused_types())
 
     def deduce_template_params(self, actual):
         """
@@ -406,7 +407,7 @@ class BaseType:
     declaration_value = ""
     
 
-class PyrexType(BaseType):
+class PyrexType(BaseType[ScopeT]):
     is_pyobject = 0
     is_unspecified = 0
     is_extension_type = 0
@@ -455,7 +456,7 @@ class PyrexType(BaseType):
     equivalent_type = None
     default_value = ""
     declaration_value = ""
-    
+    entry:"Entry"
     def __init__(self,
                  name:str|None = None,
                  cname:str|None = None,
@@ -530,14 +531,7 @@ class PyrexType(BaseType):
 
         return self
 
-    @property
-    def is_fused(self) -> bool|int:
-        """
-        Whether this type or any of its subtypes is a fused type
-        """
-        # Add this indirection for the is_fused property to allow overriding
-        # get_fused_types in subclasses.
-        return bool(self.get_fused_types())
+
 
     def deduce_template_params(self, actual):
         """
@@ -949,7 +943,7 @@ def create_typedef_type(name, base_type, cname, is_external=0, namespace=None):
 
 
 
-class MemoryViewSliceType(PyrexType):
+class MemoryViewSliceType(PyrexType["CClassScope"]):
 
     is_memoryviewslice = 1
     default_value = "{ 0, 0, { 0 }, { 0 }, { 0 } }"
@@ -960,14 +954,13 @@ class MemoryViewSliceType(PyrexType):
         # However, memoryviews are sufficiently specialized that this doesn't
         # seem practical. Implement a limited version of it for now
     refcounting_needs_gil = False  # __PYX_XCLEAR_MEMVIEW acquires GIL internally.
-    scope = None
 
     # These are special cased in Defnode
-    from_py_function = None
-    to_py_function = None
+    from_py_function: str|None = None
+    to_py_function: str|None = None
 
-    exception_value = None
-    exception_check = True
+    exception_value: Any = None
+    exception_check: bool | int = True
 
     subtypes = ['dtype']
 
@@ -1078,7 +1071,7 @@ class MemoryViewSliceType(PyrexType):
         return True
 
     def declare_attribute(self, attribute, env, pos):
-        from . import MemoryView, Options
+        from . import MemoryView
 
         scope = self.scope
 
@@ -1156,7 +1149,7 @@ class MemoryViewSliceType(PyrexType):
                             defining=1,
                             cname=is_contig_name)
 
-                entry.utility_code_definition = MemoryView.get_is_contig_utility(c_or_f, self.ndim)
+                entry.utility_code = MemoryView.get_is_contig_utility(c_or_f, self.ndim)
 
         return True
 
@@ -2392,7 +2385,7 @@ class CNumericType(CType):
                     None,
                     visibility="extern",
                     parent_type=self)
-            scope.directives = Directives()
+            scope.directives = Directives.Directives()
             scope.declare_cfunction(
                     "conjugate",
                     CFuncType(self, [CFuncTypeArg("self", self, None)], nogil=True),
@@ -3822,7 +3815,7 @@ class CFuncType(CType):
 
         return get_all_specialized_permutations(fused_types)
 
-    def get_all_specialized_function_types(self) -> list["CFuncType"]:
+    def get_all_specialized_function_types(self):
         """
         Get all the specific function types of this one.
         """
@@ -3960,11 +3953,12 @@ class CFuncType(CType):
             'return_type': Arg('return', self.return_type),
             'except_clause': except_clause,
         }
-        # FIXME: directives come from first defining environment and do not adapt for reuse
+
+        directives = CythonUtilityCode.filter_inherited_directives(env.global_scope().directives)
         env.use_utility_code(CythonUtilityCode.load(
             "cfunc.to_py", "CConvert.pyx",
             outer_module_scope=env.global_scope(),  # need access to types declared in module
-            context=context, compiler_directives=dict(env.global_scope().directives)))
+            context=context, compiler_directives=directives))
         self.to_py_function = to_py_function
         return True
 
@@ -5253,10 +5247,15 @@ class CythonLockType(PyrexType):
         # Singleton, cannot be copied.
         return src_type is self._special_assignable_reference_type
 
-    def get_utility_code(self):
-        # It doesn't seem like a good way to associate utility code with a type actually exists
-        # so we just have to do it in as many places as possible.
+    def get_decl_utility_code(self):
+        return UtilityCode.load_cached(f"{self.cname_part}Decl", "Synchronization.c")
+
+    def get_usage_utility_code(self):
         return UtilityCode.load_cached(self.cname_part, "Synchronization.c")
+
+    # Backwards compatibility for older call sites.
+    def get_utility_code(self):
+        return self.get_usage_utility_code()
 
     def needs_explicit_construction(self, scope) -> bool:
         # Where possible we use mutex types that don't require
@@ -5270,7 +5269,7 @@ class CythonLockType(PyrexType):
 
     def generate_explicit_construction(self, code, entry, extra_access_code=""):
         code.globalstate.use_utility_code(
-            self.get_utility_code()
+            self.get_usage_utility_code()
         )
         code.putln(f"__Pyx_Locks_{self.cname_part}_Init({extra_access_code}{entry.cname});")
 
@@ -5298,7 +5297,7 @@ class CythonLockType(PyrexType):
                     pos=None,
                     defining=1,
                     cname=f"__Pyx_Locks_{self.cname_part}_Lock",
-                    utility_code=self.get_utility_code())
+                    utility_code=self.get_usage_utility_code())
             scope.declare_cfunction(
                     "release",
                     CFuncType(c_void_type, [CFuncTypeArg("self", self_type, None)],
@@ -5306,7 +5305,7 @@ class CythonLockType(PyrexType):
                     pos=None,
                     defining=1,
                     cname=f"__Pyx_Locks_{self.cname_part}_Unlock",
-                    utility_code=self.get_utility_code())
+                    utility_code=self.get_usage_utility_code())
             # Don't define a "locked" function because we can't do this with Py_Mutex
             # (which is the preferred implementation)
 
@@ -5449,8 +5448,11 @@ cython_memoryview_type = CStructOrUnionType("__pyx_memoryview_obj", "struct",
 memoryviewslice_type = CStructOrUnionType("memoryviewslice", "struct",
                                           None, 1, "__Pyx_memviewslice")
 
-cy_pymutex_type = CythonLockType("PyMutex")
-cy_pythread_type_lock_type = CythonLockType("PyThreadTypeLock")
+def get_cy_pymutex_type():
+    return CythonLockType("PyMutex")
+
+def get_cy_pythread_type_lock_type():
+    return CythonLockType("PyThreadTypeLock")
 
 fixed_sign_int_types = {
     "bint":       (1, c_bint_type),

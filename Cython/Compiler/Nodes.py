@@ -19,7 +19,8 @@ import copy
 import enum
 from collections.abc import Callable
 from itertools import chain
-from typing import TYPE_CHECKING, Any, Unpack, cast, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, cast, Generic, TypeVar
+from typing_extensions import Unpack
 
 from ..Utils import add_metaclass, str_to_number
 from . import Builtin, DebugFlags, Future, Naming, Options, PyrexTypes, TypeSlots, Directives
@@ -44,7 +45,8 @@ from .Symtab import (
 
 if TYPE_CHECKING:
     from .PyrexTypes import BaseType
-
+    from .CythonScope import CythonScope, ModuleScope
+    from .Symtab import BuiltinScope
 class OverloadDispatchSpec:
     __slots__ = ("pos", "extra", "precompute_bits")
 
@@ -57,7 +59,7 @@ class OverloadDispatchSpec:
 if TYPE_CHECKING:
     from .Code import CCodeWriter, SourceDescriptor
     from .Symtab import Scope, Entry
-    from .TypeSlots import Signature
+    from . import ExprNodes
     from .ExprNodes import ExprNode, CodeObjectNode
 IMPLICIT_CLASSMETHODS = {"__init_subclass__", "__class_getitem__"}
 
@@ -2769,7 +2771,7 @@ class CFuncDefNode(FuncDefNode):
         self.c_compile_guard = env.directives['c_compile_guard']
         self.is_c_class_method = env.is_c_class_scope
         if self.directive_locals is None:
-            self.directive_locals = Directives.Directives()
+            self.directive_locals = {}
         self.directive_locals.update(env.directives.get('locals', {}))
         if self.directive_returns is not None:
             base_type = self.directive_returns.analyse_as_type(env)
@@ -2936,7 +2938,12 @@ class CFuncDefNode(FuncDefNode):
         if omit_optional_args:
             args = args[:len(args) - self.type.optional_arg_count]
         arg_names = [arg.name for arg in args]
-        if is_module_scope:
+        first_arg_type = self.type.args[0].type if self.type.args else None
+        type_entry = getattr(first_arg_type, "entry", None)
+
+        if is_module_scope or not type_entry:
+            # Module-level cpdef or functions whose first argument is not
+            # an extension type: call the C function directly by name.
             cfunc = ExprNodes.NameNode(self.pos, name=self.entry.name)
             call_arg_names = arg_names
         elif self.type.is_static_method:
@@ -2945,7 +2952,6 @@ class CFuncDefNode(FuncDefNode):
             class_node.entry = class_entry
             cfunc = ExprNodes.AttributeNode(self.pos, obj=class_node, attribute=self.entry.name)
         else:
-            type_entry = self.type.args[0].type.entry
             type_arg = ExprNodes.NameNode(self.pos, name=type_entry.name)
             type_arg.entry = type_entry
             cfunc = ExprNodes.AttributeNode(self.pos, obj=type_arg, attribute=self.entry.name)
@@ -3089,6 +3095,10 @@ class CFuncDefNode(FuncDefNode):
                 code.putln('%s = %s;' % (entry.cname, entry.original_cname))
                 if entry.type.is_memoryviewslice:
                     entry.type.generate_incref_memoryviewslice(code, entry.cname, True)
+                elif entry.type.is_ptr:
+                    # Plain C pointers do not participate in Python refcounting,
+                    # so a simple assignment into the closure struct is sufficient.
+                    pass
                 else:
                     code.put_var_incref(entry)
                     code.put_var_giveref(entry)
@@ -3754,6 +3764,10 @@ class DefNode(FuncDefNode):
                     # TODO - at some point reference count of memoryviews should
                     # genuinely be unified with PyObjects
                     entry.type.generate_incref_memoryviewslice(code, entry.cname, True)
+                elif entry.type.is_ptr:
+                    # C pointers are copied into the closure struct by value. They do not
+                    # require any Python refcount management.
+                    pass
                 elif entry.xdecref_cleanup:
                     # mostly applies to the starstar arg - this can sometimes be NULL
                     # so must be xincrefed instead
@@ -3778,7 +3792,11 @@ class DefNodeWrapper(FuncDefNode):
     defnode : "DefNode" = None
     target : "DefNode" = None  # Target DefNode
     needs_values_cleanup = False
-    fast_arg_parsing = False
+    fast_arg_parsing = True
+    # Whether to emit the legacy dict-based ParseKeywords/RejectKeywords
+    # fallback path when fast-arg parsing is enabled.  This is initialised
+    # from the "optimize.fast_arg_fallback" compiler directive.
+    fast_arg_fallback = False
     fast_arg_param_cname = None
     fast_arg_info_cname = None
     _fast_arg_tables_generated = False
@@ -3805,6 +3823,7 @@ class DefNodeWrapper(FuncDefNode):
 
         self.signature = target_entry.signature
         self._determine_fast_arg_support()
+
 
         self.np_args_idx = self.target.np_args_idx
 
@@ -3840,6 +3859,7 @@ class DefNodeWrapper(FuncDefNode):
         if self.target.has_fused_arguments:
             self.fast_arg_parsing = False
             return
+    
         for arg in self.args:
             if not arg.type.is_pyobject or arg.needs_conversion:
                 self.fast_arg_parsing = False
@@ -4056,14 +4076,19 @@ class DefNodeWrapper(FuncDefNode):
         code.putln("%s {" % header)
 
     def generate_argument_declarations(self, env:"Scope", code:"CCodeWriter"):
+        header_declared_entries: set[Entry] = set()
         for arg in self.args:
             if arg.is_generic:
                 if arg.needs_conversion:
                     code.putln("PyObject *%s = 0;" % arg.hdr_cname)
                 else:
                     code.put_var_declaration(arg.entry)
+            elif getattr(arg, "entry", None) is not None:
+                header_declared_entries.add(arg.entry)
         for entry in env.var_entries:
             if entry.is_arg:
+                if entry in header_declared_entries:
+                    continue
                 code.put_var_declaration(entry)
 
         # Create nargs, but avoid an "unused" warning in the few cases where we don't need it.
@@ -4134,12 +4159,18 @@ class DefNodeWrapper(FuncDefNode):
         else:
             if self.fast_arg_parsing:
                 self.generate_argument_values_setup_code(self.args, code, decl_code)
-                code.putln("#if CYTHON_METH_FASTCALL")
-                self._generate_fast_argument_parsing_code(code, end_label)
-                code.putln("#else")
-                self.generate_tuple_and_keyword_parsing_code(
-                    self.args, code, decl_code, values_already_setup=True)
-                code.putln("#endif")
+                if self.fast_arg_fallback:
+                    code.putln("#if CYTHON_METH_FASTCALL")
+                    self._generate_fast_argument_parsing_code(code, end_label)
+                    code.putln("#else")
+                    self.generate_tuple_and_keyword_parsing_code(
+                        self.args, code, decl_code, values_already_setup=True)
+                    code.putln("#endif")
+                else:
+                    # "Fastargs-only" mode: rely solely on the fast-arg parser
+                    # and do not emit the legacy dict-based ParseKeywords/
+                    # RejectKeywords fallback at all.
+                    self._generate_fast_argument_parsing_code(code, end_label)
             else:
                 self.generate_tuple_and_keyword_parsing_code(self.args, code, decl_code)
             self.needs_values_cleanup = True
@@ -4183,6 +4214,12 @@ class DefNodeWrapper(FuncDefNode):
     def _ensure_fast_arg_tables(self, code:"CCodeWriter"):
         if self._fast_arg_tables_generated:
             return
+        # Fast-arg metadata is emitted into the normal declarations section.
+        # We intentionally avoid going through CodeWriter.intern_identifier()
+        # here, because that resolves names via the module state helpers
+        # (``__pyx_mstate_global``), which are not suitable for use in static
+        # initialisers.  Instead we use the raw string-const cname
+        # (e.g. ``__pyx_n_u_s``), which is a valid compile-time constant.
         decls_code = code.globalstate['decls']
         param_count = len(self.args)
         param_cname = punycodify_name(Naming.parammeta_prefix + self.target.entry.func_cname)
@@ -4191,9 +4228,18 @@ class DefNodeWrapper(FuncDefNode):
         accepts_keywords = False
         if param_count:
             decls_code.putln(f"static const __Pyx_ParamMeta {param_cname}[{param_count}] = {{")
-            decls_code.indent()
+            if hasattr(decls_code, "indent"):
+                decls_code.indent()
             for arg in self.args:
-                name_cname = code.intern_identifier(arg.entry.name)
+                # Use non-interned string constants here so that we only rely on
+                # the ``__pyx_k*`` constant-name macros, which are emitted in
+                # the ``constant_name_defines`` section *before* the ``decls``
+                # section that contains these static tables.  This keeps the
+                # generated code compatible with the existing code layout while
+                # still providing the names needed for fast keyword handling.
+                name_entry = code.globalstate.get_py_string_const(
+                    arg.entry.name, identifier=False)
+                name_cname = name_entry.cname
                 flags = self._fast_arg_flags(arg)
                 if "__PYX_PARAM_ACCEPTS_KW" in flags:
                     accepts_keywords = True
@@ -4202,9 +4248,14 @@ class DefNodeWrapper(FuncDefNode):
                     optional_count += 1
                 else:
                     default_index = "__PYX_PARAM_DEFAULT_MISSING"
+                # Store only the string-table index here so that the metadata
+                # stays POD and does not embed PyObject* references in a static
+                # initializer.  The integer index is resolved to a PyObject*
+                # at runtime via __pyx_string_tab in __Pyx_FastArg_FindKeyword.
                 decls_code.putln(
-                    f"{{{name_cname}, {flags}, 0, {default_index}}},")
-            decls_code.dedent()
+                    f"{{{name_cname}_IDX, {flags}, 0, {default_index}}},")
+            if hasattr(decls_code, "dedent"):
+                decls_code.dedent()
             decls_code.putln("};")
             params_expr = param_cname
         else:
@@ -4214,12 +4265,14 @@ class DefNodeWrapper(FuncDefNode):
         self.fast_arg_accepts_keywords = accepts_keywords and allow_keywords
         func_name_literal = self.target.entry.qualified_name.as_c_string_literal()
         decls_code.putln(f"static const __Pyx_FastArgInfo {info_cname} = {{")
-        decls_code.indent()
+        if hasattr(decls_code, "indent"):
+            decls_code.indent()
         decls_code.putln(
             f"{params_expr}, {defaults_expr}, {param_count}, {optional_count}, "
             f"{self.fast_arg_required_pos}, {self.fast_arg_max_pos}, "
             f"{self.num_required_kw_args}, {func_name_literal}")
-        decls_code.dedent()
+        if hasattr(decls_code, "dedent"):
+            decls_code.dedent()
         decls_code.putln("};")
         self.fast_arg_param_cname = params_expr
         self.fast_arg_info_cname = info_cname
@@ -4230,6 +4283,17 @@ class DefNodeWrapper(FuncDefNode):
         code:"CCodeWriter",
         end_label:str,
     ):
+        # Fast-arg parsing relies on the generic FunctionArguments.c helpers for
+        # argument-count and keyword error reporting.  Make sure those are
+        # always available in any translation unit that uses the fast-arg path.
+        code.globalstate.use_utility_code(
+            UtilityCode.load_cached("RaiseArgTupleInvalid", "FunctionArguments.c"))
+        code.globalstate.use_utility_code(
+            UtilityCode.load_cached("RaiseDoubleKeywords", "FunctionArguments.c"))
+        code.globalstate.use_utility_code(
+            UtilityCode.load_cached("RaiseKeywordRequired", "FunctionArguments.c"))
+        code.globalstate.use_utility_code(
+            UtilityCode.load_cached("RaiseUnexpectedKeywords", "FunctionArguments.c"))
         self._ensure_fast_arg_tables(code)
         param_count = len(self.args)
         code.putln("{")
@@ -4244,10 +4308,12 @@ class DefNodeWrapper(FuncDefNode):
         code.putln(
             f"int __pyx_fastparse_result = __Pyx_FastParseKeywords(&{self.fast_arg_info_cname}, "
             f"{Naming.args_cname}, {Naming.nargs_cname}, {Naming.kwds_cname}, {locals_expr});")
+        code.use_label(end_label)
         code.putln("if (likely(__pyx_fastparse_result == __PYX_FASTPARSE_SUCCESS)) {")
         self.generate_argument_defaults_assignment_code(self.args, code)
         code.putln(f"goto {end_label};")
         code.putln("}")
+        code.use_label(code.error_label)
         code.putln(
             f"if (__pyx_fastparse_result == __PYX_FASTPARSE_ERROR) "
             f"goto {code.error_label};")
@@ -4257,8 +4323,17 @@ class DefNodeWrapper(FuncDefNode):
         if not self.fast_arg_parsing:
             return None
         lenv = self.target.local_scope
+        self_entry = lenv.lookup_here("self") if hasattr(lenv, "lookup_here") else None
+        if not self_entry and self.args:
+            self_entry = getattr(self.args[0], "entry", None)
+        arg_self_cname = getattr(self_entry, "cname", None)
+        cyfunc_self_cname = Naming.self_cname
         vectorcall_cname = punycodify_name(
             Naming.vectorcall_prefix + self.target.entry.func_cname)
+        # Vectorcall stubs use the shared CyFunction vectorcall helpers.
+        code.globalstate.use_utility_code(
+            UtilityCode.load_cached("CythonFunctionShared", "CythonFunction.c"))
+        is_py_self_arg = bool(self_entry and getattr(self_entry.type, "is_pyobject", False))
         code.putln("#if CYTHON_METH_FASTCALL && CYTHON_VECTORCALL")
         code.putln(
             f"static PyObject *{vectorcall_cname}(PyObject *func, PyObject *const *args, "
@@ -4275,7 +4350,9 @@ class DefNodeWrapper(FuncDefNode):
         code.put_declare_refcount_context()
         code.put_setup_refcount_context(EncodedString(f"{self.name} (vectorcall)"))
         code.putln("__pyx_CyFunctionObject *cyfunc = (__pyx_CyFunctionObject *)func;")
-        code.putln(f"PyObject *{Naming.self_cname} = NULL;")
+        if arg_self_cname and is_py_self_arg and arg_self_cname != cyfunc_self_cname:
+            code.putln(f"PyObject *{arg_self_cname} = NULL;")
+        code.putln(f"PyObject *{cyfunc_self_cname} = NULL;")
         code.putln(f"PyObject *const *{Naming.args_cname} = args;")
         code.putln(f"Py_ssize_t {Naming.nargs_cname} = PyVectorcall_NARGS(nargsf);")
         code.putln(f"PyObject *{Naming.kwds_cname} = kwnames;")
@@ -4284,19 +4361,23 @@ class DefNodeWrapper(FuncDefNode):
         code.putln(
             f"switch (__Pyx_CyFunction_Vectorcall_CheckArgs(cyfunc, {Naming.nargs_cname}, {Naming.kwds_cname})) {{")
         code.putln("case 1:")
-        code.putln(f"    {Naming.self_cname} = {Naming.args_cname}[0];")
+        code.putln(f"    {cyfunc_self_cname} = {Naming.args_cname}[0];")
         code.putln(f"    {Naming.args_cname} += 1;")
         code.putln(f"    {Naming.nargs_cname} -= 1;")
+        if arg_self_cname and is_py_self_arg:
+            code.putln(f"    {arg_self_cname} = {cyfunc_self_cname};")
         code.putln("    break;")
         code.putln("case 0:")
         code.putln("#if CYTHON_COMPILING_IN_LIMITED_API")
         code.putln(
-            f"    {Naming.self_cname} = PyCFunction_GetSelf(((__pyx_CyFunctionObject*)cyfunc)->func);")
+            f"    {cyfunc_self_cname} = PyCFunction_GetSelf(((__pyx_CyFunctionObject*)cyfunc)->func);")
         code.putln(
-            f"    if (unlikely(!{Naming.self_cname}) && PyErr_Occurred()) {code.error_goto(self.pos)}")
+            f"    if (unlikely(!{cyfunc_self_cname}) && PyErr_Occurred()) {code.error_goto(self.pos)}")
         code.putln("#else")
-        code.putln(f"    {Naming.self_cname} = ((PyCFunctionObject*)cyfunc)->m_self;")
+        code.putln(f"    {cyfunc_self_cname} = ((PyCFunctionObject*)cyfunc)->m_self;")
         code.putln("#endif")
+        if arg_self_cname and is_py_self_arg:
+            code.putln(f"    {arg_self_cname} = {cyfunc_self_cname};")
         code.putln("    break;")
         code.putln("default:")
         code.putln("    return NULL;")
@@ -4357,10 +4438,10 @@ class DefNodeWrapper(FuncDefNode):
             code.putln(f"return {Naming.retval_cname};")
         else:
             code.putln("Py_INCREF(Py_None);")
-            code.putln("return Py_None;")
+        code.putln("return Py_None;")
         code.putln('}')
-        code.exit_cfunc_scope()
         code.error_label = old_error_label
+        code.exit_cfunc_scope()
         code.putln("#endif /* CYTHON_METH_FASTCALL && CYTHON_VECTORCALL */")
         self.needs_values_cleanup = previous_cleanup_flag
         return vectorcall_cname
@@ -6290,7 +6371,10 @@ class CPropertyNode(StatNode):
     #  doc    EncodedString or None        Doc string of the property
     #  entry  Symtab.Entry                 The Entry of the property attribute
     #  body   StatListNode[CFuncDefNode]   (for compatibility with PropertyNode)
-
+    name: str
+    doc: EncodedString|None
+    entry: "Entry"
+    body: "StatListNode"
     child_attrs = ["body"]
     is_cproperty = True
 
@@ -6325,7 +6409,7 @@ class GlobalNode(StatNode):
     # Global variable declaration.
     #
     # names    [string]
-
+    names: list[str]
     child_attrs = []
 
     def analyse_declarations(self, env):
@@ -6343,7 +6427,7 @@ class NonlocalNode(StatNode):
     # Nonlocal variable declaration via the 'nonlocal' keyword.
     #
     # names    [string]
-
+    names: list[str]
     child_attrs = []
 
     def analyse_declarations(self, env):
@@ -6361,7 +6445,7 @@ class ExprStatNode(StatNode):
     #  Expression used as a statement.
     #
     #  expr   ExprNode
-
+    expr: "ExprNode"
     child_attrs = ["expr"]
 
     def analyse_declarations(self, env):
@@ -6731,7 +6815,7 @@ class SingleAssignmentNode(AssignmentNode):
     def unroll_assignments(self, refs, check_node, lhs_list, rhs_list, env):
         from . import UtilNodes
         assignments = []
-        for lhs, rhs in zip(lhs_list, rhs_list):
+        for lhs, rhs in zip(lhs_list, rhs_list, strict=False):
             assignments.append(SingleAssignmentNode(self.pos, lhs=lhs, rhs=rhs, first=self.first))
         node = ParallelAssignmentNode(pos=self.pos, stats=assignments).analyse_expressions(env)
         if check_node:
@@ -6802,11 +6886,12 @@ class CascadedAssignmentNode(AssignmentNode):
     #  coerced_values       [ExprNode]   RHS coerced to all distinct LHS types
     #  cloned_values        [ExprNode]   cloned RHS value for each LHS
     #  assignment_overloads [Bool]       If each assignment uses a C++ operator=
-
+    lhs_list: list["ExprNode"]
+    rhs: "ExprNode"
+    coerced_values: list["ExprNode"] | None = None
+    cloned_values: list["ExprNode"] | None = None
+    assignment_overloads: list[bool] | None = None
     child_attrs = ["lhs_list", "rhs", "coerced_values", "cloned_values"]
-    cloned_values = None
-    coerced_values = None
-    assignment_overloads = None
 
     def _check_const_assignment(self, node):
         if isinstance(node, CascadedAssignmentNode):
@@ -6909,7 +6994,7 @@ class ParallelAssignmentNode(AssignmentNode):
     #  before assigning to any of the left hand sides.
     #
     #  stats     [AssignmentNode]   The constituent assignments
-
+    stats: list["AssignmentNode"]
     child_attrs = ["stats"]
 
     def analyse_declarations(self, env):
@@ -6964,6 +7049,8 @@ class InPlaceAssignmentNode(AssignmentNode):
     #  Fortunately, the type of the lhs node is fairly constrained
     #  (it must be a NameNode, AttributeNode, or IndexNode).
 
+    lhs: "ExprNode"
+    rhs: "ExprNode"
     child_attrs = ["lhs", "rhs"]
 
     def analyse_declarations(self, env):
@@ -7023,7 +7110,9 @@ class PrintStatNode(StatNode):
     #  arg_tuple         TupleNode
     #  stream            ExprNode or None (stdout)
     #  append_newline    boolean
-
+    arg_tuple: "ExprNodes.TupleNode"
+    stream: "ExprNode" | None
+    append_newline: bool
     child_attrs = ["arg_tuple", "stream"]
 
     def analyse_expressions(self, env):
@@ -7089,6 +7178,7 @@ class ExecStatNode(StatNode):
     #
     #  args     [ExprNode]
 
+    args: list["ExprNode"]
     child_attrs = ["args"]
 
     def analyse_expressions(self, env):
@@ -7129,7 +7219,7 @@ class DelStatNode(StatNode):
     #  del statement
     #
     #  args     [ExprNode]
-
+    args: list["ExprNode"]
     child_attrs = ["args"]
     ignore_nonexisting = False
 
@@ -7243,7 +7333,7 @@ class ReturnStatNode(StatNode):
     #  return_type   PyrexType
     #  in_generator  return inside of generator => raise StopIteration
     #  in_async_gen  return inside of async generator
-
+    value: "ExprNode"
     child_attrs = ["value"]
     is_terminator = True
     in_generator = False
@@ -7653,7 +7743,8 @@ class SwitchCaseNode(StatNode):
     #
     # conditions    [ExprNode]
     # body          StatNode
-
+    conditions: list["ExprNode"]
+    body: "StatNode"
     child_attrs = ['conditions', 'body']
 
     def generate_condition_evaluation_code(self, code):
@@ -7741,7 +7832,9 @@ class WhileStatNode(LoopNode, StatNode):
     #  condition    ExprNode
     #  body         StatNode
     #  else_clause  StatNode
-
+    condition: "ExprNode"
+    body: "StatNode"
+    else_clause: "StatNode"
     child_attrs = ["condition", "body", "else_clause"]
 
     def analyse_declarations(self, env):
@@ -8354,7 +8447,11 @@ class WithStatNode(StatNode):
     #  body             StatNode
     #  enter_call       ExprNode  the call to the __enter__() method
     #  exit_var         String    the cname of the __exit__() method reference
-
+    manager: "ExprNode"
+    target: "ExprNode"
+    body: "StatNode"
+    enter_call: "ExprNode"
+    exit_var: str | None
     child_attrs = ["manager", "enter_call", "target", "body"]
 
     enter_call = None
@@ -8440,7 +8537,9 @@ class WithTargetAssignmentStatNode(AssignmentNode):
     # lhs       ExprNode      the assignment target
     # rhs       ExprNode      a (coerced) TempNode for the rhs (from WithStatNode)
     # with_node WithStatNode  the surrounding with-statement
-
+    lhs: "ExprNode"
+    rhs: "ExprNode"
+    with_node: "WithStatNode"
     child_attrs = ["rhs", "lhs"]
     with_node = None
     rhs = None
@@ -9312,10 +9411,11 @@ class CriticalSectionStatNode(TryFinallyStatNode):
 
     def analyse_expressions(self, env):
         mutex_count = 0
+        cy_pymutex_type = PyrexTypes.get_cy_pymutex_type()
         for i, arg in enumerate(self.args):
             arg = arg.analyse_expressions(env)
-            if (arg.type is PyrexTypes.cy_pymutex_type or (
-                    arg.type.is_ptr and arg.type.base_type is PyrexTypes.cy_pymutex_type)):
+            if (arg.type is cy_pymutex_type or (
+                    arg.type.is_ptr and arg.type.base_type is cy_pymutex_type)):
                 mutex_count += 1
                 self.is_pymutex_critical_section = True
             elif arg.type.is_pyobject:
@@ -9561,8 +9661,8 @@ class CImportStatNode(StatNode):
     child_attrs = []
     is_absolute = False
 
-    def analyse_declarations(self, env):
-        if not env.is_module_scope:
+    def analyse_declarations(self, env: "ModuleScope|BuiltinScope|CythonScope"):
+        if not env.is_module_scope and self.module_name != "cython":
             error(self.pos, "cimport only allowed at module level")
             return
         module_scope = env.find_module(
@@ -9608,8 +9708,8 @@ class FromCImportStatNode(StatNode):
     relative_level = None
     imported_names = None
 
-    def analyse_declarations(self, env):
-        if not env.is_module_scope:
+    def analyse_declarations(self, env: "ModuleScope|BuiltinScope|CythonScope"):
+        if not env.is_module_scope and self.module_name != "cython":
             error(self.pos, "cimport only allowed at module level")
             return
         qualified_name_components = env.qualified_name.count('.') + 1
@@ -10284,7 +10384,7 @@ class ParallelStatNode(StatNode, ParallelNode):
             end_code.put_safe("}\n")
             end_code.putln("#endif /* _OPENMP */")
 
-    def trap_parallel_exit(self, code, should_flush=False):
+    def trap_parallel_exit(self, code: "CCodeWriter", should_flush: bool = False):
         """
         Trap any kind of return inside a parallel construct. 'should_flush'
         indicates whether the variable should be flushed, which is needed by
@@ -10377,7 +10477,7 @@ class ParallelStatNode(StatNode, ParallelNode):
             "if (!%s) {" % Naming.parallel_exc_type)
 
         code.putln("__Pyx_ErrFetchWithState(&%s, &%s, &%s);" % self.parallel_exc)
-        pos_info = chain(*zip(self.parallel_pos_info, self.pos_info))
+        pos_info = chain(*zip(self.parallel_pos_info, self.pos_info,strict=False))
         code.funcstate.uses_error_indicator = True
         code.putln("%s = %s; %s = %s; %s = %s;" % tuple(pos_info))
         code.put_gotref(Naming.parallel_exc_type, py_object_type)

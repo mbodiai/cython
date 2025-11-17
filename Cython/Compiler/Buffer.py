@@ -59,7 +59,7 @@ class IntroduceBufferAuxiliaryVars(CythonTransform):
 
 
         for (name, entry) in scope_items:
-            if name == 'memoryview' and isinstance(entry.utility_code_definition, CythonUtilityCode):
+            if name == 'memoryview' and isinstance(entry.utility_code, CythonUtilityCode):
                 self.using_memoryview = True
                 break
         del scope_items

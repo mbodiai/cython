@@ -1,3 +1,5 @@
+from libc.stdint cimport uintptr_t
+
 #################### FromPyStructUtility ####################
 
 cdef extern from *:

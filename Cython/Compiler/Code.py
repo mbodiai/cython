@@ -402,7 +402,7 @@ class AbstractUtilityCode:
 
     requires = None
 
-    def put_code(self, globalstate: "GlobalState", used_by=None) -> None:
+    def put_code(self, globalstate:"GlobalState", used_by=None) -> None:
         pass
 
     def get_tree(self, **kwargs):
@@ -1535,12 +1535,15 @@ class GlobalState:
         'before_global_var',
         'global_var',
         'string_decls',
+        # Make the string name macros (``__pyx_n_*`` / ``__pyx_k_*``) available
+        # before we emit any of the static fast-arg metadata that references
+        # them in the ``decls`` section.
+        'constant_name_defines',
         'decls',
         'late_includes',
         'module_state',
         'module_state_contents',  # can be used to inject declarations into the modulestate struct
         'module_state_end',
-        'constant_name_defines',
         'module_state_clear',
         'module_state_clear_contents',
         'module_state_clear_end',
@@ -1584,7 +1587,7 @@ class GlobalState:
         self.in_utility_code_generation = False
         self.code_config = code_config
         self.common_utility_include_dir = common_utility_include_dir
-        self.parts = {}
+        self.parts:dict[str, CCodeWriter] = {}
         self.module_node = module_node  # because some utility code generation needs it
                                         # (generating backwards-compatible Get/ReleaseBuffer
 
@@ -2058,8 +2061,14 @@ class GlobalState:
 
         # Generate stringtab and Python string constants.
         py_string_count = len(py_bytes_consts) + len(py_unicode_consts)
+        # The actual storage lives in the module state struct ...
         self.parts['module_state'].putln(f"PyObject *{Naming.stringtab_cname}[{py_string_count}];")
         self._generate_module_array_traverse_and_clear(Naming.stringtab_cname, py_string_count, may_have_refcycles=False)
+        # ... but we also expose a global ``PyObject **__pyx_string_tab`` alias so
+        # that the ``__pyx_k*`` / ``__pyx_n*`` macros can use it in static
+        # initialisers (fast-arg metadata etc.) without depending on the module
+        # state helpers or their declaration order.
+        self.parts['global_var'].putln(f"static PyObject **{Naming.stringtab_cname};")
 
         self.generate_pystring_constants(py_unicode_consts, py_bytes_consts)
 
@@ -2077,6 +2086,9 @@ class GlobalState:
             if first_interned == -1 and is_interned:
                 first_interned = i
             defines.putln(f"#define {cname} {Naming.stringtab_cname}[{stringtab_pos}]")
+            # Also expose the string-table index as a plain integer for
+            # POD-only metadata (e.g. fast-arg __Pyx_ParamMeta tables).
+            defines.putln(f"#define {cname}_IDX {stringtab_pos}u")
             stringtab_pos += 1
 
         stringtab_bytes_start: cython.Py_ssize_t = len(text_strings)
@@ -2085,6 +2097,7 @@ class GlobalState:
         for _, cname, text in byte_strings:
             bytes_values.append(text.byteencode() if text.encoding else text.utf8encode())
             defines.putln(f"#define {cname} {Naming.stringtab_cname}[{stringtab_pos}]")
+            defines.putln(f"#define {cname}_IDX {stringtab_pos}u")
             stringtab_pos += 1
 
         index = list(map(len, bytes_values))
@@ -2146,7 +2159,10 @@ class GlobalState:
             w.putln("#endif")
 
         # Populate stringtab.
-        w.putln(f"PyObject **stringtab = {w.name_in_main_c_code_module_state(Naming.stringtab_cname)};")
+        # Make the module-state array accessible via the global ``__pyx_string_tab``
+        # alias that the ``__pyx_k*`` / ``__pyx_n*`` macros use.
+        w.putln(f"{Naming.stringtab_cname} = {w.name_in_main_c_code_module_state(Naming.stringtab_cname)};")
+        w.putln(f"PyObject **stringtab = {Naming.stringtab_cname};")
         w.putln("Py_ssize_t pos = 0;")
 
         # Unpack Unicode strings.
@@ -2485,7 +2501,7 @@ class GlobalState:
     # Utility code state
     #
 
-    def use_utility_code(self, utility_code, used_by=None):
+    def use_utility_code(self, utility_code:"UtilityCode", used_by=None):
         """
         Adds code to the C file. utility_code should
         a) implement __eq__/__hash__ for the purpose of knowing whether the same
@@ -2561,9 +2577,10 @@ class CCodeWriter:
     #                                     about the current class one is in
     # code_config         CCodeConfig     configuration options for the C code writer
 
-    @cython.locals(create_from='CCodeWriter')
+
     def __init__(self, create_from=None, buffer=None, copy_formatting=False):
-        if buffer is None: buffer = StringIOTree()
+        if buffer is None: 
+            buffer = StringIOTree()
         self.buffer = buffer
         self.last_pos = None
         self.last_marked_pos = None
@@ -2965,7 +2982,9 @@ class CCodeWriter:
         return "0x%02X%02X%02X%02X" % (tuple(pyversion) + (0,0,0,0))[:4]
 
     def put_label(self, lbl):
-        if lbl in self.funcstate.labels_used:
+        if (lbl in self.funcstate.labels_used
+                or "argument_unpacking_done" in lbl
+                or "vectorcall_argument_unpacking_done" in lbl):
             self.putln("%s:;" % lbl)
 
     def put_goto(self, lbl):

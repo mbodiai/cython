@@ -190,7 +190,6 @@ static int __Pyx_FastParseKeywords(
         }
     }
     if (unlikely(required_kwonly > 0)) {
-        /* Resolve parameter names via the string table for error messages. */
         extern PyObject **__pyx_string_tab;
         PyObject **stringtab = __pyx_string_tab;
         for (i = 0; i < info->param_count; i++) {

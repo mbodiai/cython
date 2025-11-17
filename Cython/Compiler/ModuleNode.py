@@ -129,8 +129,8 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
     scope: "ModuleScope"
     body: Nodes.StatListNode
     # internal - used in merging
-    pxd_stats: Nodes.StatListNode
-    utility_code_stats: Nodes.StatListNode
+    pxd_stats: Nodes.StatListNode | None = None
+    utility_code_stats: Nodes.StatListNode | None = None
 
     @property
     def local_scope(self):
@@ -213,7 +213,8 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
 
         self.body.analyse_declarations(env)
 
-        if env.find_shared_usages_of_type(lambda tp: tp is PyrexTypes.cy_pymutex_type):
+        cy_pymutex_type = PyrexTypes.get_cy_pymutex_type()
+        if env.find_shared_usages_of_type(lambda tp: tp is cy_pymutex_type):
             # Be very suspicious of cython locks that are shared.
             # They have the potential to cause ABI issues.
             self.scope.use_utility_code(
@@ -3832,7 +3833,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         # and type ready code for non-extern ones.
         with ModuleImportGenerator(code) as import_generator:
             for entry in env.c_class_entries:
-                if entry.visibility == 'extern' and not entry.utility_code_definition:
+                if entry.visibility == 'extern' and not entry.utility_code:
                     self.generate_type_import_code(env, entry.type, entry.pos, code, import_generator)
                 else:
                     self.generate_base_type_import_code(env, entry, code, import_generator)
@@ -3844,7 +3845,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         base_type = entry.type.base_type
         if (base_type and base_type.module_name != env.qualified_name and not
                 (base_type.is_builtin_type or base_type.is_cython_builtin_type)
-                 and not entry.utility_code_definition):
+                 and not entry.utility_code):
             self.generate_type_import_code(env, base_type, self.pos, code, import_generator)
 
     def generate_type_import_code(self, env, type, pos, code, import_generator):
@@ -4004,7 +4005,7 @@ class ModuleImportGenerator:
 
 
 def generate_cfunction_declaration(entry, env, code, definition):
-    from_cy_utility = entry.used and entry.utility_code_definition
+    from_cy_utility = entry.used and entry.utility_code
     if entry.used and entry.inline_func_in_pxd or (not entry.in_cinclude and (
             definition or entry.defined_in_pxd or entry.visibility == 'extern' or from_cy_utility)):
         if entry.visibility == 'extern':

@@ -1,6 +1,7 @@
 import itertools
 from time import time
 from typing import TYPE_CHECKING
+import sys
 
 from . import Errors
 from . import DebugFlags
@@ -91,9 +92,9 @@ def use_utility_code_definitions(scope, target, seen=None):
             continue
 
         seen.add(entry)
-        if entry.used and entry.utility_code_definition:
-            target.use_utility_code(entry.utility_code_definition)
-            for required_utility in entry.utility_code_definition.requires:
+        if entry.used and entry.utility_code:
+            target.use_utility_code(entry.utility_code)
+            for required_utility in entry.utility_code.requires:
                 target.use_utility_code(required_utility)
         elif entry.as_module:
             use_utility_code_definitions(entry.as_module, target, seen)
@@ -153,17 +154,45 @@ def inject_utility_code_stage_factory(context:"Context", internalise_c_class_ent
         normalize_deps(utility_code_list)
 
         added = set()
+        debug_prefix = "[cython][inject_utility_code_stage]"
+        # Focus debugging noise on the cfunc.to_py utility module, which is
+        # particularly bootstrap-sensitive.
+        for uc in utility_code_list:
+            uc_name = getattr(uc, "name", None)
+            if uc_name == "cfunc.to_py":
+                requires = [getattr(dep, "name", type(dep).__name__) for dep in (uc.requires or ())]
+                print(
+                    f"{debug_prefix} module={getattr(module_scope, 'full_module_name', getattr(module_scope, 'module_name', None))!r} "
+                    f"queued_utilcode id={id(uc):#x} name={uc_name!r} "
+                    f"requires={requires}",
+                    file=sys.stderr,
+                )
         # Note: the list might be extended inside the loop (if some utility code
         # pulls in other utility code, explicitly or implicitly)
         for utilcode in utility_code_list:
             if utilcode in added:
                 continue
             added.add(utilcode)
+            uc_name = getattr(utilcode, "name", None)
+            if uc_name == "cfunc.to_py":
+                print(
+                    f"{debug_prefix} module={getattr(module_scope, 'full_module_name', getattr(module_scope, 'module_name', None))!r} "
+                    f"processing_utilcode id={id(utilcode):#x} name={uc_name!r}",
+                    file=sys.stderr,
+                )
             if utilcode.requires:
                 for dep in utilcode.requires:
                     if dep not in added:
                         utility_code_list.append(dep)
             if tree := utilcode.get_tree(cython_scope=context.cython_scope):
+                if uc_name == "cfunc.to_py":
+                    scope_name = getattr(tree.scope, "qualified_name", getattr(tree.scope, "name", None))
+                    print(
+                        f"{debug_prefix} module={getattr(module_scope, 'full_module_name', getattr(module_scope, 'module_name', None))!r} "
+                        f"merging_tree_from id={id(utilcode):#x} name={uc_name!r} "
+                        f"utility_scope={scope_name!r}",
+                        file=sys.stderr,
+                    )
                 module_node.merge_in(tree.with_compiler_directives(),
                                      tree.scope, stage="utility")
                 module_node.merge_scope(tree.scope, internalise_c_class_entries=internalise_c_class_entries)

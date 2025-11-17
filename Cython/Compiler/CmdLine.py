@@ -224,7 +224,7 @@ def _parse_directives_string(
     ignore_unknown: bool = False,
     current_settings: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    directives = Directives()
+    directives = Directives.Directives()
     result: Dict[str, Any] = dict(current_settings or {})
     for item in spec.split(","):
         item = item.strip()
@@ -408,13 +408,11 @@ class ParseOptionsAction(Action):
 def cython_command(ctx: click.Context, sources, _version_flag_set, **kw):
     if _version_flag_set:
         Utils.print_version()
-        from .build_executable import default_options
-        opts = default_options
+        opts = Options.DEFAULT_COMPILATION_OPTIONS.copy()
         opts.show_version = True
         ctx.obj = {'options': opts, 'sources': list(sources)}
         return
-    from .build_executable import default_options
-    opts = default_options
+    opts = Options.DEFAULT_COMPILATION_OPTIONS.copy()
     opts.use_listing_file = kw.get('use_listing_file') or False
     includes = list(kw.get('include_path') or [])
     if includes:
@@ -456,7 +454,7 @@ def cython_command(ctx: click.Context, sources, _version_flag_set, **kw):
         Directives.warning_errors = True
     directives = kw.get('compiler_directives')
     if isinstance(directives, dict):
-        opts.compiler_directives = directives
+        opts.compiler_directives = Directives.Directives(**directives)
     env = kw.get('compile_time_env')
     if isinstance(env, dict):
         opts.compile_time_env = env
@@ -576,8 +574,7 @@ def parse_command_line(args):
             import errno
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), source)
 
-    from .build_executable import default_options
-    options = Options.CompilationOptions(**default_options)
+    options = Options.DEFAULT_COMPILATION_OPTIONS.copy()
     for name, value in vars(arguments).items():
         if name.startswith('debug'):
             from . import DebugFlags

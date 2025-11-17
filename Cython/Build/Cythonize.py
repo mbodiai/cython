@@ -7,12 +7,14 @@ import sys
 import tempfile
 from collections import defaultdict
 from typing import List, Optional
+from Cython.Compiler import Directives
 from typing_extensions import Literal
+
+from Cython.DataDict import DataDict
 
 from .Dependencies import cythonize, extended_iglob
 from ..Utils import is_package_dir
-from ..Compiler import Options
-from ..Compiler.build_executable import CompilationOptions, default_options
+from ..Compiler.Options import CompilationOptions
 from ..Compiler import Directives as _DirectivesModule
 
 try:
@@ -133,10 +135,10 @@ def run_distutils(args):
     except ImportError:
         try:
             from setuptools import setup
-        except ImportError:
+        except ImportError as e:
             raise ImportError(
                 "'distutils' is not available. Please install 'setuptools' for binary builds."
-            )
+            ) from e
 
     base_dir, ext_modules = args
     script_args = ["build_ext", "-i"]
@@ -160,8 +162,8 @@ def run_distutils(args):
 
 
 @dataclass
-class CythonizeOptions(dict):
-    directives: DirectivesDict = field(default_factory=DirectivesDict)
+class CythonizeOptions(DataDict):
+    directives: Directives.Directives = field(default_factory=Directives.Directives)
     compile_time_env: dict[str, str] = field(default_factory=dict)
     options: CompilationOptions = field(default_factory=CompilationOptions)
     language_level: int = 3
@@ -183,7 +185,7 @@ class CythonizeOptions(dict):
 
     def __post_init__(self):
         self.options = CompilationOptions(**self.options)
-        self.directives = DirectivesDict(**self.directives)
+        self.directives = Directives.Directives(**self.directives)
 
 
 def benchmark(code, setup_code=None, import_module=None, directives=None):

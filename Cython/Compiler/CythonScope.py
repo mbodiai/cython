@@ -1,7 +1,18 @@
 from .Symtab import ModuleScope
 from .Code import UtilityCode
 from .PyrexTypes import (
-    CFuncType, CFuncTypeArg, c_bint_type, c_ptr_type, c_void_type, cy_integral_type, cy_floating_type, cy_numeric_type, cy_pymutex_type, cy_pythread_type_lock_type, parse_basic_type, py_object_type
+    CFuncType,
+    CFuncTypeArg,
+    c_bint_type,
+    c_ptr_type,
+    c_void_type,
+    cy_integral_type,
+    cy_floating_type,
+    cy_numeric_type,
+    get_cy_pymutex_type,
+    get_cy_pythread_type_lock_type,
+    parse_basic_type,
+    py_object_type,
 )
 from .UtilityCode import CythonUtilityCode
 from .Errors import error
@@ -51,23 +62,23 @@ class CythonScope(ModuleScope):
 
         return super().lookup_type(name)
 
-    def lookup(self, name):
-        entry = super().lookup(name)
+    def lookup(self, name, language_level=None):
+        entry = super().lookup(name, language_level)
 
         if entry is None and not self._cythonscope_initialized:
             self.load_cythonscope()
-            entry = super().lookup(name)
+            entry = super().lookup(name, language_level)
 
         return entry
 
-    def find_module(self, module_name, pos):
+    def find_module(self, module_name, pos,relative_level=-1):
         error(f"cython.{module_name} is not available", pos)
 
-    def find_submodule(self, module_name, as_package=False):
-        entry = self.entries.get(module_name, None)
+    def find_submodule(self, name, as_package=False):
+        entry = self.entries.get(name, None)
         if not entry:
             self.load_cythonscope()
-            entry = self.entries.get(module_name, None)
+            entry = self.entries.get(name, None)
 
         if entry and entry.as_module:
             return entry.as_module
@@ -77,7 +88,7 @@ class CythonScope(ModuleScope):
             # possible immutability). Hack ourselves out of the situation
             # for now.
             raise error((StringSourceDescriptor("cython", ""), 0, 0),
-                  f"cython.{module_name} is not available")
+                  f"cython.{name} is not available")
 
     def lookup_qualified_name(self, qname):
         # ExprNode.as_cython_attribute generates qnames and we untangle it here...

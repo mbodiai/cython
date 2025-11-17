@@ -13,6 +13,11 @@ except ImportError:
     class _threadlocal: pass
 
 threadlocal = _threadlocal()
+threadlocal.cython_errors_count = 0
+threadlocal.cython_errors_listing_file = None
+threadlocal.cython_errors_echo_file = None
+threadlocal.cython_errors_warn_once_seen = set()
+threadlocal.cython_errors_stack = []
 
 from ..Utils import open_new_file
 from . import DebugFlags

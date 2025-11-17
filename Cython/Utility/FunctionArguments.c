@@ -961,7 +961,12 @@ static CYTHON_INLINE int __Pyx_MergeKeywords(PyObject *kwdict, PyObject *source_
 #define __PYX_PARAM_DEFAULT_MISSING      ((unsigned short)0xFFFFu)
 
 typedef struct {
-    PyObject *name;
+    /* Index into the module string table (__pyx_string_tab), not a PyObject*.
+     * This keeps the metadata POD-only so it can live in static const tables
+     * without depending on runtime-initialised globals.  At runtime, we
+     * resolve the index via __pyx_string_tab in __Pyx_FastArg_FindKeyword().
+     */
+    unsigned short name_index;
     unsigned short flags;
     unsigned short converter;
     unsigned short default_index;
@@ -1073,15 +1078,28 @@ static CYTHON_INLINE Py_ssize_t __Pyx_FastArg_FindKeyword(
     const __Pyx_ParamMeta *params,
     Py_ssize_t param_count)
 {
+    /* Resolve parameter names lazily from the module string table.  The
+     * metadata only stores integer indices, which keeps the tables
+     * initialisable as plain data.  __pyx_string_tab is wired to the module
+     * state string table during module initialisation.
+     */
+    extern PyObject **__pyx_string_tab;
+    PyObject **stringtab = __pyx_string_tab;
     Py_ssize_t i;
     for (i = 0; i < param_count; i++) {
-        PyObject *param_name = params[i].name;
+        unsigned short name_index = params[i].name_index;
+        if (name_index == __PYX_PARAM_DEFAULT_MISSING)
+            continue;
+        PyObject *param_name = stringtab[name_index];
         if (param_name == name) {
             return i;
         }
     }
     for (i = 0; i < param_count; i++) {
-        PyObject *param_name = params[i].name;
+        unsigned short name_index = params[i].name_index;
+        if (name_index == __PYX_PARAM_DEFAULT_MISSING)
+            continue;
+        PyObject *param_name = stringtab[name_index];
         if (param_name && param_name != name) {
             int eq = __Pyx_PyUnicode_Equals(param_name, name, Py_EQ);
             if (unlikely(eq != 0)) {
@@ -1112,7 +1130,6 @@ static int __Pyx_FastParseKeywords(
             positional_args);
         return __PYX_FASTPARSE_ERROR;
     }
-
     Py_ssize_t pos_index = 0;
     for (i = 0; i < info->param_count && pos_index < positional_args; i++) {
         const __Pyx_ParamMeta *param = params + i;
@@ -1123,7 +1140,6 @@ static int __Pyx_FastParseKeywords(
         Py_INCREF(value);
         *slot = value;
     }
-
     if (unlikely(pos_index != positional_args)) {
         __Pyx_RaiseArgtupleInvalid(
             info->func_name,
@@ -1172,17 +1188,22 @@ static int __Pyx_FastParseKeywords(
     }
 
     if (unlikely(required_kwonly > 0)) {
+        /* Resolve parameter names via the string table for error messages. */
+        extern PyObject **__pyx_string_tab;
+        PyObject **stringtab = __pyx_string_tab;
         for (i = 0; i < info->param_count; i++) {
             const __Pyx_ParamMeta *param = params + i;
             if ((param->flags & __PYX_PARAM_IS_KWONLY) &&
                 param->default_index == __PYX_PARAM_DEFAULT_MISSING &&
                 !*localslots[i]) {
-                __Pyx_RaiseKeywordRequired(info->func_name, param->name);
+                unsigned short name_index = param->name_index;
+                PyObject *param_name = name_index == __PYX_PARAM_DEFAULT_MISSING ?
+                    NULL : stringtab[name_index];
+                __Pyx_RaiseKeywordRequired(info->func_name, param_name);
                 goto bad;
             }
         }
     }
-
     for (i = 0; i < info->param_count; i++) {
         PyObject **slot = localslots[i];
         if (*slot)
@@ -1200,7 +1221,12 @@ static int __Pyx_FastParseKeywords(
             continue;
         }
         if (param->flags & __PYX_PARAM_IS_KWONLY) {
-            __Pyx_RaiseKeywordRequired(info->func_name, param->name);
+            extern PyObject **__pyx_string_tab;
+            PyObject **stringtab = __pyx_string_tab;
+            unsigned short name_index = param->name_index;
+            PyObject *param_name = name_index == __PYX_PARAM_DEFAULT_MISSING ?
+                NULL : stringtab[name_index];
+            __Pyx_RaiseKeywordRequired(info->func_name, param_name);
             goto bad;
         }
         __Pyx_RaiseArgtupleInvalid(
@@ -1211,9 +1237,7 @@ static int __Pyx_FastParseKeywords(
             positional_args);
         goto bad;
     }
-
     return __PYX_FASTPARSE_SUCCESS;
-
 bad:
     for (i = 0; i < info->param_count; i++) {
         PyObject **slot = localslots[i];

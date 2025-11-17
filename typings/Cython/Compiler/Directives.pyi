@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field
 from typing import (
     Any,
     Callable,
@@ -17,10 +18,10 @@ DirectiveScopeType = Literal["module", "function", "cclass", "class", "with stat
 
 embedding_file_name: Optional[str]
 
-
+@dataclass
 class AutotestdictDirectives(DataDict):
-    all: bool
-    cdef: bool
+    all: bool = field(default=True)
+    cdef: bool = field(default=True)
 
     class Dict(TypedDict):
         all: bool
@@ -30,15 +31,17 @@ class AutotestdictDirectives(DataDict):
         all: bool
         cdef: bool
 
+
 class AutotestdictDirectivesDict(AutotestdictDirectives.Dict):...
 
 class AutotestdictDirectivesKwargs(AutotestdictDirectives.Kwargs):...
 
+@dataclass
 class ControlFlowDirectives(DataDict):
-    output: DirectiveScopeType
-    annotate_defs: DirectiveScopeType
-    dot_output: DirectiveScopeType
-    dot_annotate_defs: DirectiveScopeType
+    output: DirectiveScopeType = field(default="module")
+    annotate_defs: DirectiveScopeType = field(default="module")
+    dot_output: DirectiveScopeType = field(default="module")
+    dot_annotate_defs: DirectiveScopeType = field(default="module")
 
     class Dict(TypedDict):
         output: DirectiveScopeType
@@ -55,33 +58,35 @@ class ControlFlowDirectives(DataDict):
 class ControlFlowDirectivesDict(ControlFlowDirectives.Dict):...
 class ControlFlowDirectivesKwargs(ControlFlowDirectives.Kwargs):...
 
+@dataclass
 class TestDirectives(DataDict):
-    assert_path_exists: List[str]
-    fail_if_path_exists: List[str]
-    assert_c_code_has: List[str]
-    fail_if_c_code_has: List[str]
+    assert_path_exists: list[str] = field(default_factory=list)
+    fail_if_path_exists: list[str] = field(default_factory=list)
+    assert_c_code_has: list[str] = field(default_factory=list)
+    fail_if_c_code_has: list[str] = field(default_factory=list)
 
     class Dict(TypedDict):
-        assert_path_exists: List[str]
-        fail_if_path_exists: List[str]
-        assert_c_code_has: List[str]
+        assert_path_exists: list[str]
+        fail_if_path_exists: list[str]
+        assert_c_code_has: list[str]
         fail_if_c_code_has: List[str]
 
     class Kwargs(TypedDict, total=False):
         assert_path_exists: List[str]
         fail_if_path_exists: List[str]
         assert_c_code_has: List[str]
-        fail_if_c_code_has: List[str]
+        fail_if_c_code_has: list[str]
 
 class TestDirectivesDict(TestDirectives.Dict):...
 
 class TestDirectivesKwargs(TestDirectives.Kwargs):...
 
+@dataclass
 class OptimizeDirectives(DataDict):
-    inline_defnode_calls: bool
-    unpack_method_calls: bool
-    unpack_method_calls_in_pyinit: bool
-    use_switch: bool
+    inline_defnode_calls: bool = field(default=False)
+    unpack_method_calls: bool = field(default=False)
+    unpack_method_calls_in_pyinit: bool = field(default=False)  
+    use_switch: bool = field(default=False)
 
     class Dict(TypedDict):
         inline_defnode_calls: bool
@@ -98,8 +103,9 @@ class OptimizeDirectives(DataDict):
 class OptimizeDirectivesDict(OptimizeDirectives.Dict):...
 class OptimizeDirectivesKwargs(OptimizeDirectives.Kwargs):...
 
+@dataclass
 class FastGetattrDirectives(DataDict):
-    fast: bool
+    fast: bool = field(default=True)
     
     class Dict(TypedDict):
         fast: bool
@@ -111,9 +117,10 @@ class FastGetattrDirectivesDict(FastGetattrDirectives.Dict):...
 
 class FastGetattrDirectivesKwargs(FastGetattrDirectives.Kwargs):...
 
+@dataclass
 class EmbedSignatureDirectives(DataDict):
-    enabled: bool
-    format: str
+    enabled: bool = field(default=True)
+    format: str = "python"
 
     class Dict(TypedDict):
         enabled: bool
@@ -127,8 +134,9 @@ class EmbedSignatureDirectives(DataDict):
 class EmbedSignatureDirectivesDict(EmbedSignatureDirectives.Dict):...
 class EmbedSignatureDirectivesKwargs(EmbedSignatureDirectives.Kwargs):...
 
+@dataclass
 class Py2ImportDirectives(DataDict):
-    py2: bool
+    py2: bool = field(default=False)
 
     class Dict(TypedDict):
         py2: bool
@@ -140,17 +148,18 @@ class Py2ImportDirectivesDict(Py2ImportDirectives.Dict):...
 
 class Py2ImportDirectivesKwargs(Py2ImportDirectives.Kwargs):...
 
+@dataclass
 class WarnDirectives(DataDict):
-    all: bool
-    undeclared: bool
-    unreachable: bool
-    maybe_uninitialized: bool
-    unused: bool
-    unused_arg: bool
-    unused_result: bool
-    multiple_declarators: bool
-    deprecated_DEF: bool
-    deprecated_IF: bool
+    all: bool = field(default=True) 
+    undeclared: bool = field(default=True)     
+    unreachable: bool = field(default=True)
+    maybe_uninitialized: bool = field(default=True)
+    unused: bool = field(default=True)
+    unused_arg: bool = field(default=True)
+    unused_result: bool = field(default=True)
+    multiple_declarators: bool = field(default=True)
+    deprecated_DEF: bool = field(default=True)
+    deprecated_IF: bool = field(default=True)
 
     class Dict(TypedDict):
         all: bool
@@ -180,9 +189,10 @@ class WarnDirectivesDict(WarnDirectives.Dict):...
 class WarnDirectivesKwargs(WarnDirectives.Kwargs):...
 
 
+@dataclass
 class InferTypesDirectives(DataDict):
-    enabled: bool
-    verbose: bool
+    enabled: bool = field(default=True)
+    verbose: bool = False
 
     class Dict(TypedDict):
         enabled: bool
@@ -198,9 +208,10 @@ class InferTypesDirectivesKwargs(InferTypesDirectives.Kwargs):...
 
 
 
+@dataclass
 class OverflowCheckDirectives(DataDict):
-    enabled: bool
-    fold: bool
+    enabled: bool = field(default=True)
+    fold: bool = False
 
     class Dict(TypedDict):
         enabled: bool
@@ -213,61 +224,72 @@ class OverflowCheckDirectives(DataDict):
 class OverflowCheckDirectivesDict(OverflowCheckDirectives.Dict):...
 class OverflowCheckDirectivesKwargs(OverflowCheckDirectives.Kwargs):...
 
+@dataclass
 class Directives(DataDict):
-    binding: bool
-    boundscheck: bool
-    nonecheck: bool
-    initializedcheck: bool
-    freethreading_compatible: bool
-    subinterpreters_compatible: str
-    embedsignature: EmbedSignatureDirectivesDict
-    auto_cpdef: bool
-    auto_pickle: bool
-    cdivision: bool
-    cdivision_warnings: bool
-    cpow: bool
-    c_api_binop_methods: bool
-    overflowcheck: OverflowCheckDirectivesDict
-    always_allow_keywords: bool
-    allow_none_for_extension_args: bool
-    wraparound: bool
-    ccomplex: bool
-    callspec: str
-    nogil: bool
-    gil: bool
-    with_gil: bool
-    profile: bool
-    linetrace: bool
-    emit_code_comments: bool
-    annotation_typing: bool
-    infer_types: InferTypesDirectivesDict
-    autotestdict: AutotestdictDirectivesDict
-    language_level: int | str
-    fast_getattr: bool
-    py2_import: bool
-    preliminary_late_includes_cy28: bool
-    iterable_coroutine: bool
-    c_string_type: str
-    c_string_encoding: str
-    type_version_tag: bool
-    unraisable_tracebacks: bool
-    old_style_globals: bool
-    np_pythran: bool
-    fast_gil: bool
-    cpp_locals: bool
-    legacy_implicit_noexcept: bool
-    c_compile_guard: str
-    set_initial_path: str | None
-    warn: WarnDirectivesDict
-    show_performance_hints: bool
-    optimize: OptimizeDirectivesDict
-    remove_unreachable: bool
-    control_flow: ControlFlowDirectivesDict
-    test_assert_path_exists: List[str]
-    test_fail_if_path_exists: List[str]
-    test_assert_c_code_has: List[str]
-    test_fail_if_c_code_has: List[str]
-    formal_grammar: bool    
+    binding: bool = True
+    boundscheck: bool = False
+    nonecheck: bool = False
+    initializedcheck: bool = True
+    freethreading_compatible: bool = False
+    subinterpreters_compatible: str = "no"
+    embedsignature: EmbedSignatureDirectives = field(default_factory=EmbedSignatureDirectives)
+    auto_cpdef: bool = False
+    auto_pickle: bool = False
+    cdivision: bool = True
+    cdivision_warnings: bool = False        
+    cpow: bool = True
+    c_api_binop_methods: bool = True
+    overflowcheck: OverflowCheckDirectives = field(default_factory=OverflowCheckDirectives)
+    always_allow_keywords: bool = True
+    allow_none_for_extension_args: bool = True
+    wraparound: bool = False
+    ccomplex: bool = False
+    callspec: str = ""  
+    nogil: bool = False
+    gil: bool = False
+    with_gil: bool = False
+    profile: bool = False
+    linetrace: bool = False
+    emit_code_comments: bool = True
+    annotation_typing: bool = True
+    cfunc: bool = False
+    ccall: bool = False
+    ufunc: bool = False
+    inline: bool = False
+    exceptval: Any | None = None
+    returns: Any | None = None
+    infer_types: InferTypesDirectives = field(default_factory=InferTypesDirectives)
+    autotestdict: AutotestdictDirectives = field(default_factory=AutotestdictDirectives)
+    language_level: int | str = 3
+    fast_getattr: bool = False
+    py2_import: bool = False
+    preliminary_late_includes_cy28: bool = False
+    iterable_coroutine: bool = False
+    c_string_type: str = "bytes"
+    c_string_encoding: str = ""
+    type_version_tag: bool = True
+    unraisable_tracebacks: bool = True
+    old_style_globals: bool = False
+    np_pythran: bool = False
+    fast_gil: bool = False
+    cpp_locals: bool = False
+    legacy_implicit_noexcept: bool = False
+    internal: bool = False
+    collection_type: str | None = None
+    total_ordering: bool = False
+    c_compile_guard: str = ""
+    set_initial_path: str | None = None
+    warn: WarnDirectives = field(default_factory=WarnDirectives)
+    show_performance_hints: bool = True
+    optimize: OptimizeDirectives = field(default_factory=OptimizeDirectives)
+    remove_unreachable: bool = True
+    control_flow: ControlFlowDirectives = field(default_factory=ControlFlowDirectives)
+    test_assert_path_exists: list[str] = field(default_factory=list)
+    test_fail_if_path_exists: list[str] = field(default_factory=list)
+    test_assert_c_code_has: list[str] = field(default_factory=list)
+    test_fail_if_c_code_has: list[str] = field(default_factory=list)
+    test_body_needs_exception_handling: bool = False
+    formal_grammar: bool = False    
 
 
 
@@ -298,6 +320,12 @@ class Directives(DataDict):
         linetrace: bool
         emit_code_comments: bool
         annotation_typing: bool
+        cfunc: bool
+        ccall: bool
+        ufunc: bool
+        inline: bool
+        exceptval: Any | None
+        returns: Any | None
         infer_types: InferTypesDirectives
         autotestdict: AutotestdictDirectives
         language_level: int | str
@@ -314,6 +342,9 @@ class Directives(DataDict):
         fast_gil: bool
         cpp_locals: bool
         legacy_implicit_noexcept: bool
+        internal: bool
+        collection_type: str | None
+        total_ordering: bool
         c_compile_guard: str
         set_initial_path: str | None
         warn: WarnDirectivesDict
@@ -321,10 +352,11 @@ class Directives(DataDict):
         optimize: OptimizeDirectives
         remove_unreachable: bool
         control_flow: ControlFlowDirectives
-        test_assert_path_exists: List[str]
-        test_fail_if_path_exists: List[str]
-        test_assert_c_code_has: List[str]
-        test_fail_if_c_code_has: List[str]
+        test_assert_path_exists: list[str]
+        test_fail_if_path_exists: list[str]
+        test_assert_c_code_has: list[str]
+        test_fail_if_c_code_has: list[str]
+        test_body_needs_exception_handling: bool
         formal_grammar: bool
 
     class Kwargs(TypedDict, total=False):
@@ -354,6 +386,12 @@ class Directives(DataDict):
         linetrace: bool
         emit_code_comments: bool
         annotation_typing: bool
+        cfunc: bool
+        ccall: bool
+        ufunc: bool
+        inline: bool
+        exceptval: Any | None
+        returns: Any | None
         infer_types: InferTypesDirectivesKwargs
         autotestdict: AutotestdictDirectivesKwargs
         language_level: int | str
@@ -370,6 +408,9 @@ class Directives(DataDict):
         fast_gil: bool
         cpp_locals: bool
         legacy_implicit_noexcept: bool
+        internal: bool
+        collection_type: str | None
+        total_ordering: bool
         c_compile_guard: str
         set_initial_path: str | None
         warn: WarnDirectivesKwargs
@@ -377,10 +418,11 @@ class Directives(DataDict):
         optimize: OptimizeDirectivesKwargs
         remove_unreachable: bool
         control_flow: ControlFlowDirectivesKwargs
-        test_assert_path_exists: List[str]
-        test_fail_if_path_exists: List[str]
-        test_assert_c_code_has: List[str]
-        test_fail_if_c_code_has: List[str]
+        test_assert_path_exists: list[str]
+        test_fail_if_path_exists: list[str]
+        test_assert_c_code_has: list[str]
+        test_fail_if_c_code_has: list[str]
+        test_body_needs_exception_handling: bool
         formal_grammar: bool
         overload_dispatch: bool 
 
@@ -694,11 +736,9 @@ class GlobalDirectives(DataDict):
 
 
 # Create a global wrapper (no overrides) for consumers that expect an object.
-GLOBAL_DIRECTIVES = GlobalDirectives()
+GLOBAL_DIRECTIVES: GlobalDirectives
 
-DIRECTIVE_DEFAULTS = Directives()
-
-
+DIRECTIVE_DEFAULTS: Directives
 
 
 """
@@ -825,3 +865,5 @@ buffer_max_dims = 8
 
 #: Number of function closure instances to keep in a freelist (0: no freelists)
 closure_freelist_size = 8
+
+

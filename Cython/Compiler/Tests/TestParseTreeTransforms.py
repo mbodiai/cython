@@ -175,7 +175,7 @@ class TestInterpretCompilerDirectives(TransformTest):
     def setUp(self):
         super().setUp()
 
-        compilation_options = Options.CompilationOptions(**Options.default_options)
+        compilation_options = Options.DEFAULT_COMPILATION_OPTIONS
         ctx = Main.Context.from_options(compilation_options)
 
         transform = InterpretCompilerDirectives(ctx, ctx.compiler_directives)

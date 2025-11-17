@@ -77,7 +77,7 @@ except ImportError:
     pass
 
 if TYPE_CHECKING:
-    from Cython.Compiler.Options import DirectivesDict
+    from Cython.Compiler.Directives import DirectivesDict
 
 from distutils.command.build_ext import build_ext as _build_ext
 from distutils import sysconfig
@@ -1238,7 +1238,7 @@ class CythonCompileTestCase(unittest.TestCase):
         except NameError:
             from Cython.Compiler.Options import (
                 CompilationOptions,
-                default_options as pyrex_default_options,
+                DEFAULT_COMPILATION_OPTIONS as pyrex_default_options,
             )
             from Cython.Compiler.Main import compile as cython_compile
         common_utility_include_dir = self.common_utility_dir
@@ -1760,9 +1760,10 @@ class CythonPyregrTestCase(CythonRunTestCase):
     def setUp(self):
         CythonRunTestCase.setUp(self)
         from Cython.Compiler import Options
+        from Cython.Compiler import Directives
         Options.error_on_unknown_names = False
         Options.error_on_uninitialized = False
-        Options._directive_defaults.update(dict(
+        Directives.DIRECTIVE_DEFAULTS.update(dict(
             binding=True, always_allow_keywords=True,
             set_initial_path="SOURCEFILE"))
         patch_inspect_isfunction()
@@ -2643,10 +2644,11 @@ def time_stamper_thread(interval=10, open_shards=None):
 
 def configure_cython(options):
     global CompilationOptions, pyrex_default_options, cython_compile
-    from Cython.Compiler.Options import \
-        CompilationOptions, \
-        default_options as pyrex_default_options
-    from Cython.Compiler.Options import directive_defaults
+    from Cython.Compiler.Options import (
+        CompilationOptions,
+        DEFAULT_COMPILATION_OPTIONS as pyrex_default_options,
+    )
+    from Cython.Compiler.Directives import DIRECTIVE_DEFAULTS
 
     from Cython.Compiler import Errors
     Errors.LEVEL = 0  # show all warnings
@@ -2660,7 +2662,7 @@ def configure_cython(options):
 
     pyrex_default_options['formal_grammar'] = options.use_formal_grammar
     if options.profile:
-        directive_defaults['profile'] = True
+        DIRECTIVE_DEFAULTS['profile'] = True
     if options.watermark:
         import Cython.Compiler.Version
         Cython.Compiler.Version.watermark = options.watermark
@@ -2736,7 +2738,9 @@ def runtests(options, cmd_args, coverage=None):
         options.cleanup_sharedlibs = False
         options.fork = False
         if WITH_CYTHON and include_debugger:
-            from Cython.Compiler.Options import default_options as compiler_default_options
+            from Cython.Compiler.Options import (
+                DEFAULT_COMPILATION_OPTIONS as compiler_default_options,
+            )
             compiler_default_options['gdb_debug'] = True
             compiler_default_options['output_dir'] = os.getcwd()
 

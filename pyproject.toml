@@ -63,7 +63,7 @@ archs = ["x86_64", "arm64"]
 
 [tool.pyright]
 venvPath = ".venv"
-extraPaths = ["Users/sebastian/corp/projects/embodied-data-corp"]
+extraPaths = ["Users/sebastian/corp/projects/embodied-data-corp","/Users/sebastian/corp/projects/mb"]
 stubPath = "./typings"
 [tool.cyright]
 license = "Apache-2.0"

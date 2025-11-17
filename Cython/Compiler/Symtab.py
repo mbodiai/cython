@@ -8,10 +8,10 @@ import copy
 from dataclasses import dataclass, field
 import operator
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast, overload
 
 from ..Utils import try_finally_contextmanager
-from . import Code, DebugFlags, Naming, Options, PyrexTypes
+from . import Code,  Naming, Options, PyrexTypes
 from .Errors import InternalError, error, performance_hint, warning
 from .PyrexTypes import py_object_type, unspecified_type
 from .StringEncoding import EncodedString
@@ -22,11 +22,12 @@ from .TypeSlots import (
     pymethod_signature,
     richcmp_special_methods,
 )
-from .Directives import Directives
+from . import Directives
 
 if TYPE_CHECKING:
     from .PyrexTypes import CFuncType, PyrexType
     from .TypeSlots import Signature
+    from .Nodes import Node
 
 
 def c_safe_identifier(cname):
@@ -70,6 +71,8 @@ class BufferAux:
         return f"<BufferAux {self.__dict__!r}>"
 
 Boolean = bool | int
+
+@dataclass(eq=False)
 class Entry:
     # A symbol table entry in a Scope or ModuleNamespace.
     #
@@ -164,18 +167,19 @@ class Entry:
     # pytyping_modifiers          Python type modifiers like "typing.ClassVar" but also "dataclasses.InitVar"
     # enum_int_value  None or int  If known, the int that corresponds to this enum value
     # specialiser  function or None  Callable to specialise a function to specific C arguments.
-
     # TODO: utility_code and utility_code_definition serves the same purpose...
+
     name: str
     cname: str
     type: "PyrexTypes.PyrexType"
-    pos: int|None
-    overloaded_alternatives: list["Entry"]
-    cf_assignments: list["Entry"]
-    cf_references: list["Entry"]
-    inner_entries: list["Entry"]
-    defining_entry: "Entry"
-    borrowed: int = 0
+    pos: int | None = None
+    init: str | None = None
+    overloaded_alternatives: list["Entry"] = field(default_factory=list)
+    cf_assignments: list["Entry"] = field(default_factory=list)
+    cf_references: list["Entry"] = field(default_factory=list)
+    inner_entries: list["Entry"] = field(default_factory=list)
+    defining_entry: "Entry" = field(init=False)
+    borrowed: Boolean = False
     is_builtin: Boolean = False
     is_cglobal: Boolean = False
     is_pyglobal: Boolean = False
@@ -218,7 +222,6 @@ class Entry:
     buffer_aux: "BufferAux|None" = None
     inline_func_in_pxd: Boolean = False
     borrowed = 0
-    init: str|None = None
     annotation: str|None = None
     visibility: str = 'private'
   
@@ -228,7 +231,7 @@ class Entry:
    
     pyfunc_cname: str|None = None
     func_cname: str|None = None
-    func_modifiers: list[str] = []
+    func_modifiers: list[str] = field(default_factory=list)
     final_func_cname: str|None = None
     doc: str|None = None
     as_variable: "Entry|None" = None
@@ -252,19 +255,37 @@ class Entry:
     pytyping_modifiers: list[str]|None = None
     enum_int_value: int|None = None
     vtable_type: "PyrexTypes.PyrexType|None" = None
-    signature: "Signature"
-    def __init__(self, name:str, cname:str, type:"CFuncType", pos:int|None = None, init:str|None = None):
-        self.name = name
-        self.cname = cname
-        self.type = type
-        self.pos = pos
-        self.init = init
-        self.overloaded_alternatives = []
-        self.cf_assignments = []
-        self.cf_references = []
-        self.inner_entries = []
+    create_wrapper: Boolean = False
+    enum_values: list["Entry"] = field(default_factory=list)
+    qualified_name: str = field(init=False)
+    pymethdef_cname: str|None = None
+    np_args_idx: int = 0
+    wrapperbase_cname: str|None = None
+    namespace_cname: str|None = None
+    in_c_type_context: Boolean = False
+    id_counters: dict[str, int] = field(default_factory=dict)
+    scope_prefix: str = field(init=False)
+    value_node: "Node|None" = None
+    # For Cython-level C functions (@cython.cfunc/@cython.ccall and friends),
+    # store the per-parameter default value expressions (if any).  These are
+    # AST nodes cloned from the original argument defaults in the defining
+    # function header and are used at *call* sites to synthesize missing
+    # arguments without involving Python-level argument parsing machinery.
+    #
+    # The list is aligned with ``type.args`` (including any implicit ``self``
+    # argument for C methods) and contains either an expression node or None
+    # for each parameter.
+    cfunc_default_args: "list[Node|None] | None" = None
+    signature: "Signature|None" = None
+    def __post_init__(self):
+        # Preserve legacy invariants expected throughout the compiler:
+        # - each Entry is its own defining_entry by default
+        # - scope_prefix always exists and is a string (used in name mangling / hashing)
         self.defining_entry = self
-
+        # Older, non-dataclass implementations initialised this to an empty string.
+        # The ControlFlowAnalysis / FlowControl module assumes 'scope_prefix'
+        # is always present (see uses via env.scope_prefix and Entry.__hash__).
+        self.scope_prefix = ""
 
     def __repr__(self):
         return f"{type(self).__name__}(<{id(self):x}>, name={self.name}, type={self.type})"
@@ -285,7 +306,7 @@ class Entry:
             func_entry = self.specialiser(scope, arg_types)
         if func_entry is None:
             if self.type.is_fused:
-                functypes = self.type.get_all_specialized_function_types()
+                functypes = cast("PyrexTypes.CFuncType", self.type).get_all_specialized_function_types()
                 alternatives = [f.entry for f in functypes]
             else:
                 alternatives = self.all_alternatives()
@@ -300,6 +321,17 @@ class Entry:
         if isinstance(self, Entry) and isinstance(right, Entry):
             return (self.name, self.cname) < (right.name, right.cname)
         return NotImplemented
+
+    @property
+    def is_cfunc_pointer(self) -> bool:
+        """
+        Return True if this entry represents a C function pointer variable.
+
+        This intentionally relies on lightweight type flags instead of
+        re-inspecting declarators or AST nodes.
+        """
+        type = self.type
+        return getattr(type, "is_ptr", False) and getattr(type, "is_cfunc_ptr", False)
 
     @property
     def cf_is_reassigned(self):
@@ -318,9 +350,11 @@ class Entry:
 class InnerEntry(Entry):
     """An entry in a closure scope that represents the real outer Entry.
     """
-    from_closure = True
+    
+    scope: "Scope"
+    from_closure: Boolean = True
 
-    def __init__(self, outer_entry, scope):
+    def __init__(self, outer_entry: "Entry", scope: "Scope"):
         Entry.__init__(self, outer_entry.name,
                        outer_entry.cname,
                        outer_entry.type,
@@ -349,7 +383,7 @@ class InnerEntry(Entry):
     def all_entries(self):
         return self.defining_entry.all_entries()
 
-@dataclass
+@dataclass(eq=False)
 class Scope:
     # name              string             Unqualified name
     # outer_scope       Scope or None      Enclosing scope
@@ -408,19 +442,19 @@ class Scope:
     lambda_defs: list["Scope"] = field(default_factory=list)
     id_counters: dict[str, int] = field(default_factory=dict[str, int])
     
-    is_builtin_scope:bool|int = False
-    is_py_class_scope:bool|int = False
-    is_c_class_scope:bool|int = False
-    is_closure_scope:bool|int = False
-    is_local_scope:bool|int = False
-    is_generator_expression_scope:bool|int = False
-    is_comprehension_scope:bool|int = False
-    is_passthrough:bool|int = False
-    is_cpp_class_scope:bool|int = False
-    is_property_scope:bool|int = False
-    is_module_scope:bool|int = False
-    is_c_dataclass_scope:bool|int = False
-    is_internal:bool|int = False
+    is_builtin_scope: ClassVar[Boolean] = False
+    is_py_class_scope: ClassVar[Boolean] = False
+    is_c_class_scope: ClassVar[Boolean] = False
+    is_closure_scope: ClassVar[Boolean] = False
+    is_local_scope: ClassVar[Boolean] = False
+    is_generator_expression_scope: ClassVar[Boolean] = False
+    is_comprehension_scope: ClassVar[Boolean] = False
+    is_passthrough: ClassVar[Boolean] = False
+    is_cpp_class_scope: ClassVar[Boolean] = False
+    is_property_scope: ClassVar[Boolean] = False
+    is_module_scope: ClassVar[Boolean] = False
+    is_c_dataclass_scope: ClassVar[Boolean] = False
+    is_internal: ClassVar[Boolean] = False
     scope_prefix: str = ""
     in_cinclude:bool|int = False
     nogil:bool|int = False
@@ -428,14 +462,12 @@ class Scope:
     return_type:"PyrexTypes.PyrexType|None" = None
     scope_predefined_names = []
     qualified_name:EncodedString = field(default_factory=EncodedString)
-    directives:Directives = field(default_factory=Directives)
+    directives: Directives.Directives = field(default_factory=Directives.Directives)
     # Do ambiguous type names like 'int' and 'float' refer to the C types? (Otherwise, Python types.)
     in_c_type_context = True
     node_positions_to_offset = {}  # read-only fallback dict
 
 
-
-    @property
     def __post_init__(self):
         # The outer_scope is the next scope in the lookup chain.
         # The parent_scope is used to derive the qualified name of this scope.
@@ -1005,7 +1037,7 @@ class Scope:
             entry.utility_code = utility_code
         if overridable:
             # names of cpdef functions can be used as variables and can be assigned to
-            var_entry = Entry(name, cname, py_object_type)   # FIXME: cname?
+            var_entry = Entry(name, cname, py_object_type, pos=pos)   # FIXME: cname?
             var_entry.qualified_name = self.qualify_name(name)
             var_entry.is_variable = 1
             var_entry.is_pyglobal = 1
@@ -1079,7 +1111,7 @@ class Scope:
                 return None
         return scope
 
-    def lookup(self, name):
+    def lookup(self, name, language_level=None):
         # Look up name in this scope or an enclosing one.
         # Return None if not found.
 
@@ -1252,13 +1284,18 @@ class Scope:
 class PreImportScope(Scope):
     namespace_cname = Naming.preimport_cname
     def __init__(self):
-        Scope.__init__(self, Options.pre_import, None, None)
+        Scope.__init__(self, Options.pre_import or "", None, None)
     def declare_builtin(self, name, pos):
         entry = self.declare(name, name, py_object_type, pos, 'private')
         entry.is_variable = True
         entry.is_pyglobal = True
         return entry
 
+builtin_names = Literal[
+    "unicode", "basestring", "long", "str", "int", "float", "complex", "bool", "bytes", "bytearray", 
+    "memoryview", "range", "slice", "tuple", "list", "dict", "set", "frozenset", "type", "NoneType",
+    "bool", "int", "float", "complex", "bytes", "bytearray", "memoryview", "range", "slice", "tuple",
+     "list", "dict", "set","frozenset", "type", "NoneType", "NotImplementedType", "EllipsisType"]  # noqa: F821
 class BuiltinScope(Scope):
     #  The builtin namespace.
 
@@ -1270,8 +1307,11 @@ class BuiltinScope(Scope):
         else:
             Scope.__init__(self, "__builtin__", PreImportScope(), None)
         self.type_names = {}
-
-    def lookup(self, name, language_level=None):
+    @overload
+    def lookup(self, name: builtin_names, language_level: int=3) -> "Entry":...
+    @overload
+    def lookup(self, name: str, language_level: int=3) -> "Entry|None":...
+    def lookup(self, name: str, language_level: int=3) -> "Entry|None":
         # 'language_level' is passed by ModuleScope
         if name == 'unicode' or name == 'basestring':
             # Keep recognising 'unicode' and 'basestring' in legacy code but map them to 'str'.
@@ -1301,7 +1341,7 @@ class BuiltinScope(Scope):
             entry.specialiser = specialiser
         if python_equiv:
             python_equiv = name if python_equiv == "*" else EncodedString(python_equiv)
-            var_entry = Entry(python_equiv, python_equiv, py_object_type)
+            var_entry = Entry(python_equiv, python_equiv, py_object_type, pos=None)
             var_entry.qualified_name = self.qualify_name(name)
             var_entry.is_variable = 1
             var_entry.is_builtin = 1
@@ -1316,7 +1356,7 @@ class BuiltinScope(Scope):
         name = EncodedString(name)
         type = type_class(name, cname, objstruct_cname)
         scope = CClassScope(name, outer_scope=None, visibility='extern', parent_type=type)
-        scope.directives = Directives()
+        scope.directives = Directives.Directives()
         type.set_scope(scope)
         self.type_names[name] = 1
 
@@ -1380,13 +1420,22 @@ class ModuleScope(Scope):
     # cpp                  boolean            Compiling a C++ file
     # is_cython_builtin    boolean            Is this the Cython builtin scope (or a child scope)
     # is_package           boolean            Is this a package module? (__init__)
-
+    module_name: str
+    module_cname: str
+    module_dict_cname: str
+    method_table_cname: str
+    doc: str
+    doc_cname: str
+    utility_code_list: list[Code.UtilityCode]
+    module_entries: dict[str, Entry]
+    c_includes: dict[str, Code.IncludeCode]
+    type_names: dict[str, int]
     is_module_scope = 1
     has_import_star = 0
     is_cython_builtin = 0
     old_style_globals = 0
     namespace_cname_is_type = False
-    directives:Directives
+    directives: Directives.Directives
     scope: Scope
     scope_predefined_names = [
         '__builtins__', '__name__', '__file__', '__doc__', '__path__',
@@ -1407,7 +1456,7 @@ class ModuleScope(Scope):
         self.method_table_cname = Naming.methtable_cname
         self.doc = ""
         self.doc_cname = Naming.moddoc_cname
-        self.utility_code_list: list[Code.UtilityCode] = []
+        self.utility_code_list = []
         self.module_entries = {}
         self.c_includes = {}
         self.type_names = dict(outer_scope.type_names)
@@ -1496,7 +1545,7 @@ class ModuleScope(Scope):
             if self.has_import_star:
                 entry = self.declare_var(name, py_object_type, pos)
                 return entry
-            if Options.error_on_unknown_names:
+            if Options.DEFAULT_COMPILATION_OPTIONS.error_on_unknown_names:
                 error(pos, "undeclared name not builtin: %s" % name)
             else:
                 warning(pos, "undeclared name not builtin: %s" % name, 2)
@@ -1504,14 +1553,14 @@ class ModuleScope(Scope):
             entry = self.declare(name, None, py_object_type, pos, 'private')
             entry.is_builtin = 1
             return entry
-        if Options.cache_builtins:
+        if Options.DEFAULT_COMPILATION_OPTIONS.cache_builtins:
             for entry in self.cached_builtins:
                 if entry.name == name:
                     return entry
         if name == 'globals' and not self.old_style_globals:
             return self.outer_scope.lookup('__Pyx_Globals')
         entry = self.declare(None, None, py_object_type, pos, 'private')
-        if Options.cache_builtins and name not in Code.uncachable_builtins:
+        if Options.DEFAULT_COMPILATION_OPTIONS.cache_builtins and name not in Code.uncachable_builtins:
             entry.is_builtin = 1
             entry.is_const = 1  # cached
             entry.name = name
@@ -1904,18 +1953,24 @@ class ModuleScope(Scope):
             type.vtabslot_cname = "%s.%s" % (
                 Naming.obj_base_cname, type.base_type.vtabslot_cname)
         elif type.scope and type.scope.cfunc_entries:
-            # one special case here: when inheriting from builtin
-            # types, the methods may also be built-in, in which
-            # case they won't need a vtable
-            entry_count = len(type.scope.cfunc_entries)
+            # One special case here: when inheriting from builtin types, the methods may
+            # also be built-in, in which case they won't need a vtable.  This is true
+            # only if all C methods of this type are inherited wrappers for builtin
+            # methods and none are newly introduced here.
+            #
+            # We therefore treat the presence of any non-inherited C method as a
+            # requirement to allocate a vtable.
             base_type = type.base_type
             while base_type:
-                # FIXME: this will break if we ever get non-inherited C methods
-                if not base_type.scope or entry_count > len(base_type.scope.cfunc_entries):
-                    break
                 if base_type.is_builtin_type:
-                    # builtin base type defines all methods => no vtable needed
-                    return
+                    # builtin base type defines all methods and we do not introduce any
+                    # new C methods => no vtable needed
+                    if all(method_entry.is_inherited
+                           for method_entry in type.scope.cfunc_entries):
+                        return
+                    break
+                if not base_type.scope:
+                    break
                 base_type = base_type.base_type
             #print "...allocating vtabslot_cname because there are C methods" ###
             type.vtabslot_cname = Naming.vtabslot_cname
@@ -2324,7 +2379,8 @@ class ClassScope(Scope):
                 "__Pyx_Method_ClassMethod",
                 PyrexTypes.CFuncType(
                     py_object_type,
-                    [PyrexTypes.CFuncTypeArg("", py_object_type, None)], 0, 0))
+                    [PyrexTypes.CFuncTypeArg("", py_object_type, None)], 0, 0),
+                pos=None)
             entry.utility_code = Code.UtilityCode.load_cached("ClassMethod", "CythonFunction.c")
             self.use_entry_utility_code(entry)
             entry.is_cfunction = 1
@@ -2704,7 +2760,7 @@ class CClassScope(ClassScope):
         name = EncodedString(name)
         entry = self.declare_cfunction(
             name, type, pos=None, cname=cname, visibility='extern', utility_code=utility_code)
-        var_entry = Entry(name, name, py_object_type)
+        var_entry = Entry(name, name, py_object_type, pos=None)
         var_entry.qualified_name = name
         var_entry.is_variable = 1
         var_entry.is_builtin = 1

@@ -17,9 +17,9 @@ from ast import (
     walk,
 )
 from collections.abc import Callable
-from typing import Any, Generic, Literal, TypeVar, Unpack, cast, overload
+from typing import Any, Generic, Literal, TypeVar, cast, overload
 
-from typing_extensions import TypedDict
+from typing_extensions import TypedDict, Unpack
 
 ASTType = TypeVar("ASTType",bound=AST)
 

@@ -40,7 +40,7 @@ class CmdLineParserTest(TestCase):
         self.assertEqual(check_global_options(self._options_backup, white_list), "")
 
     def check_default_options(self, options, white_list=[]):
-        default_options = Options.CompilationOptions(**Options.default_options)
+        default_options = Options.DEFAULT_COMPILATION_OPTIONS
         no_value = object()
         for name in default_options.__dict__.keys():
             if name not in white_list:

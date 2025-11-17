@@ -78,6 +78,9 @@ class NotConstant:
 not_a_constant = NotConstant()
 constant_value_not_set = object()
 
+cy_pymutex_type = PyrexTypes.get_cy_pymutex_type()
+cy_pythread_type_lock_type = PyrexTypes.get_cy_pythread_type_lock_type()
+
 def _type_to_itself(tp):
     return tp, tp
 
@@ -99,9 +102,9 @@ coercion_error_dict = {
     (PyrexTypes.c_uchar_ptr_type, unicode_type): "Cannot convert 'char*' to unicode implicitly, decoding required",
     (PyrexTypes.c_const_uchar_ptr_type, unicode_type): (
         "Cannot convert 'char*' to unicode implicitly, decoding required"),
-    (PyrexTypes.cy_pymutex_type, PyrexTypes.cy_pymutex_type): (
+    (cy_pymutex_type, cy_pymutex_type): (
         "cython.pymutex cannot be copied"),
-    (PyrexTypes.cy_pythread_type_lock_type, PyrexTypes.cy_pythread_type_lock_type): (
+    (cy_pythread_type_lock_type, cy_pythread_type_lock_type): (
         "cython.pythread_type_lock cannot be copied"),
 }
 
@@ -6571,7 +6574,7 @@ class SimpleCallNode(CallNode):
 
         if self.function.is_name or self.function.is_attribute:
             func_entry = self.function.entry
-            if func_entry and (func_entry.utility_code or func_entry.utility_code_definition):
+            if func_entry and func_entry.utility_code:
                 self.is_temp = 1  # currently doesn't work for self.calculate_result_code()
 
         if self.type.is_pyobject:
