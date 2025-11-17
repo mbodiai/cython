@@ -1,15 +1,18 @@
+from typing import TYPE_CHECKING
 from .Visitor import CythonTransform
 from .ModuleNode import ModuleNode
 from .Errors import CompileError
 from .UtilityCode import CythonUtilityCode
 from .Code import UtilityCode, TempitaUtilityCode
 
-from . import Options
+from . import Options, Directives
 from . import Interpreter
 from . import PyrexTypes
 from . import Naming
 from . import Symtab
 
+if TYPE_CHECKING:
+    from .Code import CCodeWriter
 def dedent(text, reindent=0):
     from textwrap import dedent
     text = dedent(text)
@@ -56,7 +59,7 @@ class IntroduceBufferAuxiliaryVars(CythonTransform):
 
 
         for (name, entry) in scope_items:
-            if name == 'memoryview' and isinstance(entry.utility_code_definition, CythonUtilityCode):
+            if name == 'memoryview' and isinstance(entry.utility_code, CythonUtilityCode):
                 self.using_memoryview = True
                 break
         del scope_items
@@ -70,9 +73,9 @@ class IntroduceBufferAuxiliaryVars(CythonTransform):
 
             name = entry.name
             buftype = entry.type
-            if buftype.ndim > Options.buffer_max_dims:
+            if buftype.ndim > Directives.buffer_max_dims:
                 raise CompileError(node.pos,
-                        "Buffer ndims exceeds Options.buffer_max_dims = %d" % Options.buffer_max_dims)
+                        "Buffer ndims exceeds buffer_max_dims = %d" % Directives.buffer_max_dims)
             if buftype.ndim > self.max_ndim:
                 self.max_ndim = buftype.ndim
 
@@ -244,7 +247,7 @@ class BufferEntry:
                 funcgen = buf_lookup_fortran_code
             else:
                 assert False
-            for i, s in zip(index_cnames, self.get_buf_stridevars()):
+            for i, s in zip(index_cnames, self.get_buf_stridevars(), strict=False):
                 params.append(i)
                 params.append(s)
 
@@ -273,7 +276,7 @@ def get_flags(buffer_aux, buffer_type):
     elif mode == 'fortran':
         flags += '| PyBUF_F_CONTIGUOUS'
     else:
-        assert False
+        raise ValueError(f"Invalid mode: {mode}")
     if buffer_aux.writable_needed: flags += "| PyBUF_WRITABLE"
     return flags
 
@@ -548,7 +551,7 @@ def buf_lookup_fortran_code(proto, defin, name, nd):
         proto.putln("#define %s(type, buf, %s) ((type)((char*)buf + %s) + i%d)" % (name, args, offset, 0))
 
 
-def mangle_dtype_name(dtype):
+def mangle_dtype_name(dtype:"PyrexTypes.PyrexType")->str:
     # Use prefixes to separate user defined types from builtins
     # (consider "typedef float unsigned_int")
     if dtype.is_pyobject:
@@ -562,7 +565,7 @@ def mangle_dtype_name(dtype):
             prefix = ""
         return prefix + dtype.specialization_name()
 
-def get_type_information_cname(code, dtype, maxdepth=None):
+def get_type_information_cname(code:"CCodeWriter", dtype:"PyrexTypes.PyrexType", maxdepth:int|None=None)->str:
     """
     Output the run-time type information (__Pyx_TypeInfo) for given dtype,
     and return the name of the type info struct.
@@ -576,13 +579,14 @@ def get_type_information_cname(code, dtype, maxdepth=None):
     name = "__Pyx_TypeInfo_%s" % namesuffix
     structinfo_name = "__Pyx_StructFields_%s" % namesuffix
 
-    if dtype.is_error: return "<error>"
+    if dtype.is_error: 
+        return "<error>"
 
     # It's critical that walking the type info doesn't use more stack
     # depth than dtype.struct_nesting_depth() returns, so use an assertion for this
     if maxdepth is None: maxdepth = dtype.struct_nesting_depth()
     if maxdepth <= 0:
-        assert False
+        raise ValueError(f"Invalid maxdepth: {maxdepth}")
 
     if name not in code.globalstate.utility_codes:
         code.globalstate.utility_codes.add(name)
@@ -605,10 +609,11 @@ def get_type_information_cname(code, dtype, maxdepth=None):
                 struct_scope = struct_scope.base_type_scope
             # Must pre-call all used types in order not to recurse during utility code writing.
             fields = struct_scope.var_entries
-            assert len(fields) > 0
+            if len(fields) == 0:
+                raise ValueError(f"Invalid struct_scope: {struct_scope}")
             types = [get_type_information_cname(code, f.type, maxdepth - 1)
                      for f in fields]
-            typecode.putln("static __Pyx_StructField %s[] = {" % structinfo_name, safe=True)
+            typecode.putln("static const __Pyx_StructField %s[] = {" % structinfo_name, safe=True)
 
             if dtype.is_cv_qualified:
                 # roughly speaking, remove "const" from struct_type
@@ -616,14 +621,14 @@ def get_type_information_cname(code, dtype, maxdepth=None):
             else:
                 struct_type = dtype.empty_declaration_code()
 
-            for f, typeinfo in zip(fields, types):
+            for f, typeinfo in zip(fields, types, strict=False):
                 typecode.putln('  {&%s, "%s", offsetof(%s, %s)},' %
                                (typeinfo, f.name, struct_type, f.cname), safe=True)
 
             typecode.putln('  {NULL, NULL, 0}', safe=True)
             typecode.putln("};", safe=True)
         else:
-            assert False
+            raise ValueError(f"Invalid dtype: {dtype}")
 
         rep = str(dtype)
 
@@ -648,7 +653,7 @@ def get_type_information_cname(code, dtype, maxdepth=None):
         else:
             assert False, dtype
 
-        typeinfo = ('static __Pyx_TypeInfo %s = '
+        typeinfo = ('static const __Pyx_TypeInfo %s = '
                         '{ "%s", %s, sizeof(%s), { %s }, %s, %s, %s, %s };')
         tup = (name, rep, structinfo_name, declcode,
                ', '.join([str(x) for x in arraysizes]) or '0', len(arraysizes),
@@ -663,7 +668,7 @@ def load_buffer_utility(util_code_name, context=None, **kwargs):
     else:
         return TempitaUtilityCode.load(util_code_name, "Buffer.c", context=context, **kwargs)
 
-context = dict(max_dims=Options.buffer_max_dims)
+context = dict(max_dims=Directives.buffer_max_dims)
 buffer_struct_declare_code = load_buffer_utility("BufferStructDeclare", context=context)
 buffer_formats_declare_code = load_buffer_utility("BufferFormatStructs")
 

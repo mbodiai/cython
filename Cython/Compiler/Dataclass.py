@@ -3,6 +3,7 @@
 from collections import OrderedDict
 from textwrap import dedent
 import operator
+from typing import TYPE_CHECKING
 
 from . import ExprNodes
 from . import Nodes
@@ -10,27 +11,24 @@ from . import PyrexTypes
 from . import Builtin
 from . import Naming
 from .Errors import error, warning
-from .Code import UtilityCode, TempitaUtilityCode, PyxCodeWriter
+from .Code import UtilityCode, PyxCodeWriter
 from .Visitor import VisitorTransform
 from .StringEncoding import EncodedString
 from .TreeFragment import TreeFragment
 from .ParseTreeTransforms import NormalizeTree, SkipDeclarations
 from .Options import copy_inherited_directives
 
-_dataclass_loader_utilitycode = None
+if TYPE_CHECKING:
+    from .Nodes import  ExprNode,CClassDefNode
+    from .ParseTreeTransforms import AnalyseDeclarationsTransform
 
 def make_dataclasses_module_callnode(pos):
-    global _dataclass_loader_utilitycode
-    if not _dataclass_loader_utilitycode:
-        python_utility_code = UtilityCode.load_cached("Dataclasses_fallback", "Dataclasses.py")
-        python_utility_code = EncodedString(python_utility_code.impl)
-        _dataclass_loader_utilitycode = TempitaUtilityCode.load(
-            "SpecificModuleLoader", "Dataclasses.c",
-            context={'cname': "dataclasses", 'py_code': python_utility_code.as_c_string_literal()})
+    dataclass_loader_utilitycode = UtilityCode.load_cached(
+            "LoadDataclassesModule", "Dataclasses.c")
     return ExprNodes.PythonCapiCallNode(
         pos, "__Pyx_Load_dataclasses_Module",
         PyrexTypes.CFuncType(PyrexTypes.py_object_type, []),
-        utility_code=_dataclass_loader_utilitycode,
+        utility_code=dataclass_loader_utilitycode,
         args=[],
     )
 
@@ -139,7 +137,7 @@ class TemplateCode:
 
     def add_extra_statements(self, statements):
         if self.extra_stats is None:
-            assert False, "Can only use add_extra_statements on top-level writer"
+            raise ValueError("Can only use add_extra_statements on top-level writer")
         self.extra_stats.extend(statements)
 
     def _new_placeholder_name(self, field_names):
@@ -297,7 +295,7 @@ def process_class_get_fields(node):
     return fields
 
 
-def handle_cclass_dataclass(node, dataclass_args, analyse_decs_transform):
+def handle_cclass_dataclass(node: "CClassDefNode", dataclass_args: "tuple[bool, dict[str, ExprNode]]", analyse_decs_transform: "AnalyseDeclarationsTransform"):
     # default argument values from https://docs.python.org/3/library/dataclasses.html
     kwargs = dict(init=True, repr=True, eq=True,
                   order=False, unsafe_hash=False,
@@ -306,13 +304,16 @@ def handle_cclass_dataclass(node, dataclass_args, analyse_decs_transform):
         if dataclass_args[0]:
             error(node.pos, "cython.dataclasses.dataclass takes no positional arguments")
         for k, v in dataclass_args[1].items():
+            if k in kwargs and isinstance(v, ExprNodes.BoolNode):
+                kwargs[k] = v.value
+                continue
+
             if k not in kwargs:
                 error(node.pos,
                       "cython.dataclasses.dataclass() got an unexpected keyword argument '%s'" % k)
             if not isinstance(v, ExprNodes.BoolNode):
                 error(node.pos,
                       "Arguments passed to cython.dataclasses.dataclass must be True or False")
-            kwargs[k] = v.value
 
     kw_only = kwargs['kw_only']
 
@@ -328,10 +329,10 @@ def handle_cclass_dataclass(node, dataclass_args, analyse_decs_transform):
     dataclass_params_keywords = ExprNodes.DictNode.from_pairs(
         node.pos,
         [ (ExprNodes.IdentifierStringNode(node.pos, value=EncodedString(k)),
-           ExprNodes.BoolNode(node.pos, value=v))
+           ExprNodes.BoolNode(node.pos, value=v, type=Builtin.bool_type))
           for k, v in kwargs.items() ] +
         [ (ExprNodes.IdentifierStringNode(node.pos, value=EncodedString(k)),
-           ExprNodes.BoolNode(node.pos, value=v))
+           ExprNodes.BoolNode(node.pos, value=v, type=Builtin.bool_type))
           for k, v in [('kw_only', kw_only),
                        ('slots', False), ('weakref_slot', False)]
         ])

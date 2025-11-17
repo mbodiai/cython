@@ -5,7 +5,9 @@
 
 
 # This should be done automatically
+
 import cython
+import dataclasses
 cython.declare(Nodes=object, ExprNodes=object, EncodedString=object,
                bytes_literal=object, StringEncoding=object,
                FileSourceDescriptor=object, lookup_unicodechar=object,
@@ -19,6 +21,7 @@ from io import StringIO
 import re
 from unicodedata import lookup as lookup_unicodechar
 from functools import partial, reduce
+from typing import Any, Optional
 
 from .Scanning import PyrexScanner, FileSourceDescriptor, tentatively_scan
 from . import Nodes
@@ -29,36 +32,32 @@ from . import StringEncoding
 from .StringEncoding import EncodedString, bytes_literal
 from .ModuleNode import ModuleNode
 from .Errors import error, warning
-from .. import Utils
 from . import Future
-from . import Options
+from . import Directives
 
 
 _CDEF_MODIFIERS = ('inline', 'nogil', 'api')
-
-
+statement_terminators = cython.declare(frozenset, frozenset((
+    ';', 'NEWLINE', 'EOF')))
+@dataclasses.dataclass
 class Ctx:
     #  Parsing context
-    level = 'other'
-    visibility = 'private'
-    cdef_flag = False
-    typedef_flag = False
-    api = False
-    overridable = False
-    nogil = False
-    namespace = None
-    templates = None
-    allow_struct_enum_decorator = False
+    level: str = 'other'
+    visibility: str = 'private'
+    cdef_flag: bool | int = False
+    typedef_flag: bool | int = False
+    api: bool    = False
+    overridable: bool | int = False
+    nogil: bool | int = False
+    namespace: str | None = None
+    templates: list[str] | None = None
+    allow_struct_enum_decorator: bool = False
+    modifiers: Any = None
 
-    def __init__(self, **kwds):
-        self.__dict__.update(kwds)
 
-    def __call__(self, **kwds):
-        ctx = Ctx()
-        d = ctx.__dict__
-        d.update(self.__dict__)
-        d.update(kwds)
-        return ctx
+    __call__ = clone = dataclasses.replace
+
+
 
 
 @cython.cfunc
@@ -97,7 +96,7 @@ def p_binop_operator(s: PyrexScanner) -> tuple:
 
 
 # signature is currently overridden in pxd file
-def p_binop_expr(s: PyrexScanner, ops, p_sub_expr):
+def p_binop_expr(s: "PyrexScanner", ops, p_sub_expr):
     n1 = p_sub_expr(s)
     while s.sy in ops:
         op, pos = p_binop_operator(s)
@@ -194,7 +193,7 @@ def p_or_test(s: PyrexScanner):
 
 
 # signature is currently overridden in pxd file
-def p_rassoc_binop_expr(s: PyrexScanner, op, p_subexpr):
+def p_rassoc_binop_expr(s: "PyrexScanner", op, p_subexpr):
     n1 = p_subexpr(s)
     if s.sy == op:
         pos = s.position()
@@ -441,7 +440,7 @@ def p_sizeof(s: PyrexScanner):
 
 
 @cython.cfunc
-def p_yield_expression(s: PyrexScanner):
+def p_yield_expression(s: PyrexScanner, statement_terminators: frozenset = statement_terminators):
     # s.sy == "yield"
     pos = s.position()
     s.next()
@@ -583,7 +582,7 @@ def p_call_parse_args(s: PyrexScanner, allow_genexp: cython.bint = True):
                 if keyword_args:
                     s.error("Non-keyword arg following keyword arg", pos=arg.pos)
                 if positional_args and not last_was_tuple_unpack:
-                    positional_args[-1].append(arg)
+                    positional_args[len(positional_args) - 1].append(arg)
                 else:
                     positional_args.append([arg])
                 last_was_tuple_unpack = False
@@ -788,10 +787,11 @@ def p_atom(s: PyrexScanner):
         s.next()
         return ExprNodes.FloatNode(pos, value = value)
     elif sy == 'IMAG':
-        value = s.systring[:-1]
+        sy_imag = s.systring
+        value = sy_imag[:len(sy_imag) - 1]
         s.next()
         return ExprNodes.ImagNode(pos, value = value)
-    elif sy == 'BEGIN_STRING':
+    elif sy == 'BEGIN_STRING' or sy == 'BEGIN_FT_STRING':
         return p_atom_string(s)
     elif sy == 'IDENT':
         result = p_atom_ident_constants(s)
@@ -805,7 +805,7 @@ def p_atom(s: PyrexScanner):
 
 @cython.cfunc
 def p_atom_string(s: PyrexScanner):
-    # s.sy == 'BEGIN_STRING'
+    # s.sy == 'BEGIN_STRING' or s.sy == 'BEGIN_FT_STRING'
     pos = s.position()
     kind, bytes_value, unicode_value = p_cat_string_literal(s)
     if not kind:
@@ -819,6 +819,9 @@ def p_atom_string(s: PyrexScanner):
         return ExprNodes.BytesNode(pos, value=bytes_value)
     elif kind_char == 'f':
         return ExprNodes.JoinedStrNode(pos, values=unicode_value)
+    elif kind_char == 't':
+        # TODO
+        return ExprNodes.TemplateStringNode(pos, values=unicode_value)
     else:
         # This is actually prevented by the scanner (Lexicon.py).
         s.error(f"invalid string kind '{kind}'")
@@ -854,12 +857,12 @@ def p_int_literal(s: PyrexScanner):
     s.next()
     unsigned = ""
     longness = ""
-    while value[-1] in "UuLl":
-        if value[-1] in "Ll":
+    while value[len(value) - 1] in "UuLl":
+        if value[len(value) - 1] in "Ll":
             longness += "L"
         else:
             unsigned += "U"
-        value = value[:-1]
+        value = value[:len(value) - 1]
     # '3L' is ambiguous in Py2 but not in Py3.  '3U' and '3LL' are
     # illegal in Py2 Python files.  All suffixes are illegal in Py3
     # Python files.
@@ -933,14 +936,14 @@ def wrap_compile_time_constant(pos, value):
 def p_cat_string_literal(s: PyrexScanner) -> tuple:
     # A sequence of one or more adjacent string literals.
     # Returns (kind, bytes_value, unicode_value)
-    # where kind in ('b', 'c', 'u', 'f', '')
+    # where kind in ('b', 'c', 'u', 'f', 't', '')
     pos = s.position()
     kind, bytes_value, unicode_value = p_string_literal(s)
-    if kind == 'c' or s.sy != 'BEGIN_STRING':
+    if kind == 'c' or (s.sy != 'BEGIN_STRING' and s.sy != 'BEGIN_FT_STRING'):
         return kind, bytes_value, unicode_value
     bstrings, ustrings, positions = [bytes_value], [unicode_value], [pos]
     bytes_value = unicode_value = None
-    while s.sy == 'BEGIN_STRING':
+    while s.sy == 'BEGIN_STRING' or s.sy == 'BEGIN_FT_STRING':
         pos = s.position()
         next_kind, next_bytes_value, next_unicode_value = p_string_literal(s)
         if next_kind == 'c':
@@ -950,6 +953,9 @@ def p_cat_string_literal(s: PyrexScanner) -> tuple:
             # concatenating f strings and normal strings is allowed and leads to an f string
             if {kind, next_kind} in ({'f', 'u'}, {'f', ''}):
                 kind = 'f'
+            elif kind == 't' or next_kind == 't':
+                error(pos, "cannot mix t-string literals with string or bytes literals")
+                continue
             else:
                 error(pos, "Cannot mix string literals of different types, expected %s'', got %s''" % (
                     kind, next_kind))
@@ -960,17 +966,21 @@ def p_cat_string_literal(s: PyrexScanner) -> tuple:
     # join and rewrap the partial literals
     if kind in ('b', 'c', '') or kind == 'u' and None not in bstrings:
         # Py3 enforced unicode literals are parsed as bytes/unicode combination
-        bytes_value = bytes_literal(StringEncoding.join_bytes(bstrings), s.source_encoding)
+        bytes_value = bytes_literal(b''.join(bstrings), s.source_encoding)
     if kind in ('u', ''):
         unicode_value = EncodedString(''.join([u for u in ustrings if u is not None]))
     if kind == 'f':
         unicode_value = []
-        for u, pos in zip(ustrings, positions):
+        for u, pos in zip(ustrings, positions, strict=False):
             if isinstance(u, list):
                 unicode_value += u
             else:
                 # non-f-string concatenated into the f-string
                 unicode_value.append(ExprNodes.UnicodeNode(pos, value=EncodedString(u)))
+    if kind == 't':
+        unicode_value = []
+        for u in ustrings:
+            unicode_value.extend(u)
     return kind, bytes_value, unicode_value
 
 
@@ -1000,6 +1010,53 @@ def check_for_non_ascii_characters(string) -> cython.bint:
 
 
 @cython.cfunc
+def p_string_literal_shared_read(
+        s: PyrexScanner, pos, chars, kind,
+        is_raw: cython.bint):
+    """
+    Returns a string of non-escaped characters (if handled) or none.
+    If passed an escape sequence returns an empty string.
+    """
+    sy = s.sy
+    systr = s.systring
+    result = systr
+    is_python3_source: cython.bint = s.context.language_level >= 3
+    # print "p_string_literal: sy =", sy, repr(s.systring) ###
+    if sy == 'CHARS':
+        chars.append(systr)
+    elif sy == 'ESCAPE':
+        # in Py2, 'ur' raw unicode strings resolve unicode escapes but nothing else
+        if is_raw and (is_python3_source or kind != 'u' or len(systr) < 2 or systr[1] not in 'Uu'):
+            chars.append(systr)
+        else:
+            result = ""
+            _append_escape_sequence(kind, chars, systr, s)
+    elif sy == 'NEWLINE':
+        chars.append('\n')
+    elif sy == 'EOF':
+        s.error("Unclosed string literal", pos=pos)
+    else:
+        return None
+    return result
+
+@cython.cfunc
+def _validate_kind_string(pos, systring: str):
+    kind_string = systring.rstrip('"\'').lower()
+    if len(kind_string) <= 1 or (len(kind_string) == 2 and kind_string in "rbrurfrtr"):
+        return kind_string
+    # Otherwise an error of some sort
+    unique_string_prefixes = set(kind_string)
+    if len(unique_string_prefixes) != len(kind_string):
+        error(pos, 'Duplicate string prefix character')
+    unique_string_prefixes.discard('r')
+    unique_string_prefixes = sorted(unique_string_prefixes)
+    if len(unique_string_prefixes) >= 2:
+        error(pos, f'String prefixes {unique_string_prefixes[0]} and {unique_string_prefixes[1]} cannot be combined')
+    else:
+        error(pos, f'Invalid string prefix {kind_string}')
+    return ''
+
+@cython.cfunc
 def p_string_literal(s: PyrexScanner, kind_override=None) -> tuple:
     # A single string or char literal.  Returns (kind, bvalue, uvalue)
     # where kind in ('b', 'c', 'u', 'f', '').  The 'bvalue' is the source
@@ -1008,22 +1065,14 @@ def p_string_literal(s: PyrexScanner, kind_override=None) -> tuple:
     # on the 'kind' of string, only unprefixed strings have both
     # representations. In f-strings, the uvalue is a list of the Unicode
     # strings and f-string expressions that make up the f-string.
-
-    # s.sy == 'BEGIN_STRING'
+    # s.sy == 'BEGIN_STRING' or s.sy == 'BEGIN_FT_STRING'
+    if s.sy == 'BEGIN_FT_STRING':
+        assert kind_override is None
+        return p_ft_string_literal(s)
     pos = s.position()
     is_python3_source: cython.bint = s.context.language_level >= 3
     has_non_ascii_literal_characters = False
-    string_start_pos = (pos[0], pos[1], pos[2] + len(s.systring))
-    kind_string = s.systring.rstrip('"\'').lower()
-    if len(kind_string) > 1:
-        if len(set(kind_string)) != len(kind_string):
-            error(pos, 'Duplicate string prefix character')
-        if 'b' in kind_string and 'u' in kind_string:
-            error(pos, 'String prefixes b and u cannot be combined')
-        if 'b' in kind_string and 'f' in kind_string:
-            error(pos, 'String prefixes b and f cannot be combined')
-        if 'u' in kind_string and 'f' in kind_string:
-            error(pos, 'String prefixes u and f cannot be combined')
+    kind_string = _validate_kind_string(pos, s.systring)
 
     is_raw: cython.bint = 'r' in kind_string
 
@@ -1033,9 +1082,6 @@ def p_string_literal(s: PyrexScanner, kind_override=None) -> tuple:
         if len(kind_string) != 1:
             error(pos, 'Invalid string prefix for character literal')
         kind = 'c'
-    elif 'f' in kind_string:
-        kind = 'f'     # u is ignored
-        is_raw = True  # postpone the escape resolution
     elif 'b' in kind_string:
         kind = 'b'
     elif 'u' in kind_string:
@@ -1056,33 +1102,21 @@ def p_string_literal(s: PyrexScanner, kind_override=None) -> tuple:
         else:
             chars = StringEncoding.BytesLiteralBuilder(s.source_encoding)
 
-    systr: str
     while 1:
         s.next()
-        sy = s.sy
-        systr = cython.cast(str, s.systring)
-        # print "p_string_literal: sy =", sy, repr(s.systring) ###
-        if sy == 'CHARS':
-            chars.append(systr)
-            if is_python3_source and not has_non_ascii_literal_characters and check_for_non_ascii_characters(systr):
-                has_non_ascii_literal_characters = True
-        elif sy == 'ESCAPE':
-            # in Py2, 'ur' raw unicode strings resolve unicode escapes but nothing else
-            if is_raw and (is_python3_source or kind != 'u' or systr[1] not in 'Uu'):
-                chars.append(systr)
-                if is_python3_source and not has_non_ascii_literal_characters and check_for_non_ascii_characters(systr):
-                    has_non_ascii_literal_characters = True
-            else:
-                _append_escape_sequence(kind, chars, systr, s)
-        elif sy == 'NEWLINE':
-            chars.append('\n')
-        elif sy == 'END_STRING':
+        handled_chars = p_string_literal_shared_read(
+            s, pos, chars, kind,
+            is_raw=is_raw)
+        if handled_chars is not None:
+            if (not has_non_ascii_literal_characters and
+                    is_python3_source and Future.unicode_literals in s.context.future_directives):
+                has_non_ascii_literal_characters = check_for_non_ascii_characters(handled_chars)
+            continue
+        if s.sy == 'END_STRING':
             break
-        elif sy == 'EOF':
-            s.error("Unclosed string literal", pos=pos)
         else:
             s.error("Unexpected token %r:%r in string literal" % (
-                sy, s.systring))
+                s.sy, s.systring))
 
     if kind == 'c':
         unicode_value = None
@@ -1097,14 +1131,195 @@ def p_string_literal(s: PyrexScanner, kind_override=None) -> tuple:
             if kind == 'b':
                 s.error("bytes can only contain ASCII literal characters.", pos=pos)
             bytes_value = None
-    if kind == 'f':
-        unicode_value = p_f_string(s, unicode_value, string_start_pos, is_raw='r' in kind_string)
     s.next()
     return (kind, bytes_value, unicode_value)
 
 
 @cython.cfunc
+def p_read_ft_string_expression(s: PyrexScanner):
+    strings = []
+    while True:
+        s.next()
+        sy = s.sy
+        if sy in ["END_FT_STRING_EXPR",
+                    # probably an error, but handle it elsewhere
+                   "EOF", None]:
+            if sy == "END_FT_STRING_EXPR":
+                s.next()
+            return ''.join(strings)
+        strings.append(s.systring)
+
+
+@cython.cfunc
+def p_ft_string_replacement_field(s: PyrexScanner,
+                                is_raw: cython.bint, is_single_quoted: cython.bint,
+                                tf_string_kind: cython.Py_UCS4):
+    result = []
+    conversion_char = format_spec = expr = None
+    t_string_expression = None
+    self_documenting = False
+
+    bracket_pos = s.position()
+    expr_pos = (bracket_pos[0], bracket_pos[1], bracket_pos[2]+1)
+    expr_string = p_read_ft_string_expression(s)
+    if not expr_string.strip():
+        error(bracket_pos,
+              f"empty expression not allowed in {tf_string_kind}-string")
+        result = []
+    else:
+        original_scanner = s
+        s = PyrexScanner(
+            StringIO(expr_string),
+            bracket_pos[0],
+            parent_scanner=s,
+            source_encoding=s.source_encoding,
+            initial_pos=expr_pos
+        )
+        s.bracket_nesting_level += 1
+        if s.sy == "INDENT":
+            s.next()
+        if s.sy == 'yield':
+            expr = p_yield_expression(
+                s,
+                statement_terminators=statement_terminators | {':', '}', '!'})
+        else:
+            expr = p_testlist_star_expr(s)
+
+        if s.sy == "=":
+            self_documenting = True
+            s.next()
+
+        if s.sy == "!":
+            # format conversion
+            previous_pos = s.position()
+            s.next()
+            conversion_char = s.systring
+            # validate the conversion char
+            if conversion_char in ['}', ':', '']:
+                error(s.position(), "missing conversion character")
+            elif not ExprNodes.FormattedValueNode.find_conversion_func(conversion_char):
+                error(s.position(), "invalid conversion character '%s'" % conversion_char)
+                s.next()
+            elif s.position()[2] != (previous_pos[2] + 1):
+                error(s.position(), "f-string: conversion type must come right after the exclamation mark")
+                s.next()
+            else:
+                s.next()
+
+        if self_documenting or tf_string_kind == 't':
+            if conversion_char is not None:
+                expr_string, _ = expr_string.rsplit('!', 1)
+            if tf_string_kind == 't':
+                t_string_expression = ExprNodes.UnicodeNode(
+                    pos=expr_pos,
+                    value=StringEncoding.EncodedString(expr_string.rstrip().rstrip('=').rstrip())
+                )
+            if self_documenting:
+                result.append(
+                    ExprNodes.UnicodeNode(
+                        pos=expr_pos,
+                        value=StringEncoding.EncodedString(expr_string)
+                    )
+                )
+
+        # Validate that the expression string has actually ended
+        while s.sy == "NEWLINE" or s.sy == "DEDENT":
+            s.next()
+        if s.sy != "EOF":
+            error(
+                s.position(),
+                f"Unexpected characters after {tf_string_kind}-string expression: {s.systring}")
+
+        s = original_scanner
+
+    if s.sy == ":":
+        # full format spec
+        pos = s.position()
+        # Contents of format spec are handled closer to an f-string than a t-string
+        # (even for t-strings).
+        format_spec_contents = p_ft_string_middles(s, is_raw, is_single_quoted, is_format_string=True, tf_string_kind='f')
+        format_spec = ExprNodes.JoinedStrNode(
+            pos,
+            values=format_spec_contents
+        )
+    if self_documenting and conversion_char is None and format_spec is None:
+        conversion_char = 'r'
+
+    if conversion_char is not None:
+        conversion_char = StringEncoding.EncodedString(conversion_char)
+    if tf_string_kind == 't':
+        result.append(ExprNodes.TStringInterpolationNode(
+            bracket_pos, value=expr, conversion_char=conversion_char,
+            format_spec=format_spec, expression_str=t_string_expression
+        ))
+    else:
+        result.append(ExprNodes.FormattedValueNode(
+            bracket_pos, value=expr, conversion_char=conversion_char,
+            format_spec=format_spec
+        ))
+    return result
+
+@cython.cfunc
+def p_ft_string_middles(s: PyrexScanner,
+                        is_raw: cython.bint, is_single_quoted: cython.bint,
+                        is_format_string: cython.bint,
+                        tf_string_kind: cython.Py_UCS4):
+    middles: list = []
+    builder = StringEncoding.UnicodeLiteralBuilder()
+    pos = s.position()
+    while True:
+        s.next()
+        sy = s.sy
+
+        handled_chars = p_string_literal_shared_read(
+            s, pos, builder, "u",
+            is_raw=is_raw)
+        if handled_chars is not None:
+            continue
+
+        if builder.chars:
+            middles.append(ExprNodes.UnicodeNode(pos, value=builder.getstring()))
+            builder = StringEncoding.UnicodeLiteralBuilder()
+        if sy == "{":
+            fields = p_ft_string_replacement_field(
+                s, is_raw, is_single_quoted, tf_string_kind=tf_string_kind)
+            middles.extend(fields)
+            if not s.sy == '}':
+                s.expected('}')
+            continue
+        elif sy == "END_FT_STRING":
+            break
+        elif s.sy == '}':
+            if is_format_string:
+                break
+            # otherwise it's an error, but the scanner has reported it
+        else:
+            error(
+                s.position(),
+                "Unexpected token %r:%r in %s-string literal" % (
+                s.sy, s.systring, tf_string_kind))
+    return middles
+
+@cython.cfunc
+def p_ft_string_literal(s: PyrexScanner):
+    # s.sy == BEGIN_FT_STRING
+    kind_string = _validate_kind_string(s.position(), s.systring)
+    tf_string_kind: cython.Py_UCS4 = 't' if 't' in kind_string else 'f'
+    is_raw: cython.bint = 'r' in kind_string
+    quotes = s.systring.lstrip("rRbBuUfFtT")
+    is_single_quoted: cython.bint = len(quotes) != 3
+    middles = p_ft_string_middles(s, is_raw, is_single_quoted, is_format_string=False, tf_string_kind=tf_string_kind)
+    if s.sy != "END_FT_STRING":
+        s.expected(quotes)
+    s.next()
+    return tf_string_kind, None, middles
+
+
+@cython.cfunc
 def _append_escape_sequence(kind, builder, escape_sequence: str, s: PyrexScanner):
+    if len(escape_sequence) < 2:
+        builder.append("\\")  # invalid escape sequence, warned earlier
+        return
     c = escape_sequence[1]
     if c in "01234567":
         builder.append_charval(int(escape_sequence[1:], 8))
@@ -1124,11 +1339,12 @@ def _append_escape_sequence(kind, builder, escape_sequence: str, s: PyrexScanner
         if c == 'N':
             uchar = None
             try:
-                uchar = lookup_unicodechar(escape_sequence[3:-1])
+                name_slice = escape_sequence[3:len(escape_sequence) - 1]
+                uchar = lookup_unicodechar(name_slice)
                 chrval = ord(uchar)
             except KeyError:
                 s.error("Unknown Unicode character name %s" %
-                        repr(escape_sequence[3:-1]).lstrip('u'), fatal=False)
+                        repr(name_slice).lstrip('u'), fatal=False)
         elif len(escape_sequence) in (6, 10):
             chrval = int(escape_sequence[2:], 16)
             if chrval > 1114111:  # sys.maxunicode:
@@ -1140,231 +1356,6 @@ def _append_escape_sequence(kind, builder, escape_sequence: str, s: PyrexScanner
             builder.append_uescape(chrval, escape_sequence)
     else:
         builder.append(escape_sequence)
-
-
-_parse_escape_sequences_raw, _parse_escape_sequences = [re.compile((
-    # escape sequences:
-    br'(\\(?:' +
-    (br'\\?' if is_raw else (
-        br'[\\abfnrtv"\'{]|'
-        br'[0-7]{2,3}|'
-        br'N\{[^}]*\}|'
-        br'x[0-9a-fA-F]{2}|'
-        br'u[0-9a-fA-F]{4}|'
-        br'U[0-9a-fA-F]{8}|'
-        br'[NxuU]|'  # detect invalid escape sequences that do not match above
-    )) +
-    br')?|'
-    # non-escape sequences:
-    br'\{\{?|'
-    br'\}\}?|'
-    br'[^\\{}]+)'
-    ).decode('us-ascii')).match
-    for is_raw in (True, False)
-]
-
-
-@cython.cfunc
-def _f_string_error_pos(pos: tuple, string, i: cython.Py_ssize_t) -> tuple:
-    return (pos[0], pos[1], pos[2] + i + 1)  # FIXME: handle newlines in string
-
-
-@cython.cfunc
-def p_f_string(s: PyrexScanner, unicode_value, pos, is_raw: cython.bint) -> list:
-    # Parses a PEP 498 f-string literal into a list of nodes. Nodes are either UnicodeNodes
-    # or FormattedValueNodes.
-    values = []
-    next_start: cython.Py_ssize_t = 0
-    size: cython.Py_ssize_t = len(unicode_value)
-    builder = StringEncoding.UnicodeLiteralBuilder()
-    _parse_seq = _parse_escape_sequences_raw if is_raw else _parse_escape_sequences
-
-    while next_start < size:
-        end: cython.Py_ssize_t = next_start
-        match = _parse_seq(unicode_value, next_start)
-        if match is None:
-            error(_f_string_error_pos(pos, unicode_value, next_start), "Invalid escape sequence")
-
-        next_start: cython.Py_ssize_t = match.end()
-        part: str = match.group()
-        c = part[0]
-        if c == '\\':
-            if not is_raw and len(part) > 1:
-                _append_escape_sequence('f', builder, part, s)
-            else:
-                builder.append(part)
-        elif c == '{':
-            if part == '{{':
-                builder.append('{')
-            else:
-                # start of an expression
-                if builder.chars:
-                    values.append(ExprNodes.UnicodeNode(pos, value=builder.getstring()))
-                    builder = StringEncoding.UnicodeLiteralBuilder()
-                next_start, expr_nodes = p_f_string_expr(s, unicode_value, pos, next_start, is_raw)
-                values.extend(expr_nodes)
-        elif c == '}':
-            if part == '}}':
-                builder.append('}')
-            else:
-                error(_f_string_error_pos(pos, unicode_value, end),
-                      "f-string: single '}' is not allowed")
-        else:
-            builder.append(part)
-
-    if builder.chars:
-        values.append(ExprNodes.UnicodeNode(pos, value=builder.getstring()))
-    return values
-
-
-@cython.cfunc
-def p_f_string_expr(s: PyrexScanner, unicode_value, pos: tuple,
-                    starting_index: cython.Py_ssize_t, is_raw: cython.bint) -> tuple:
-    # Parses a {}-delimited expression inside an f-string. Returns a list of nodes
-    # [UnicodeNode?, FormattedValueNode] and the index in the string that follows
-    # the expression.
-    #
-    # ? = Optional
-    i: cython.Py_ssize_t = starting_index
-    size: cython.Py_ssize_t = len(unicode_value)
-    conversion_char = terminal_char = format_spec = None
-    format_spec_str = None
-    expr_text = None
-    NO_CHAR: cython.Py_UCS4 = 2**30
-
-    nested_depth: cython.Py_ssize_t = 0
-    quote_char: cython.Py_UCS4 = NO_CHAR
-    c: cython.Py_UCS4
-    in_triple_quotes = False
-    backslash_reported = False
-
-    while True:
-        if i >= size:
-            break  # error will be reported below
-        c = unicode_value[i]
-
-        if quote_char != NO_CHAR:
-            if c == '\\':
-                # avoid redundant error reports along '\' sequences
-                if not backslash_reported:
-                    error(_f_string_error_pos(pos, unicode_value, i),
-                          "backslashes not allowed in f-strings")
-                backslash_reported = True
-            elif c == quote_char:
-                if in_triple_quotes:
-                    if i + 2 < size and unicode_value[i + 1] == c and unicode_value[i + 2] == c:
-                        in_triple_quotes = False
-                        quote_char = NO_CHAR
-                        i += 2
-                else:
-                    quote_char = NO_CHAR
-        elif c in '\'"':
-            quote_char = c
-            if i + 2 < size and unicode_value[i + 1] == c and unicode_value[i + 2] == c:
-                in_triple_quotes = True
-                i += 2
-        elif c in '{[(':
-            nested_depth += 1
-        elif nested_depth != 0 and c in '}])':
-            nested_depth -= 1
-        elif c == '#':
-            error(_f_string_error_pos(pos, unicode_value, i),
-                  "format string cannot include #")
-        elif nested_depth == 0 and c in '><=!:}':
-            # allow special cases with '!' and '='
-            if i + 1 < size and c in '!=><':
-                if unicode_value[i + 1] == '=':
-                    i += 2  # we checked 2, so we can skip 2: '!=', '==', '>=', '<='
-                    continue
-                elif c in '><':  # allow single '<' and '>'
-                    i += 1
-                    continue
-            terminal_char = c
-            break
-        i += 1
-
-    # normalise line endings as the parser expects that
-    expr_str = unicode_value[starting_index:i].replace('\r\n', '\n').replace('\r', '\n')
-    expr_pos = (pos[0], pos[1], pos[2] + starting_index + 2)  # TODO: find exact code position (concat, multi-line, ...)
-
-    if not expr_str.strip():
-        error(_f_string_error_pos(pos, unicode_value, starting_index),
-              "empty expression not allowed in f-string")
-
-    if terminal_char == '=':
-        i += 1
-        while i < size and unicode_value[i].isspace():
-            i += 1
-
-        if i < size:
-            terminal_char = unicode_value[i]
-            expr_text = unicode_value[starting_index:i]
-        # otherwise: error will be reported below
-
-    if terminal_char == '!':
-        i += 1
-        if i + 2 > size:
-            pass  # error will be reported below
-        else:
-            conversion_char = unicode_value[i]
-            i += 1
-            terminal_char = unicode_value[i]
-
-    if terminal_char == ':':
-        in_triple_quotes = False
-        in_string = False
-        nested_depth = 0
-        start_format_spec = i + 1
-        while True:
-            if i >= size:
-                break  # error will be reported below
-            c = unicode_value[i]
-            if not in_triple_quotes and not in_string:
-                if c == '{':
-                    nested_depth += 1
-                elif c == '}':
-                    if nested_depth > 0:
-                        nested_depth -= 1
-                    else:
-                        terminal_char = c
-                        break
-            if c in '\'"':
-                if not in_string and i + 2 < size and unicode_value[i + 1] == c and unicode_value[i + 2] == c:
-                    in_triple_quotes = not in_triple_quotes
-                    i += 2
-                elif not in_triple_quotes:
-                    in_string = not in_string
-            i += 1
-
-        format_spec_str = unicode_value[start_format_spec:i]
-
-    if expr_text and conversion_char is None and format_spec_str is None:
-        conversion_char = 'r'
-
-    if terminal_char != '}':
-        error(_f_string_error_pos(pos, unicode_value, i),
-              "missing '}' in format string expression" + (
-                  ", found '%s'" % terminal_char if terminal_char else ""))
-
-    # parse the expression as if it was surrounded by parentheses
-    buf = StringIO('(%s)' % expr_str)
-    scanner = PyrexScanner(buf, expr_pos[0], parent_scanner=s, source_encoding=s.source_encoding, initial_pos=expr_pos)
-    expr = p_testlist(scanner)  # TODO is testlist right here?
-
-    # validate the conversion char
-    if conversion_char is not None and not ExprNodes.FormattedValueNode.find_conversion_func(conversion_char):
-        error(expr_pos, "invalid conversion character '%s'" % conversion_char)
-
-    # the format spec is itself treated like an f-string
-    if format_spec_str:
-        format_spec = ExprNodes.JoinedStrNode(pos, values=p_f_string(s, format_spec_str, pos, is_raw))
-
-    nodes = []
-    if expr_text:
-        nodes.append(ExprNodes.UnicodeNode(pos, value=EncodedString(expr_text)))
-    nodes.append(ExprNodes.FormattedValueNode(pos, value=expr, conversion_char=conversion_char, format_spec=format_spec))
-
-    return i + 1, nodes
 
 
 # since PEP 448:
@@ -1492,7 +1483,7 @@ def p_dict_or_set_maker(s: PyrexScanner):
                 value = p_test(s)
                 item = ExprNodes.DictItemNode(key.pos, key=key, value=value)
             if last_was_simple_item:
-                parts[-1].append(item)
+                parts[len(parts) - 1].append(item)
             else:
                 parts.append([item])
                 last_was_simple_item = True
@@ -1669,7 +1660,7 @@ def p_genexp(s: PyrexScanner, expr):
 
 
 expr_terminators = cython.declare(frozenset, frozenset((
-    ')', ']', '}', ':', '=', 'NEWLINE')))
+    ')', ']', '}', ':', '=', 'NEWLINE', 'EOF')))
 
 
 #-------------------------------------------------------
@@ -1730,7 +1721,8 @@ def p_expression_or_assignment(s: PyrexScanner):
                     index=make_slice_node(lhs.pos, lhs.start, lhs.stop))
             elif not isinstance(lhs, (ExprNodes.AttributeNode, ExprNodes.IndexNode, ExprNodes.NameNode)):
                 error(lhs.pos, "Illegal operand for inplace operation.")
-            operator = s.sy[:-1]
+            op_text = s.sy
+            operator = op_text[:len(op_text) - 1]
             s.next()
             if s.sy == 'yield':
                 rhs = p_yield_expression(s)
@@ -1740,11 +1732,11 @@ def p_expression_or_assignment(s: PyrexScanner):
         expr = expr_list[0]
         return Nodes.ExprStatNode(expr.pos, expr=expr)
 
-    rhs = expr_list[-1]
+    rhs = expr_list[len(expr_list) - 1]
     if len(expr_list) == 2:
         return Nodes.SingleAssignmentNode(rhs.pos, lhs=expr_list[0], rhs=rhs, first=has_annotation)
     else:
-        return Nodes.CascadedAssignmentNode(rhs.pos, lhs_list=expr_list[:-1], rhs=rhs)
+        return Nodes.CascadedAssignmentNode(rhs.pos, lhs_list=expr_list[:len(expr_list) - 1], rhs=rhs)
 
 
 @cython.cfunc
@@ -1908,9 +1900,9 @@ def p_import_statement(s: PyrexScanner):
                 rhs=ExprNodes.ImportNode(
                     pos,
                     module_name=ExprNodes.IdentifierStringNode(pos, value=dotted_name),
+                    is_import_as_name=bool(as_name),
                     level=0 if is_absolute else None,
-                    get_top_level_module='.' in dotted_name and as_name is None,
-                    name_list=None))
+                    imported_names=None))
         stats.append(stat)
     return Nodes.StatListNode(pos, stats=stats)
 
@@ -1987,13 +1979,12 @@ def p_from_import_statement(s: PyrexScanner, first_statement: cython.bint = 0):
                 ExprNodes.IdentifierStringNode(name_pos, value=name))
             items.append(
                 (name, ExprNodes.NameNode(name_pos, name=as_name or name)))
-        import_list = ExprNodes.ListNode(
-            imported_names[0][0], args=imported_name_strings)
         return Nodes.FromImportStatNode(pos,
             module = ExprNodes.ImportNode(dotted_name_pos,
                 module_name = ExprNodes.IdentifierStringNode(pos, value = dotted_name),
+                is_import_as_name = False,
                 level = level,
-                name_list = import_list),
+                imported_names = imported_name_strings),
             items = items)
 
 
@@ -2040,10 +2031,6 @@ def p_assert_statement(s: PyrexScanner):
     else:
         value = None
     return Nodes.AssertStatNode(pos, condition=cond, value=value)
-
-
-statement_terminators = cython.declare(frozenset, frozenset((
-    ';', 'NEWLINE', 'EOF')))
 
 
 @cython.cfunc
@@ -2729,7 +2716,6 @@ def p_positional_and_keyword_args(s: PyrexScanner, end_sy_set, templates = None)
                 parsed_type = True
             keyword_node = ExprNodes.IdentifierStringNode(arg.pos, value=ident)
             keyword_args.append((keyword_node, arg))
-            was_keyword = True
 
         else:
             if looking_at_expr(s):
@@ -2950,7 +2936,7 @@ def is_memoryviewslice_access(s: PyrexScanner) -> cython.bint:
         if s.sy == ':':
             retval = True
 
-    for sv in saved[::-1]:
+    for sv in reversed(saved):
         s.put_back(*sv)
 
     return retval
@@ -4139,7 +4125,6 @@ def _extract_docstring(node) -> tuple:
     return doc, node
 
 
-@cython.ccall
 def p_code(s: PyrexScanner, level=None, ctx=Ctx):
     body = p_statement_list(s, ctx(level = level), first_statement=True)
     if s.sy != 'EOF':
@@ -4152,6 +4137,74 @@ _match_compiler_directive_comment = cython.declare(object, re.compile(
     r"^#\s*cython\s*:\s*((\w|[.])+\s*=.*)$").match)
 
 
+def _parse_directive_assignments(
+    spec: str,
+    *,
+    relaxed_bool: bool = False,
+    ignore_unknown: bool = False,
+    current_settings: Optional[dict] = None,
+) -> dict:
+    directives = Directives.Directives()
+    result: dict = dict(current_settings or {})
+    def _coerce_value(name: str, raw_value: str, relaxed: bool) -> Any:
+        type_info = Directives.directive_types.get(name)
+        if type_info is bool:
+            text = raw_value if not relaxed else raw_value.lower()
+            truthy = {"true", "yes", "1"} if relaxed else {"True"}
+            falsy = {"false", "no", "0"} if relaxed else {"False"}
+            if text in truthy:
+                return True
+            if text in falsy:
+                return False
+            raise ValueError(
+                f"{name} directive must be set to True or False, got '{raw_value}'"
+            )
+        if type_info is int:
+            try:
+                return int(raw_value)
+            except ValueError:
+                raise ValueError(
+                    f"{name} directive must be set to an integer, got '{raw_value}'"
+                ) from None
+        if type_info is str:
+            return raw_value
+        if callable(type_info):
+            return type_info(name, raw_value)
+        return raw_value
+    for item in spec.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if "=" not in item:
+            raise ValueError(f'Expected "=" in option "{item}"')
+        name, raw_value = [s.strip() for s in item.split("=", 1)]
+        if name.endswith(".all"):
+            prefix = name[:len(name) - 3]
+            found_any = False
+            for directive in directives:
+                if directive.startswith(prefix):
+                    found_any = True
+                    result[directive] = _coerce_value(directive, raw_value, relaxed_bool)
+            if not found_any and not ignore_unknown:
+                raise ValueError(f'Unknown option: "{name}"')
+            continue
+
+        if name not in directives:
+            if not ignore_unknown:
+                raise ValueError(f'Unknown option: "{name}"')
+            continue
+
+        dtype = Directives.directive_types.get(name)
+        if dtype is list:
+            if name in result and isinstance(result[name], list):
+                result[name].append(raw_value)
+            else:
+                result[name] = [raw_value]
+        else:
+            result[name] = _coerce_value(name, raw_value, relaxed_bool)
+    return result
+
+
 @cython.cfunc
 def p_compiler_directive_comments(s: PyrexScanner) -> dict:
     result = {}
@@ -4161,7 +4214,9 @@ def p_compiler_directive_comments(s: PyrexScanner) -> dict:
         if m:
             directives_string = m.group(1).strip()
             try:
-                new_directives = Options.parse_directive_list(directives_string, ignore_unknown=True)
+                new_directives = _parse_directive_assignments(
+                    directives_string, ignore_unknown=True
+                )
             except ValueError as e:
                 s.error(e.args[0], fatal=False)
                 s.next()
@@ -4170,7 +4225,7 @@ def p_compiler_directive_comments(s: PyrexScanner) -> dict:
             for name in new_directives:
                 if name not in result:
                     pass
-                elif Options.directive_types.get(name) is list:
+                elif Directives.GLOBAL_DIRECTIVES.directive_types.get(name) is list:
                     result[name] += new_directives[name]
                     new_directives[name] = result[name]
                 elif new_directives[name] == result[name]:
@@ -4201,14 +4256,6 @@ def p_module(s: PyrexScanner, pxd, full_module_name, ctx=Ctx):
 
     if s.context.language_level is None:
         s.context.set_language_level('3')
-        if pos[0].filename:
-            import warnings
-            warnings.warn(
-                "Cython directive 'language_level' not set, using '3' (Py3). "
-                "This has changed from earlier releases! File: %s" % pos[0].filename,
-                FutureWarning,
-                stacklevel=1 if cython.compiled else 2,
-            )
 
     level = 'module_pxd' if pxd else 'module'
     doc = p_doc_string(s)
@@ -4216,9 +4263,14 @@ def p_module(s: PyrexScanner, pxd, full_module_name, ctx=Ctx):
     if s.sy != 'EOF':
         s.error("Syntax error in statement [%s,%s]" % (
             repr(s.sy), repr(s.systring)))
-    return ModuleNode(pos, doc = doc, body = body,
-                      full_module_name = full_module_name,
-                      directive_comments = directive_comments)
+    return ModuleNode(
+        pos,
+        doc = doc,
+        body = body,
+        full_module_name = full_module_name,
+        directive_comments = directive_comments,
+        directives = Directives.DIRECTIVE_DEFAULTS,
+    )
 
 
 @cython.cfunc
@@ -4544,7 +4596,8 @@ def p_literal_pattern(s: PyrexScanner):
             s.error("Expected imaginary number")
         else:
             add_pos = s.position()
-            value = s.systring[:-1]
+            imag_text = s.systring
+            value = imag_text[:len(imag_text) - 1]
             s.next()
             res = ExprNodes.binop_node(
                 add_pos,
@@ -4554,7 +4607,8 @@ def p_literal_pattern(s: PyrexScanner):
             )
 
     if res is None and sy == 'IMAG':
-        value = s.systring[:-1]
+        imag_text = s.systring
+        value = imag_text[:len(imag_text) - 1]
         s.next()
         res = ExprNodes.ImagNode(pos, value=sign+value)
         if sign == "-":

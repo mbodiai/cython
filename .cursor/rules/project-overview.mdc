@@ -1,0 +1,40 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Project Structure Guide
+> **Note**: This is our fork of the Cython project, actively improved with additional features and fixes.
+
+This repository contains both the Cython compiler itself and an embedded example of the `mproc` CLI:
+
+- Core Cython compiler sources: [Cython/](mdc:Cython)
+  - Compiler implementation in [Cython/Compiler/](mdc:Cython/Compiler)
+  - Parser implementation in [Cython/Parser/](mdc:Cython/Parser)
+  - Runtime support in [Cython/Runtime/](mdc:Cython/Runtime)
+- Standalone build script: [build.py](mdc:build.py)
+  - Sole entry point for compiling any `.pyx` into a standalone executable
+  - Invoke:
+    ```bash
+    python build.py <source>.pyx
+    ```
+  - Automates embed, compilation, linking, and runtime path configuration across OS/arch
+- Example embedding of the `mproc` CLI:
+  - Cython wrapper: [embedded_mproc.pyx](mdc:embedded_mproc.pyx)
+  - Build via:
+    ```bash
+    python build.py embedded_mproc.pyx
+    ```
+  - Run with:
+    ```bash
+    ./embedded_mproc
+    ```
+- `mproc` package sources: [mproc/src/mproc/](mdc:mproc/src/mproc)
+  - Main CLI entrypoint: [mproc/src/mproc/main.py](mdc:mproc/src/mproc/main.py)
+  - Configuration in [mproc/pyproject.toml](mdc:mproc/pyproject.toml)
+- Tests and examples:
+  - Feature tests under [tests/](mdc:tests) and [tests/run/](mdc:tests/run)
+  - Demos in [Demos/](mdc:Demos)
+- Virtual environments:
+  - Project venv in [venv/](mdc:venv)
+  - Cython self-tests venv in [Cython/.venv/](mdc:Cython/.venv)

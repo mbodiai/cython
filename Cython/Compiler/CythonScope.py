@@ -1,5 +1,19 @@
 from .Symtab import ModuleScope
-from .PyrexTypes import *
+from .Code import UtilityCode
+from .PyrexTypes import (
+    CFuncType,
+    CFuncTypeArg,
+    c_bint_type,
+    c_ptr_type,
+    c_void_type,
+    cy_integral_type,
+    cy_floating_type,
+    cy_numeric_type,
+    get_cy_pymutex_type,
+    get_cy_pythread_type_lock_type,
+    parse_basic_type,
+    py_object_type,
+)
 from .UtilityCode import CythonUtilityCode
 from .Errors import error
 from .Scanning import StringSourceDescriptor
@@ -16,7 +30,7 @@ class CythonScope(ModuleScope):
         self.pxd_file_loaded = True
         self.populate_cython_scope()
         # The Main.Context object
-        self.context = context
+        self._context = context
 
         for fused_type in (cy_integral_type, cy_floating_type, cy_numeric_type):
             entry = self.declare_typedef(fused_type.name,
@@ -24,6 +38,17 @@ class CythonScope(ModuleScope):
                                          None,
                                          cname='<error>')
             entry.in_cinclude = True
+
+        cy_pymutex_type = get_cy_pymutex_type()
+        entry = self.declare_type(
+            "pymutex", cy_pymutex_type, None,
+            cname="__Pyx_Locks_PyMutex")
+        entry.utility_code = cy_pymutex_type.get_decl_utility_code()
+        cy_pythread_type_lock_type = get_cy_pythread_type_lock_type()
+        entry = self.declare_type(
+            "pythread_type_lock", cy_pythread_type_lock_type, None,
+            cname="__Pyx_Locks_PyThreadTypeLock")
+        entry.utility_code = cy_pythread_type_lock_type.get_decl_utility_code()
 
     def is_cpp(self):
         # Allow C++ utility code in C++ contexts.
@@ -37,23 +62,23 @@ class CythonScope(ModuleScope):
 
         return super().lookup_type(name)
 
-    def lookup(self, name):
-        entry = super().lookup(name)
+    def lookup(self, name, language_level=None):
+        entry = super().lookup(name, language_level)
 
         if entry is None and not self._cythonscope_initialized:
             self.load_cythonscope()
-            entry = super().lookup(name)
+            entry = super().lookup(name, language_level)
 
         return entry
 
-    def find_module(self, module_name, pos):
-        error("cython.%s is not available" % module_name, pos)
+    def find_module(self, module_name, pos,relative_level=-1):
+        error(f"cython.{module_name} is not available", pos)
 
-    def find_submodule(self, module_name, as_package=False):
-        entry = self.entries.get(module_name, None)
+    def find_submodule(self, name, as_package=False):
+        entry = self.entries.get(name, None)
         if not entry:
             self.load_cythonscope()
-            entry = self.entries.get(module_name, None)
+            entry = self.entries.get(name, None)
 
         if entry and entry.as_module:
             return entry.as_module
@@ -63,7 +88,7 @@ class CythonScope(ModuleScope):
             # possible immutability). Hack ourselves out of the situation
             # for now.
             raise error((StringSourceDescriptor("cython", ""), 0, 0),
-                  "cython.%s is not available" % module_name)
+                  f"cython.{name} is not available")
 
     def lookup_qualified_name(self, qname):
         # ExprNode.as_cython_attribute generates qnames and we untangle it here...
@@ -122,9 +147,10 @@ class CythonScope(ModuleScope):
         cythonview_testscope_utility_code.declare_in_scope(
                                             viewscope, cython_scope=self)
 
-        view_utility_scope = MemoryView.view_utility_code.declare_in_scope(
-                                            self.viewscope, cython_scope=self,
-                                            allowlist=MemoryView.view_utility_allowlist)
+        view_utility_scope = MemoryView.get_view_utility_code(
+            self.context.shared_utility_qualified_name
+        ).declare_in_scope(
+            self.viewscope, cython_scope=self, allowlist=MemoryView.view_utility_allowlist)
 
         # Marks the types as being cython_builtin_type so that they can be
         # extended from without Cython attempting to import cython.view

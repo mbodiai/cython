@@ -5,28 +5,25 @@
 #
 
 
-import sys
 import inspect
-
-from . import TypeSlots
-from . import Builtin
-from . import Nodes
-from . import ExprNodes
-from . import Errors
-from . import DebugFlags
-from . import Future
+import sys
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 import cython
 
+from . import Builtin, DebugFlags, Errors, ExprNodes, Future, Nodes, TypeSlots
 
-_PRINTABLE = cython.declare(tuple, (bytes, str, int, float, complex))
+_PRINTABLE= cython.declare(tuple, (bytes, str, int, float, complex))
 
+if TYPE_CHECKING:
+    from .CythonScope import CythonScope as Scope
+    from .Nodes import Node
 
 class TreeVisitor:
-    """
-    Base class for writing visitors for a Cython tree, contains utilities for
-    recursing such trees using visitors. Each node is
-    expected to have a child_attrs iterable containing the names of attributes
+    """Base class for writing visitors for a Cython tree, contains utilities for recursing such trees using visitors.
+
+    Each node is expected to have a child_attrs iterable containing the names of attributes
     containing child nodes or lists of child nodes. Lists are not considered
     part of the tree structure (i.e. contained nodes are considered direct
     children of the parent node).
@@ -39,7 +36,6 @@ class TreeVisitor:
     the current node.
 
     Example:
-
     >>> class SampleNode(object):
     ...     child_attrs = ["head", "body"]
     ...     def __init__(self, value, head=None, body=None):
@@ -65,6 +61,8 @@ class TreeVisitor:
     out 3
     out 0
     """
+    dispatch_table: dict[type, Callable[[Any], Any]]
+    access_path: list[tuple[Any, str, Any]]
     def __init__(self):
         super().__init__()
         self.dispatch_table = {}
@@ -127,16 +125,13 @@ class TreeVisitor:
                 index = ''
             else:
                 node = node[index]
-                index = '[%d]' % index
-            trace.append('%s.%s%s = %s' % (
-                parent.__class__.__name__, attribute, index,
-                self.dump_node(node)))
+                index = f'[{index}]'
+            trace.append(f'{parent.__class__.__name__}.{attribute}{index} = {self.dump_node(node)}')
         stacktrace, called_nodes = self._find_node_path(sys.exc_info()[2])
         last_node = child
         for node, method_name, pos in called_nodes:
             last_node = node
-            trace.append("File '%s', line %d, in %s: %s" % (
-                pos[0], pos[1], method_name, self.dump_node(node)))
+            trace.append(f"File '{pos[0]}', line {pos[1]}, in {method_name}: {self.dump_node(node)}")
         raise Errors.CompilerCrash(
             getattr(last_node, 'pos', None), self.__class__.__name__,
             '\n'.join(trace), e, stacktrace)
@@ -156,7 +151,7 @@ class TreeVisitor:
             print(self.access_path)
             print(self.access_path[-1][0].pos)
             print(self.access_path[-1][0].__dict__)
-        raise RuntimeError("Visitor %r does not accept object: %s" % (self, obj))
+        raise RuntimeError(f"Visitor {self!r} does not accept object: {obj}")
 
     def visit(self, obj):
         # generic def entry point for calls from Python subclasses
@@ -207,7 +202,8 @@ class TreeVisitor:
         """
         idx: cython.Py_ssize_t
 
-        if parent is None: return None
+        if parent is None: 
+            return None
         result = {}
         for attr in parent.child_attrs:
             if attrs is not None and attr not in attrs: continue
@@ -288,8 +284,7 @@ class VisitorTransform(TreeVisitor):
 
 
 class CythonTransform(VisitorTransform):
-    """
-    Certain common conventions and utilities for Cython transforms.
+    """Certain common conventions and utilities for Cython transforms.
 
      - Sets up the context of the pipeline in self.context
      - Tracks directives in effect in self.current_directives
@@ -299,9 +294,18 @@ class CythonTransform(VisitorTransform):
         self.context = context
 
     def __call__(self, node):
+        from . import Directives
         from .ModuleNode import ModuleNode
         if isinstance(node, ModuleNode):
-            self.current_directives = node.directives
+            directives = node.directives
+            if directives is None:
+                directives = Directives.DIRECTIVE_DEFAULTS.copy()
+            elif not isinstance(directives, Directives.Directives):
+                normalized = Directives.Directives()
+                normalized.update(directives)
+                directives = normalized
+            node.directives = directives
+            self.current_directives = directives
         return super().__call__(node)
 
     def visit_CompilerDirectivesNode(self, node):
@@ -349,11 +353,9 @@ class ScopeTrackingTransform(CythonTransform):
 
 
 class EnvTransform(CythonTransform):
-    """
-    This transformation keeps a stack of the environments.
-    """
+    """This transformation keeps a stack of the environments."""
     def __call__(self, root):
-        self.env_stack = []
+        self.env_stack: list[tuple[Node, Scope]] = []
         self.enter_scope(root, root.scope)
         return super().__call__(root)
 
@@ -366,7 +368,7 @@ class EnvTransform(CythonTransform):
     def global_scope(self):
         return self.current_env().global_scope()
 
-    def enter_scope(self, node, scope):
+    def enter_scope(self, node:"Node", scope:"Scope"):
         self.env_stack.append((node, scope))
 
     def exit_scope(self):
@@ -421,8 +423,7 @@ class EnvTransform(CythonTransform):
 
 
 class NodeRefCleanupMixin:
-    """
-    Clean up references to nodes that were replaced.
+    """Clean up references to nodes that were replaced.
 
     NOTE: this implementation assumes that the replacement is
     done first, before hitting any further references during
@@ -545,14 +546,10 @@ class MethodDispatcherTransform(EnvTransform):
             operand1, operand2 = node.operand1, node.operand2
             if special_method_name == '__contains__':
                 operand1, operand2 = operand2, operand1
-            elif special_method_name == '__div__':
-                if Future.division in self.current_env().global_scope().context.future_directives:
+            elif special_method_name == '__div__' and Future.division in self.current_env().context.future_directives:
                     special_method_name = '__truediv__'
             obj_type = operand1.type
-            if obj_type.is_builtin_type:
-                type_name = obj_type.name
-            else:
-                type_name = "object"  # safety measure
+            type_name = obj_type.name if obj_type.is_builtin_type else "object" # safety measure
             node = self._dispatch_to_method_handler(
                 special_method_name, None, False, type_name,
                 node, None, [operand1, operand2], None)
@@ -564,10 +561,7 @@ class MethodDispatcherTransform(EnvTransform):
         if special_method_name:
             operand = node.operand
             obj_type = operand.type
-            if obj_type.is_builtin_type:
-                type_name = obj_type.name
-            else:
-                type_name = "object"  # safety measure
+            type_name = obj_type.name if obj_type.is_builtin_type else "object" # safety measure
             node = self._dispatch_to_method_handler(
                 special_method_name, None, False, type_name,
                 node, None, [operand], None)
@@ -633,9 +627,9 @@ class MethodDispatcherTransform(EnvTransform):
                 return self._handle_function(node, function.name, function, arg_list, kwargs)
             if kwargs:
                 return function_handler(node, function, arg_list, kwargs)
-            else:
-                return function_handler(node, function, arg_list)
-        elif function.is_attribute:
+
+            return function_handler(node, function, arg_list)
+        if function.is_attribute:
             attr_name = function.attribute
             if function.type.is_pyobject:
                 self_arg = function.obj
@@ -667,8 +661,8 @@ class MethodDispatcherTransform(EnvTransform):
             return self._dispatch_to_method_handler(
                 attr_name, self_arg, is_unbound_method, type_name,
                 node, function, arg_list, kwargs)
-        else:
-            return node
+
+        return node
 
     def _dispatch_to_method_handler(self, attr_name, self_arg,
                                     is_unbound_method, type_name,

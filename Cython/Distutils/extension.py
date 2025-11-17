@@ -7,6 +7,8 @@ __revision__ = "$Id:$"
 
 import distutils.extension as _Extension
 
+from Cython.Compiler.Directives import DirectivesDict as Directives
+
 
 class Extension(_Extension.Extension):
     # When adding arguments to this constructor, be sure to update
@@ -81,7 +83,7 @@ class Extension(_Extension.Extension):
             **kw)
 
         self.cython_include_dirs = cython_include_dirs or []
-        self.cython_directives = cython_directives or {}
+        self.cython_directives = cython_directives or Directives()
         self.cython_create_listing = cython_create_listing
         self.cython_line_directives = cython_line_directives
         self.cython_cplus = cython_cplus

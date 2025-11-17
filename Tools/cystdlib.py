@@ -16,11 +16,11 @@ import os
 import sys
 from distutils.core import setup
 from Cython.Build import cythonize
-from Cython.Compiler import Options
+from Cython.Compiler import Options, Directives
 
 # improve Python compatibility by allowing some broken code
-Options.error_on_unknown_names = False
-Options.error_on_uninitialized = False
+Directives.error_on_unknown_names = False
+Directives.error_on_uninitialized = False
 
 exclude_patterns = ['**/test/**/*.py', '**/tests/**/*.py', '**/__init__.py']
 broken = [
@@ -38,7 +38,7 @@ broken = [
     'importlib/_bootstrap',
 ]
 
-default_directives = dict(
+    default_directives = Directives.Directives(
     auto_cpdef=False,   # enable when it's safe, see long list of failures below
     binding=True,
     set_initial_path='SOURCEFILE')
@@ -78,7 +78,7 @@ special_directives = [
       'getopt.py',
       'os.py',
       'types.py',
-     ], dict(auto_cpdef=False)),
+     ], dict(auto_cpdef=True)),
 ]
 del special_directives[:]  # currently unused
 
@@ -86,7 +86,7 @@ def build_extensions(includes='**/*.py',
                      excludes=None,
                      special_directives=special_directives,
                      language_level=sys.version_info[0],
-                     parallel=None):
+                     parallel: int | None = None):
     if isinstance(includes, str):
         includes = [includes]
     excludes = list(excludes or exclude_patterns) + broken
@@ -159,6 +159,7 @@ if __name__ == '__main__':
     if options.current_python:
         # assume that the stdlib is where the "os" module lives
         os.chdir(os.path.dirname(os.__file__))
+        print(f"Compiling files to {os.getcwd()}")
     else:
         os.chdir(args[0])
 

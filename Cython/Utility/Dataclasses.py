@@ -7,11 +7,7 @@
 # (Intended to be included as py code - not compiled)
 
 from collections import namedtuple
-try:
-    from types import MappingProxyType
-except ImportError:
-    # mutable fallback if unavailable
-    MappingProxyType = lambda x: x
+from types import MappingProxyType
 
 class _MISSING_TYPE:
     pass

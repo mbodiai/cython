@@ -4,13 +4,14 @@
 __pycache__
 *.so
 *.o
-
+*.cpp
+*.c
+.venv/
 *.egg
 *.egg-info
 .*cache*/
 *venv*/
 /.hg
-
 /Cython/Build/*.c
 /Cython/Compiler/*.c
 /Cython/Debugger/*.c
@@ -22,12 +23,10 @@ __pycache__
 /Cython/*.c
 /Cython/*.html
 /Cython/*/*.html
-
 /Tools/*.elc
 /Demos/*.html
 /Demos/*/*.html
 /Demos/benchmarks/*.c
-
 /TEST/
 /TEST_TMP/
 /build/
@@ -54,23 +53,33 @@ coverage*.html
 *.xz
 *~
 callgrind.out.*
-
 .ipynb_checkpoints
 docs/build
 docs/_build
-
 tags
 TAGS
 MANIFEST
-
 .tox
-
 # Jetbrains IDE project files
 /.idea
 /*.iml
-
 # Komodo EDIT/IDE project files
 /*.komodoproject
-
 # Visual Studio Code files
 .vscode
+# macOS Finder artifacts
+.DS_Store
+# Common test/build caches
+.pytest_cache/
+.nox/
+.mypy_cache/
+.ruff_cache/
+.cache/
+# Development directories and patterns from HEAD branch
+newstuff
+.devv
+# File patterns from tmp branch
+**/*.zip
+**/*.python-version
+# Cython inline build artifacts
+/generated/

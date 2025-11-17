@@ -3,7 +3,7 @@ Cython Changelog
 ================
 
 
-3.1.0 alpha 2 (2025-??-??)
+3.1.0 beta 1 (2025-04-03)
 ==========================
 
 Features added
@@ -16,10 +16,40 @@ Features added
   wrapping Python's critical section C-API feature.
   (Github issues :issue:`6516`, :issue:`6577`)
 
+* Some common Cython-internal code (currently only memoryview related) can now be extracted
+  into a shared extension module to reduce the installed overall size of a package with many
+  Cython compiled modules.
+  (Github issue :issue:`2356`)
+
 * The type of ``prange`` loop targets is now inferred.
   (Github issue :issue:`6585`)
 
+* Extracting keyword arguments is faster in some cases.
+  (Github issue :issue:`6683`)
+
+* Calling ``divmod()``on any C integer types is efficient.
+  (Github issue :issue:`6717`)
+
+* Some async/coroutine/vectorcall code has improved fast-paths.
+  (Github issues :issue:`6732`, :issue:`6735`, :issue:`6736`, :issue:`6738`, :issue:`6742`, :issue:`6771`)
+
+* Calls to Python builtins and extension types use the vectorcall protocol.
+  (Github issue :issue:`6744`)
+
+* Method calls use ``PyObject_VectorcallMethod()`` where possible.
+  (Github issue :issue:`6747`)
+
+* Some C-API shortcuts were (re-)added.
+  (Github issue :issue:`6761`)
+
+* Cython can avoid normalising exceptions in an `except` clause if it knows that they are unused.
+  (Github issue :issue:`6601`)
+
 * The ``cython`` command has a new option ``--cache`` to cache generated files.
+  (Github issue :issue:`6091`)
+
+* The ``cythonize`` command has a new option ``--timeit`` to benchmark Cython code snippets.
+  (Github issue :issue:`6697`)
 
 * The argument parsing ``cygdb`` command was improved based on ``argparse``.
   Patch by William Ayd.  (Github issue :issue:`5499`)
@@ -42,6 +72,9 @@ Features added
 * Bazel build rules were updated for better interoperability.
   Patch by maleo.  (Github issue :issue:`6478`)
 
+* The ``Demos/benchmarks/`` directory include a new benchmark runner that can run selected
+  benchmarks against different Cython git revisions.
+
 Bugs fixed
 ----------
 
@@ -55,11 +88,17 @@ Bugs fixed
 * ``for-in`` loops could generate invalid code for C++ containers.
   Patch by Taras Kozlov.  (Github issue :issue:`6578`)
 
+* ``PyDict_GetItemRef()`` and ``PyList_GetItemRef()`` were not always used correctly.
+  Patch by Lisandro Dalcin.  (Github issue :issue:`6647`)
+
 * Inlined calls to local functions could crash with ``binding=False``.
   (Github issue :issue:`6556`)
 
 * Calling ``sorted()`` could crash in 3.1.0a1.
   (Github issue :issue:`6496`)
+
+* Calling 0-arg methods was unnecessarily slow in 3.1.0a1.
+  (Github issue :issue:`6730`)
 
 * A crash when reading the interpreter ID was fixed.
 
@@ -71,6 +110,13 @@ Bugs fixed
 
 * A compiler crash when using the ``cpp_locals`` directive was resolved.
   (Github issue :issue:`6370`)
+
+* Name mangling did not work correctly for attributes of extension types that have reserved C names.
+  (Github issue :issue:`6678`)
+
+* Declaring a ``@staticmethod`` in a pxd file and overriding it in a subclass could
+  trigger incorrect "declared but not defined" errors.
+  Patch by Aditya Pillai.  (Github issue :issue:`6714`)
 
 * Cython's fake code objects are now compatible with GraalPython.
   (Github issue :issue:`6409`)
@@ -84,11 +130,38 @@ Bugs fixed
 * Interoperability with recent Pythran releases was fixed.
   (Github issue :issue:`6494`)
 
+* The ``gdb`` compatibility of ``cygdb`` was improved.
+  Patch by Kent Slaney.  (Github issue :issue:`6681`)
+
 * Some redundant exception normalisation work was removed in Python 3.12+.
   (Github issue :issue:`6599`)
 
+* A compiler hang introduced in 3.1a1 when overriding methods was resolved.
+  Patch by Aditya Pillai.  (Github issue :issue:`6704`)
+
+* A compiler crash was resolved when trying to issue a warning.
+  Patch by Gabriele N. Tornetta.  (Github issue :issue:`6711`)
+
+* Some incomplete import time "safety checks" from 3.1.0a1 were removed again.
+  (Github issue :issue:`6671`)
+
+* Using the ``common_utility_include_dir`` option in parallel builds on Windows could fail.
+
+* Some "unused" warnings from the C compiler were resolved.
+  Patches by Lisandro Dalcin.  (Github issue :issue:`6726`)
+
 Other changes
 -------------
+
+* All Cython-internal types (functions, coroutines, …) are now heap types and use type specs.
+  (Github issue :issue:`6633`)
+
+* Tracing/monitoring is now disabled in parallel/prange sections.
+  (Github issue :issue:`6709`)
+
+* The ``numpy.math`` cimport module has been deprecated.
+  Usages should be replaced by ``libc.math``.
+  (Github issue :issue:`6743`)
 
 * Includes all fixes as of Cython 3.0.12.
 
@@ -160,7 +233,7 @@ Features added
 * f-strings are faster in some cases.
   (Github issues :issue:`5866`, :issue:`6342`, :issue:`6383`)
 
-* ``divmod()`` is faster on C integers.
+* ``divmod()`` is faster on C ``int``.
   Patch by Tong He.  (Github issue :issue:`6073`)
 
 * ``dict.pop()`` is faster in some cases.

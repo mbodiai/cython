@@ -2,25 +2,39 @@
 #
 #   Cython Scanner
 #
+from __future__ import annotations
 
-
+from dataclasses import dataclass, field
 import cython
+
 cython.declare(make_lexicon=object, lexicon=object,
                print_function=object, error=object, warning=object,
                os=object, platform=object)
-
 import os
 import platform
-from unicodedata import normalize
 from contextlib import contextmanager
+from pathlib import Path
+from typing import IO, TYPE_CHECKING, Any
+from unicodedata import normalize
 
 from .. import Utils
-from ..Plex.Scanners import Scanner
 from ..Plex.Errors import UnrecognizedInput
-from .Errors import error, warning, hold_errors, release_errors, CompileError
-from .Lexicon import any_string_prefix, make_lexicon, IDENT
+from ..Plex.Scanners import Scanner
+from .Errors import CompileError, error, hold_errors, release_errors, warning
 from .Future import print_function
+from .Lexicon import IDENT, any_string_prefix, ft_string_prefixes, make_lexicon
 
+if TYPE_CHECKING:
+    from Cython.Build import CompilationContext
+
+    from .Nodes import SourceDescriptor
+    from .Symtab import Scope
+else:
+    CompilationContext = object
+    SourceDescriptor = object
+    Scope = object
+    FileSourceDescriptor = object
+    StringSourceDescriptor = object
 debug_scanner = 0
 trace_scanner = 0
 scanner_debug_flags = 0
@@ -55,7 +69,8 @@ pyx_reserved_words = py_reserved_words + [
 #------------------------------------------------------------------
 
 class CompileTimeScope:
-
+    entries: dict[str, Any]
+    outer: "CompileTimeScope|None"
     def __init__(self, outer=None):
         self.entries = {}
         self.outer = outer
@@ -79,23 +94,22 @@ class CompileTimeScope:
             outer = self.outer
             if outer:
                 return outer.lookup(name)
-            else:
-                raise
+            raise
 
 
-def initial_compile_time_env():
+def initial_compile_time_env() -> CompileTimeScope:
     benv = CompileTimeScope()
     names = ('UNAME_SYSNAME', 'UNAME_NODENAME', 'UNAME_RELEASE', 'UNAME_VERSION', 'UNAME_MACHINE')
-    for name, value in zip(names, platform.uname()):
+    for name, value in zip(names, platform.uname(), strict=False):
         benv.declare(name, value)
     import builtins
 
     names = (
         'False', 'True',
         'abs', 'all', 'any', 'ascii', 'bin', 'bool', 'bytearray', 'bytes',
-        'chr', 'cmp', 'complex', 'dict', 'divmod', 'enumerate', 'filter',
+        'chr', 'complex', 'dict', 'divmod', 'enumerate', 'filter',
         'float', 'format', 'frozenset', 'hash', 'hex', 'int', 'len',
-        'list', 'map', 'max', 'min', 'oct', 'ord', 'pow', 'range',
+        'list', 'map', 'max', 'min', 'next', 'oct', 'ord', 'pow', 'range',
         'repr', 'reversed', 'round', 'set', 'slice', 'sorted', 'str',
         'sum', 'tuple', 'zip',
         ### defined below in a platform independent way
@@ -103,29 +117,22 @@ def initial_compile_time_env():
     )
 
     for name in names:
-        try:
-            benv.declare(name, getattr(builtins, name))
-        except AttributeError:
-            # ignore, likely Py3
-            pass
+        benv.declare(name, getattr(builtins, name))
 
-    # Py2/3 adaptations
+    # legacy Py2 names
     from functools import reduce
     benv.declare('reduce', reduce)
     benv.declare('unicode', str)
-    benv.declare('long', getattr(builtins, 'long', getattr(builtins, 'int')))
-    benv.declare('xrange', getattr(builtins, 'xrange', getattr(builtins, 'range')))
+    benv.declare('long', int)
+    benv.declare('xrange', range)
 
-    denv = CompileTimeScope(benv)
-    return denv
+    return CompileTimeScope(benv)
 
 
 #------------------------------------------------------------------
 
 class SourceDescriptor:
-    """
-    A SourceDescriptor should be considered immutable.
-    """
+    """A SourceDescriptor should be considered immutable."""
     filename = None
     in_utility_code = False
 
@@ -134,19 +141,19 @@ class SourceDescriptor:
     _escaped_description = None
     _cmp_name = ''
     def __str__(self):
-        assert False  # To catch all places where a descriptor is used directly as a filename
+        raise ValueError("SourceDescriptor should not be used directly as a filename")
 
-    def set_file_type_from_name(self, filename):
-        name, ext = os.path.splitext(filename)
+    def set_file_type_from_name(self, filename:str):
+        ext = Path(filename).suffix
         self._file_type = ext in ('.pyx', '.pxd', '.py') and ext[1:] or 'pyx'
 
-    def is_cython_file(self):
+    def is_cython_file(self) -> bool:
         return self._file_type in ('pyx', 'pxd')
 
-    def is_python_file(self):
+    def is_python_file(self) -> bool:
         return self._file_type == 'py'
 
-    def get_escaped_description(self):
+    def get_escaped_description(self) -> str:
         if self._escaped_description is None:
             # Use forward slashes on Windows since these paths
             # will be used in the #line directives in the C/C++ files.
@@ -209,22 +216,15 @@ class FileSourceDescriptor(SourceDescriptor):
         # we cache the lines only the second time this is called, in
         # order to save memory when they are only used once
         key = (encoding, error_handling)
-        try:
-            lines = self._lines[key]
-            if lines is not None:
-                return lines
-        except KeyError:
-            pass
+        lines = self._lines.get(key)
+        if lines is not None:
+            return lines
 
         with self.get_file_object(encoding=encoding, error_handling=error_handling) as f:
-            lines = f.readlines()
+            lines = [line.rstrip() for line in f.readlines()]
 
-        if key in self._lines:
-            self._lines[key] = lines
-        else:
-            # do not cache the first access, but remember that we
-            # already read it once
-            self._lines[key] = None
+        # Do not cache the first access, but add the key to remember that we already read it once.
+        self._lines[key] = lines if key in self._lines else None
         return lines
 
     def get_file_object(self, encoding=None, error_handling=None):
@@ -254,42 +254,38 @@ class FileSourceDescriptor(SourceDescriptor):
 
 
 class StringSourceDescriptor(SourceDescriptor):
-    """
-    Instances of this class can be used instead of a filenames if the
-    code originates from a string object.
-    """
+    """Instances of this class can be used instead of a filenames if the code originates from a string object."""
+
     def __init__(self, name, code):
         self.name = name
-        #self.set_file_type_from_name(name)
-        self.codelines = [x + "\n" for x in code.split("\n")]
+        self.codelines = [line.rstrip() for line in code.splitlines()]
         self._cmp_name = name
 
-    def get_lines(self, encoding=None, error_handling=None):
+    def get_lines(self, encoding:str|None=None, error_handling:str|None=None) -> list[str]:
         if not encoding:
             return self.codelines
-        else:
-            return [line.encode(encoding, error_handling).decode(encoding)
+
+        return [line.encode(encoding, error_handling).decode(encoding)
                     for line in self.codelines]
 
-    def get_description(self):
+    def get_description(self) -> str:
         return self.name
 
     get_error_description = get_description
 
-    def get_filenametable_entry(self):
+    def get_filenametable_entry(self) -> str:
         return "<stringsource>"
 
     def __hash__(self):
         return id(self)
         # Do not hash on the name, an identical string source should be the
         # same object (name is often defaulted in other places)
-        # return hash(self.name)
 
     def __eq__(self, other):
         return isinstance(other, StringSourceDescriptor) and self.name == other.name
 
     def __repr__(self):
-        return "<StringSourceDescriptor:%s>" % self.name
+        return f"<StringSourceDescriptor:{self.name}>"
 
 
 #------------------------------------------------------------------
@@ -302,9 +298,14 @@ class PyrexScanner(Scanner):
     #  compile_time_expr  boolean  In a compile-time expression context
     #  put_back_on_failure  list or None  If set, this records states so the tentatively_scan
     #                                       contextmanager can restore it
-
-    def __init__(self, file, filename, parent_scanner=None,
-                 scope=None, context=None, source_encoding=None, parse_comments=True, initial_pos=None):
+    context: CompilationContext
+    included_files: list[str]
+    compile_time_env: CompileTimeScope
+    compile_time_eval: bool | int
+    compile_time_expr: bool | int   
+    async_enabled: bool | int
+    def __init__(self, file:IO, filename:SourceDescriptor, parent_scanner:"PyrexScanner|None"=None,
+                 scope:Scope|None=None, context:CompilationContext|None=None, source_encoding:str|None=None, parse_comments:bool=True, initial_pos:tuple[int, int, int]=None):
         Scanner.__init__(self, get_lexicon(), file, filename, initial_pos)
 
         if filename.is_python_file():
@@ -330,18 +331,21 @@ class PyrexScanner(Scanner):
             self.context = context
             self.included_files = scope.included_files
             self.compile_time_env = initial_compile_time_env()
-            self.compile_time_eval = 1
-            self.compile_time_expr = 0
-            if getattr(context.options, 'compile_time_env', None):
-                self.compile_time_env.update(context.options.compile_time_env)
+            self.compile_time_eval = True
+            self.compile_time_expr = False
+            if context and getattr(context.options, 'compile_time_env', None):
+                self.compile_time_env.update(getattr(context.options, 'compile_time_env', {}))
         self.parse_comments = parse_comments
         self.source_encoding = source_encoding
         self.trace = trace_scanner
         self.indentation_stack = [0]
         self.indentation_char = '\0'
         self.bracket_nesting_level = 0
+        # fstrings/tstrings
+        self.ft_string_state_stack = []
+        self.in_ft_string_expr_prescan = 0
 
-        self.put_back_on_failure = None
+        self.put_back_on_failure: list[tuple[str, str, tuple[int, int, int]]] | None = None
 
         self.begin('INDENT')
         self.sy = ''
@@ -370,6 +374,32 @@ class PyrexScanner(Scanner):
         self.bracket_nesting_level -= 1
         return text
 
+    def open_brace_action(self, text):
+        return self.open_bracket_action(text)
+
+    def close_brace_action(self, text):
+        assert text == '}'
+        if (self.ft_string_state_stack and
+                self.ft_string_state_stack[-1].bracket_nesting_level() == self.bracket_nesting_level):
+            if not self.ft_string_state_stack[-1].in_format_specifier():
+                self.in_ft_string_expr_prescan -= 1
+                if self.in_ft_string_expr_prescan == 0:
+                    self.produce("END_FT_STRING_EXPR")
+            self.begin(self.ft_string_state_stack[-1].scanner_state)
+            self.ft_string_state_stack[-1].pop_bracket_state()
+        self.bracket_nesting_level -= 1
+        return text
+
+    def colon_action(self, text):
+        if (self.ft_string_state_stack and
+                self.ft_string_state_stack[-1].bracket_nesting_level() == self.bracket_nesting_level):
+            self.in_ft_string_expr_prescan -= 1
+            if self.in_ft_string_expr_prescan == 0:
+                self.produce("END_FT_STRING_EXPR")
+            self.begin(self.ft_string_state_stack[-1].scanner_state)
+            self.ft_string_state_stack[-1].set_in_format_specifier()
+        return text
+
     def newline_action(self, text):
         if self.bracket_nesting_level == 0:
             self.begin('INDENT')
@@ -389,8 +419,78 @@ class PyrexScanner(Scanner):
         self.produce('BEGIN_STRING')
 
     def end_string_action(self, text):
-        self.begin('')
+        self.begin('FT_STRING_EXPR_PRESCAN' if self.in_ft_string_expr_prescan else '')
         self.produce('END_STRING')
+
+    def begin_ft_string_action(self, text):
+        is_raw = 'r' in text or 'R' in text
+        while text and (text[0] in any_string_prefix or text[0] in ft_string_prefixes):
+            text = text[1:]
+        ft_string_state = f'{self.string_states[text]}_FT{"R" if is_raw else ""}'
+        self.ft_string_state_stack.append(
+            FTStringState(ft_string_state)
+        )
+        self.begin(ft_string_state)
+        self.produce('BEGIN_FT_STRING')
+
+    def end_ft_string_action(self, text):
+        self.ft_string_state_stack.pop()
+        self.begin('FT_STRING_EXPR_PRESCAN' if self.in_ft_string_expr_prescan else '')
+        self.produce('END_FT_STRING')
+
+    def _handle_open_single_ft_string_brace(self, started_ft_string_expr):
+        self.bracket_nesting_level += 1
+        if not started_ft_string_expr:
+            self.ft_string_state_stack[-1].push_bracket_state(self.bracket_nesting_level)
+            self.begin('FT_STRING_EXPR_PRESCAN')
+            self.in_ft_string_expr_prescan += 1
+        self.produce('{')
+
+    def open_ft_string_brace_action(self, text):
+        len_text = len(text)
+        started_ft_string_expr = False
+        if self.ft_string_state_stack[-1].in_format_specifier():
+            self._handle_open_single_ft_string_brace(started_ft_string_expr)
+            len_text -= 1
+            started_ft_string_expr = True
+        assert not self.ft_string_state_stack[-1].in_format_specifier()
+
+        double_braces = len_text // 2
+        for _ in range(double_braces):
+            self.produce('CHARS', '{')
+        len_text -= (double_braces*2)
+
+        if len_text:
+            assert len_text == 1
+            self._handle_open_single_ft_string_brace(started_ft_string_expr)
+
+    def _handle_close_single_ft_string_brace(self):
+        ft_string_bracket_level = self.ft_string_state_stack[-1].bracket_nesting_level()
+        if ft_string_bracket_level is None or self.bracket_nesting_level < ft_string_bracket_level:
+            # To help try to parse a little further, don't reduce the bracket
+            # nesting level more.
+            self.error(
+                # Unfortunately the scanner doesn't know which
+                "f-string or t-string: single '}' is not allowed",
+                pos=self.get_current_scan_pos(),
+                fatal=False)
+            self.produce('}', '}')
+        else:
+            self.produce(self.close_brace_action('}'), '}')
+
+    def close_ft_string_brace_action(self, text):
+        len_text = len(text)
+        while len_text and self.ft_string_state_stack[-1].in_format_specifier():
+            self._handle_close_single_ft_string_brace()
+            len_text -= 1
+
+        double_braces = len_text // 2
+        for _ in range(double_braces):
+            self.produce('CHARS', '}')
+        len_text -= double_braces*2
+
+        if len_text:
+            self._handle_close_single_ft_string_brace()
 
     def unclosed_string_action(self, text):
         self.end_string_action(text)
@@ -575,3 +675,34 @@ def tentatively_scan(scanner: PyrexScanner):
             scanner.put_back_on_failure = put_back_on_failure
     finally:
         release_errors(ignore=True)
+
+@dataclass(slots=True)
+class FTStringState:
+    scanner_state: str
+    bracket_states: list[FTStringBracketState] = field(default_factory=list["FTStringBracketState"])
+    
+
+    def bracket_nesting_level(self):
+        if not self.bracket_states:
+            return None
+        return self.bracket_states[-1].bracket_nesting_level
+
+    def in_format_specifier(self):
+        if not self.bracket_states:
+            return False
+        return self.bracket_states[-1].in_format_specifier
+
+    def set_in_format_specifier(self):
+        self.bracket_states[-1].in_format_specifier = True
+
+    def push_bracket_state(self, bracket_nesting_level: int):
+        self.bracket_states.append(FTStringBracketState(bracket_nesting_level))
+
+    def pop_bracket_state(self):
+        self.bracket_states.pop()
+
+@dataclass(slots=True)
+class FTStringBracketState:
+    bracket_nesting_level: int
+    in_format_specifier: bool = False
+   

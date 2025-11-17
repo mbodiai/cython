@@ -1,14 +1,17 @@
+from typing import TYPE_CHECKING
 from .Errors import error, message
 from . import ExprNodes
 from . import Nodes
 from . import Builtin
 from . import PyrexTypes
+from . import Options
 from .. import Utils
 from .PyrexTypes import py_object_type, unspecified_type
 from .Visitor import CythonTransform, EnvTransform
 
 from functools import reduce
-
+if TYPE_CHECKING:
+    from .Symtab import Scope
 
 class TypedExprNode(ExprNodes.ExprNode):
     # Used for declaring assignments of a specified type without a known entry.
@@ -79,6 +82,8 @@ class MarkParallelAssignments(EnvTransform):
         return node
 
     def visit_SingleAssignmentNode(self, node):
+        if self.parallel_block_stack:
+            node.in_parallel_block = True
         self.mark_assignment(node.lhs, node.rhs)
         self.visitchildren(node)
         return node
@@ -122,20 +127,19 @@ class MarkParallelAssignments(EnvTransform):
                                     sequence = sequence.args[0]
         if isinstance(sequence, ExprNodes.SimpleCallNode):
             function = sequence.function
-            if sequence.self is None and function.is_name:
+            if sequence.self is None and function.is_name and function.name in ('range', 'xrange'):
                 entry = iterator_scope.lookup(function.name)
-                if not entry or entry.is_builtin:
-                    if function.name in ('range', 'xrange'):
-                        is_special = True
-                        for arg in sequence.args[:2]:
-                            self.mark_assignment(target, arg)
-                        if len(sequence.args) > 2:
-                            self.mark_assignment(
-                                target,
-                                ExprNodes.binop_node(node.pos,
-                                                     '+',
-                                                     sequence.args[0],
-                                                     sequence.args[2]))
+                if not entry or entry.is_type and entry.type is Builtin.range_type:
+                    is_special = True
+                    for arg in sequence.args[:2]:
+                        self.mark_assignment(target, arg)
+                    if len(sequence.args) > 2:
+                        self.mark_assignment(
+                            target,
+                            ExprNodes.binop_node(node.pos,
+                                                    '+',
+                                                    sequence.args[0],
+                                                    sequence.args[2]))
         if not is_special:
             # A for-loop basically translates to subsequent calls to
             # __getitem__(), so using an IndexNode here allows us to
@@ -168,7 +172,7 @@ class MarkParallelAssignments(EnvTransform):
 
     def visit_ExceptClauseNode(self, node):
         if node.target is not None:
-            self.mark_assignment(node.target, object_expr)
+            self.mark_assignment(node.target, node.exc_value)
         self.visitchildren(node)
         return node
 
@@ -247,6 +251,12 @@ class MarkParallelAssignments(EnvTransform):
 
     def visit_ReturnStatNode(self, node):
         node.in_parallel = bool(self.parallel_block_stack)
+        return node
+
+    def visit_ExprNode(self, node):
+        self.visitchildren(node)
+        if self.parallel_block_stack:
+            node.in_parallel_block = True
         return node
 
 
@@ -363,9 +373,19 @@ class SimpleAssignmentTypeInferer:
                 else:
                     e.type.check_nullary_constructor(entry.pos)
 
-    def infer_types(self, scope):
-        enabled = scope.directives['infer_types']
-        verbose = scope.directives['infer_types.verbose']
+    def infer_types(self, scope: "Scope"):
+        directives = scope.directives
+        if not isinstance(directives, Options.Directives):
+            normalized = Options.Directives()
+            normalized.update(directives)
+            directives = normalized
+            scope.directives = directives
+
+        enabled = directives['infer_types']
+        try:
+            verbose = directives['infer_types.verbose']
+        except KeyError:
+            verbose = False
 
         if enabled == True:
             spanning_type = aggressive_spanning_type

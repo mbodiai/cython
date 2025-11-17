@@ -1,0 +1,36 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Build & Run Instructions
+
+> **Environment:** From the repository root, activate the virtualenv with:
+> ```bash
+> a  # or `pylink` if the venv lives in a parent directory
+> ```
+> **Working Directory:** Always ensure your shell is at the project root (`/Users/.../cython`).
+
+To compile and link **any** supported entry-point (`.pyx`, `.py`, `.c`, or `.cpp`) into a standalone executable, call:
+```bash
+python build.py <source>.<pyx|py|c|cpp>
+```
+build.py automates:
+1. If the input is `.pyx` or `.py`, runs `cython --embed` to generate C code with an embedded Python interpreter.
+2. If the input is already a C/C++ file (`.c` or `.cpp`), skips the Cython step and compiles directly.
+3. Locates the correct Python shared library for the current OS/architecture.
+4. Compiles and links into one executable named after the `<source>` base.
+
+**Examples:**
+- Embedded mproc wrapper:
+  ```bash
+  python build.py embedded_mproc.pyx
+  ./embedded_mproc  # runs the mproc CLI
+  ```
+- Alternative mproc runner:
+  ```bash
+  python build.py run_mproc.pyx
+  ./run_mproc       # runs the mproc CLI
+  ```
+
+> Never bypass `build.py` with manual `cc` or `cython` calls—always invoke it as your sole build step.

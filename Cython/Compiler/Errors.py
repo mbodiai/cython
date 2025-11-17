@@ -13,10 +13,15 @@ except ImportError:
     class _threadlocal: pass
 
 threadlocal = _threadlocal()
+threadlocal.cython_errors_count = 0
+threadlocal.cython_errors_listing_file = None
+threadlocal.cython_errors_echo_file = None
+threadlocal.cython_errors_warn_once_seen = set()
+threadlocal.cython_errors_stack = []
 
 from ..Utils import open_new_file
 from . import DebugFlags
-from . import Options
+from . import Directives
 
 
 class PyrexError(Exception):
@@ -37,11 +42,13 @@ def context(position):
         F = source.get_lines()
     except UnicodeDecodeError:
         # file has an encoding problem
-        s = "[unprintable code]\n"
+        s = "[unprintable code]"
     else:
-        s = ''.join(F[max(0, position[1]-6):position[1]])
-        s = '...\n%s%s^\n' % (s, ' '*(position[2]))
-    s = '%s\n%s%s\n' % ('-'*60, s, '-'*60)
+        s = '\n'.join(F[max(0, position[1]-6):position[1]])
+        s = '...\n%s\n%s^' % (s, ' '*(position[2]))
+
+    hbar = '-' * 60
+    s = f'{hbar}\n{s}\n{hbar}\n'
     return s
 
 def format_position(position):
@@ -51,10 +58,19 @@ def format_position(position):
     return ''
 
 def format_error(message, position):
+    """Format a compiler error with a clickable filename:lineno:col prefix.
+
+    Historically Cython printed a context block first. To make error
+    navigation in IDEs and terminals easier, emit a one-line summary in
+    ``file:line:col: message`` form before the context while keeping the
+    existing detailed block for readability.
+    """
     if position:
         pos_str = format_position(position)
         cont = context(position)
-        message = '\nError compiling Cython file:\n%s\n%s%s' % (cont, pos_str, message or '')
+        # Summary first for editor integration; keep detailed block below.
+        summary = f"{pos_str}{message or ''}"
+        message = f"{summary}\nError compiling Cython file:\n{cont}{pos_str}{message or ''}"
     return message
 
 class CompileError(PyrexError):
@@ -164,7 +180,7 @@ def report_error(err, use_stack=True):
             except UnicodeEncodeError:
                 echo_file.write(line.encode('ASCII', 'replace'))
         threadlocal.cython_errors_count += 1
-        if Options.fast_fail:
+        if Directives.fast_fail:
             raise AbortError("fatal errors")
 
 def error(position, message):
@@ -217,7 +233,7 @@ def message(position, message, level=1):
 def warning(position, message, level=0):
     if level < LEVEL:
         return
-    if Options.warning_errors and position:
+    if Directives.warning_errors and position:
         return error(position, message)
     warn = CompileWarning(position, message)
     line = "warning: %s\n" % warn

@@ -19,22 +19,30 @@ cdef class CompileTimeScope:
 
 @cython.final
 cdef class PyrexScanner(Scanner):
-    cdef public context
+    cdef public object context
     cdef public list included_files
     cdef public CompileTimeScope compile_time_env
     cdef public bint compile_time_eval
     cdef public bint compile_time_expr
     cdef public bint parse_comments
     cdef public bint in_python_file
-    cdef public source_encoding
+    cdef public unicode source_encoding
     cdef dict keywords
     cdef public list indentation_stack
     cdef public Py_UCS4 indentation_char
     cdef public int bracket_nesting_level
     cdef readonly bint async_enabled
     cdef public unicode sy
-    cdef public systring  # EncodedString
+    cdef public object systring  # EncodedString
     cdef public list put_back_on_failure
+    # fstrings/tstrings
+    cdef list ft_string_state_stack
+    cdef int in_ft_string_expr_prescan
 
     cdef Py_ssize_t current_level(self)
     cdef int error_at_scanpos(self, str message) except -1
+
+
+cdef class FTStringState:
+    cdef list bracket_states
+    cdef readonly str scanner_state

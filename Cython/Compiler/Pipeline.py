@@ -1,12 +1,19 @@
 import itertools
 from time import time
+from typing import TYPE_CHECKING
+import sys
 
 from . import Errors
 from . import DebugFlags
-from . import Options
+from . import Options, Directives
 from .Errors import CompileError, InternalError, AbortError
 from . import Naming
 
+if TYPE_CHECKING:
+    from .UtilityCode import CythonUtilityCode
+    from .ModuleNode import ModuleNode
+    from .Symtab import Scope
+    from ..Compiler.Main import Context
 #
 # Really small pipeline stages
 #
@@ -26,12 +33,16 @@ def parse_stage_factory(context):
         source_desc = compsrc.source_desc
         full_module_name = compsrc.full_module_name
         initial_pos = (source_desc, 1, 0)
-        saved_cimport_from_pyx, Options.cimport_from_pyx = Options.cimport_from_pyx, False
+        saved_cimport_from_pyx, Directives.cimport_from_pyx = Directives.cimport_from_pyx, False
         scope = context.find_module(full_module_name, pos = initial_pos, need_pxd = 0)
-        Options.cimport_from_pyx = saved_cimport_from_pyx
+        Directives.cimport_from_pyx = saved_cimport_from_pyx
         tree = context.parse(source_desc, scope, pxd = 0, full_module_name = full_module_name)
         tree.compilation_source = compsrc
         tree.scope = scope
+        # Ensure ModuleNode has an initial directives mapping before any transform runs.
+        # This is populated/updated by InterpretCompilerDirectives later.
+        if not hasattr(tree, 'directives') or tree.directives is None:
+            tree.directives = Directives.DIRECTIVE_DEFAULTS.copy()
         tree.is_pxd = False
         return tree
     return parse
@@ -41,6 +52,8 @@ def parse_pxd_stage_factory(context, scope, module_name):
         tree = context.parse(source_desc, scope, pxd=True,
                              full_module_name=module_name)
         tree.scope = scope
+        if not hasattr(tree, 'directives') or tree.directives is None:
+            tree.directives = Directives.DIRECTIVE_DEFAULTS.copy()
         tree.is_pxd = True
         return tree
     return parse
@@ -52,8 +65,17 @@ def generate_pyx_code_stage_factory(options, result):
         return result
     return generate_pyx_code_stage
 
+def inject_utility_pxd_code_stage_factory(context):
+
+    def inject_utility_pxd_code_stage(module_node):
+        for statlistnode, scope in context.utility_pxds.values():
+            module_node.merge_in(statlistnode, scope, stage="pxd")
+        return module_node
+
+    return inject_utility_pxd_code_stage
 
 def inject_pxd_code_stage_factory(context):
+
     def inject_pxd_code_stage(module_node):
         for name, (statlistnode, scope) in context.pxds.items():
             module_node.merge_in(statlistnode, scope, stage="pxd")
@@ -70,9 +92,9 @@ def use_utility_code_definitions(scope, target, seen=None):
             continue
 
         seen.add(entry)
-        if entry.used and entry.utility_code_definition:
-            target.use_utility_code(entry.utility_code_definition)
-            for required_utility in entry.utility_code_definition.requires:
+        if entry.used and entry.utility_code:
+            target.use_utility_code(entry.utility_code)
+            for required_utility in entry.utility_code.requires:
                 target.use_utility_code(required_utility)
         elif entry.as_module:
             use_utility_code_definitions(entry.as_module, target, seen)
@@ -80,23 +102,39 @@ def use_utility_code_definitions(scope, target, seen=None):
 
 def sorted_utility_codes_and_deps(utilcodes):
     ranks = {}
-    get_rank = ranks.get
+    visiting = set()
 
-    def calculate_rank(utilcode):
-        rank = get_rank(utilcode)
-        if rank is None:
-            ranks[utilcode] = 0  # prevent infinite recursion on circular dependencies
-            original_order = len(ranks)
-            rank = ranks[utilcode] = 1 + (
-                min([calculate_rank(dep) for dep in utilcode.requires]) if utilcode.requires else -1
-                ) + original_order * 1e-8
+    def calculate_rank(utilcode: "CythonUtilityCode"):
+        # Already ranked – return cached value
+        rank = ranks.get(utilcode)
+        if rank is not None and rank != 0:
+            return rank
+
+        # Detect cycles: if we see the same utilcode again on the recursion stack,
+        # treat it as a minimal dependency to break the cycle.
+        if utilcode in visiting:
+            return 0
+
+        # Reserve an entry to preserve original-order tie-breaking
+        if utilcode not in ranks:
+            ranks[utilcode] = 0
+
+        visiting.add(utilcode)
+        original_order = len(ranks)
+        deps = utilcode.requires or ()
+        if deps:
+            dep_min = min(calculate_rank(dep) for dep in deps)
+        else:
+            dep_min = -1
+        rank = 1 + dep_min + original_order * 1e-8
+        ranks[utilcode] = rank
+        visiting.remove(utilcode)
         return rank
 
     for utilcode in utilcodes:
         calculate_rank(utilcode)
 
-    # include all recursively collected dependencies
-    return sorted(ranks, key=get_rank)
+    return sorted(ranks, key=ranks.__getitem__)
 
 
 def normalize_deps(utilcodes):
@@ -105,31 +143,61 @@ def normalize_deps(utilcodes):
         utilcode.requires = [deps.setdefault(dep, dep) for dep in utilcode.requires or ()]
 
 
-def inject_utility_code_stage_factory(context):
-    def inject_utility_code_stage(module_node):
+def inject_utility_code_stage_factory(context:"Context", internalise_c_class_entries=True):
+    def inject_utility_code_stage(module_node:"ModuleNode"):
         module_node.prepare_utility_code()
         use_utility_code_definitions(context.cython_scope, module_node.scope)
 
-        utility_code_list = module_node.scope.utility_code_list
+        module_scope = module_node.scope
+        utility_code_list = module_scope.utility_code_list
         utility_code_list[:] = sorted_utility_codes_and_deps(utility_code_list)
         normalize_deps(utility_code_list)
 
         added = set()
+        debug_prefix = "[cython][inject_utility_code_stage]"
+        # Focus debugging noise on the cfunc.to_py utility module, which is
+        # particularly bootstrap-sensitive.
+        for uc in utility_code_list:
+            uc_name = getattr(uc, "name", None)
+            if uc_name == "cfunc.to_py":
+                requires = [getattr(dep, "name", type(dep).__name__) for dep in (uc.requires or ())]
+                print(
+                    f"{debug_prefix} module={getattr(module_scope, 'full_module_name', getattr(module_scope, 'module_name', None))!r} "
+                    f"queued_utilcode id={id(uc):#x} name={uc_name!r} "
+                    f"requires={requires}",
+                    file=sys.stderr,
+                )
         # Note: the list might be extended inside the loop (if some utility code
         # pulls in other utility code, explicitly or implicitly)
         for utilcode in utility_code_list:
             if utilcode in added:
                 continue
             added.add(utilcode)
+            uc_name = getattr(utilcode, "name", None)
+            if uc_name == "cfunc.to_py":
+                print(
+                    f"{debug_prefix} module={getattr(module_scope, 'full_module_name', getattr(module_scope, 'module_name', None))!r} "
+                    f"processing_utilcode id={id(utilcode):#x} name={uc_name!r}",
+                    file=sys.stderr,
+                )
             if utilcode.requires:
                 for dep in utilcode.requires:
                     if dep not in added:
                         utility_code_list.append(dep)
-            tree = utilcode.get_tree(cython_scope=context.cython_scope)
-            if tree:
+            if tree := utilcode.get_tree(cython_scope=context.cython_scope):
+                if uc_name == "cfunc.to_py":
+                    scope_name = getattr(tree.scope, "qualified_name", getattr(tree.scope, "name", None))
+                    print(
+                        f"{debug_prefix} module={getattr(module_scope, 'full_module_name', getattr(module_scope, 'module_name', None))!r} "
+                        f"merging_tree_from id={id(utilcode):#x} name={uc_name!r} "
+                        f"utility_scope={scope_name!r}",
+                        file=sys.stderr,
+                    )
                 module_node.merge_in(tree.with_compiler_directives(),
-                                     tree.scope, stage="utility",
-                                     merge_scope=True)
+                                     tree.scope, stage="utility")
+                module_node.merge_scope(tree.scope, internalise_c_class_entries=internalise_c_class_entries)
+            elif shared_library_scope := utilcode.get_shared_library_scope(cython_scope=context.cython_scope):
+                module_scope.cimported_modules.append(shared_library_scope)
         return module_node
 
     return inject_utility_code_stage
@@ -142,11 +210,11 @@ def inject_utility_code_stage_factory(context):
 def create_pipeline(context, mode, exclude_classes=()):
     assert mode in ('pyx', 'py', 'pxd')
     from .Visitor import PrintTree
-    from .ParseTreeTransforms import WithTransform, NormalizeTree, PostParse, PxdPostParse
+    from .ParseTreeTransforms import WithTransform, NormalizeTree, PostParse, PxdPostParse, LoopLoweringTransform
     from .ParseTreeTransforms import ForwardDeclareTypes, InjectGilHandling, AnalyseDeclarationsTransform
     from .ParseTreeTransforms import AnalyseExpressionsTransform, FindInvalidUseOfFusedTypes
     from .ParseTreeTransforms import CreateClosureClasses, MarkClosureVisitor, DecoratorTransform
-    from .ParseTreeTransforms import TrackNumpyAttributes, InterpretCompilerDirectives, TransformBuiltinMethods
+    from .ParseTreeTransforms import TrackNumpyAttributes, InterpretCompilerDirectives, TransformBuiltinMethods, OverloadDispatchTransform
     from .ParseTreeTransforms import ExpandInplaceOperators, ParallelRangeTransform
     from .ParseTreeTransforms import CalculateQualifiedNamesTransform
     from .TypeInference import MarkParallelAssignments, MarkOverflowingArithmetic
@@ -155,7 +223,7 @@ def create_pipeline(context, mode, exclude_classes=()):
     from .FlowControl import ControlFlowAnalysis
     from .AnalysedTreeTransforms import AutoTestDictTransform
     from .AutoDocTransforms import EmbedSignature
-    from .Optimize import FlattenInListTransform, SwitchTransform, IterationTransform
+    from .Optimize import FlattenInListTransform, SwitchTransform, IterationTransform, PowerToSquareOptimization
     from .Optimize import EarlyReplaceBuiltinCalls, OptimizeBuiltinCalls
     from .Optimize import InlineDefNodeCalls
     from .Optimize import ConstantFolding, FinalOptimizePhase
@@ -183,6 +251,7 @@ def create_pipeline(context, mode, exclude_classes=()):
     stages = [
         NormalizeTree(context),
         PostParse(context),
+        LoopLoweringTransform(context),
         _specific_post_parse,
         TrackNumpyAttributes(),
         InterpretCompilerDirectives(context, context.compiler_directives),
@@ -195,6 +264,7 @@ def create_pipeline(context, mode, exclude_classes=()):
         RemoveUnreachableCode(context),
         ConstantFolding(),
         FlattenInListTransform(),
+        OverloadDispatchTransform(context),
         DecoratorTransform(context),
         ForwardDeclareTypes(context),
         InjectGilHandling(),
@@ -215,6 +285,7 @@ def create_pipeline(context, mode, exclude_classes=()):
         FindInvalidUseOfFusedTypes(),
         ExpandInplaceOperators(context),
         IterationTransform(context),
+        PowerToSquareOptimization(context),
         SwitchTransform(context),
         OptimizeBuiltinCalls(context),  ## Necessary?
         CreateClosureClasses(context),  ## After all lookups and type inference
@@ -253,9 +324,12 @@ def create_pyx_pipeline(context, options, result, py=False, exclude_classes=()):
         [parse_stage_factory(context)],
         create_pipeline(context, mode, exclude_classes=exclude_classes),
         test_support,
-        [inject_pxd_code_stage_factory(context),
-         inject_utility_code_stage_factory(context),
-         abort_on_errors],
+        [
+            inject_pxd_code_stage_factory(context),
+            inject_utility_code_stage_factory(context),
+            inject_utility_pxd_code_stage_factory(context),
+            abort_on_errors,
+        ],
         debug_transform,
         [generate_pyx_code_stage_factory(options, result)],
         ctest_support,
@@ -368,7 +442,21 @@ def _make_debug_phase_runner(phase_name):
         pass
 
     def run(phase, data):
-        return phase(data)
+        # Call a pipeline phase with robust error reporting. Wrap unexpected
+        # exceptions into a CompilerCrash that includes the current module
+        # position so that errors show as file:line:col. This improves
+        # tooling/IDE integration compared to a raw Python traceback.
+        try:
+            return phase(data)
+        except CompileError:
+            raise
+        except AbortError:
+            raise
+        except Exception as e:
+            from sys import exc_info
+            phase_name = getattr(phase, '__name__', type(phase).__name__)
+            pos = getattr(data, 'pos', None)
+            raise Errors.CompilerCrash(pos, phase_name, '', e, exc_info()[2])
 
     run.__name__ = run.__qualname__ = phase_name
     _pipeline_entry_points[phase_name] = run

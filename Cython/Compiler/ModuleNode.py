@@ -3,6 +3,7 @@
 #
 
 
+from typing import TYPE_CHECKING
 import cython
 cython.declare(Naming=object, Options=object, PyrexTypes=object, TypeSlots=object,
                error=object, warning=object, py_object_type=object, UtilityCode=object,
@@ -26,6 +27,7 @@ from . import Options
 from . import TypeSlots
 from . import PyrexTypes
 from . import Pythran
+from . import Directives
 
 from .Errors import error, warning, CompileError, format_position
 from .PyrexTypes import py_object_type
@@ -34,6 +36,9 @@ from .Code import UtilityCode, IncludeCode, TempitaUtilityCode
 from .StringEncoding import EncodedString, encoded_string_or_bytes_literal
 from .Pythran import has_np_pythran
 
+if TYPE_CHECKING:
+    from .Symtab import ModuleScope
+    from .Options import GlobalDirectives
 
 def replace_suffix_encoded(path, newsuf):
     # calls replace suffix and returns a EncodedString or BytesLiteral with the encoding set
@@ -46,7 +51,7 @@ def as_encoded_filename(path):
     return encoded_string_or_bytes_literal(path, sys.getfilesystemencoding())
 
 
-def check_c_declarations_pxd(module_node):
+def check_c_declarations_pxd(module_node: "ModuleNode"):
     module_node.scope.check_c_classes_pxd()
     return module_node
 
@@ -58,7 +63,7 @@ def check_c_declarations(module_node):
 
 
 def generate_c_code_config(env, options):
-    if Options.annotate or options.annotate:
+    if Directives.annotate or options.annotate:
         emit_linenums = False
     else:
         emit_linenums = options.emit_linenums
@@ -120,17 +125,19 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
     #  directives           Top-level compiler directives
 
     child_attrs = ["body"]
-    directives = None
+    directives: "GlobalDirectives"
+    scope: "ModuleScope"
+    body: Nodes.StatListNode
     # internal - used in merging
-    pxd_stats = None
-    utility_code_stats = None
+    pxd_stats: Nodes.StatListNode | None = None
+    utility_code_stats: Nodes.StatListNode | None = None
 
     @property
     def local_scope(self):
         # Make the module node (and its init function) look like a FuncDefNode.
         return self.scope
 
-    def merge_in(self, tree, scope, stage, merge_scope=False):
+    def merge_in(self, tree, scope, stage):
         # Merges in the contents of another tree, and possibly scope. With the
         # current implementation below, this must be done right prior
         # to code generation.
@@ -173,13 +180,13 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
 
         extend_if_not_in(self.scope.included_files, scope.included_files)
 
-        if merge_scope:
-            # Ensure that we don't generate import code for these entries!
-            for entry in scope.c_class_entries:
-                entry.type.module_name = self.full_module_name
-                entry.type.scope.directives["internal"] = True
+    def merge_scope(self, scope, internalise_c_class_entries=True):
+        # Ensure that we don't generate import code for these entries!
+        for entry in scope.c_class_entries:
+            entry.type.module_name = self.full_module_name
+            entry.type.scope.directives["internal"] = internalise_c_class_entries
 
-            self.scope.merge_in(scope)
+        self.scope.merge_in(scope)
 
     def with_compiler_directives(self):
         # When merging a utility code module into the user code we need to preserve
@@ -193,9 +200,9 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
             Pythran.include_pythran_generic(env)
         if self.directives:
             env.old_style_globals = self.directives['old_style_globals']
-        if not Options.docstrings:
+        if not Directives.docstrings:
             env.doc = self.doc = None
-        elif Options.embed_pos_in_docstring:
+        elif Directives.embed_pos_in_docstring:
             env.doc = EncodedString('File: %s (starting at line %s)' % Nodes.relative_position(self.pos))
             if self.doc is not None:
                 env.doc = EncodedString(env.doc + '\n' + self.doc)
@@ -205,6 +212,15 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         env.directives = self.directives
 
         self.body.analyse_declarations(env)
+
+        cy_pymutex_type = PyrexTypes.get_cy_pymutex_type()
+        if env.find_shared_usages_of_type(lambda tp: tp is cy_pymutex_type):
+            # Be very suspicious of cython locks that are shared.
+            # They have the potential to cause ABI issues.
+            self.scope.use_utility_code(
+                UtilityCode.load_cached(
+                    "CythonPyMutexPublicCheck", "Synchronization.c"
+                ))
 
     def prepare_utility_code(self):
         # prepare any utility code that must be created before code generation
@@ -471,8 +487,8 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         self.assure_safe_target(result.c_file, allow_failed=True)
         modules = self.referenced_modules
 
-        if Options.annotate or options.annotate:
-            show_entire_c_code = Options.annotate == "fullc" or options.annotate == "fullc"
+        if Directives.annotate or options.annotate:
+            show_entire_c_code = Directives.annotate == "fullc" or options.annotate == "fullc"
             rootwriter = Annotate.AnnotationCCodeWriter(
                 show_entire_c_code=show_entire_c_code,
                 source_desc=self.compilation_source.source_desc,
@@ -490,10 +506,10 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         globalstate.initialize_main_c_code()
         h_code = globalstate['h_code']
 
-        self.generate_module_preamble(env, options, modules, result.embedded_metadata, h_code)
-
         globalstate.module_pos = self.pos
         globalstate.directives = self.directives
+
+        self.generate_module_preamble(env, options, modules, result.embedded_metadata, h_code)
 
         globalstate.use_utility_code(refnanny_utility_code)
 
@@ -536,7 +552,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         # init_globals is inserted before this
         self.generate_module_init_func(modules[:-1], env, globalstate['init_module'])
         self.generate_module_cleanup_func(env, globalstate['cleanup_module'])
-        if Options.embed:
+        if Directives.embed:
             self.generate_main_method(env, globalstate['main_method'])
         self.generate_filename_table(globalstate['filename_table'])
 
@@ -557,13 +573,13 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         result.c_file_generated = 1
         if options.gdb_debug:
             self._serialize_lineno_map(env, rootwriter)
-        if Options.annotate or options.annotate:
+        if Directives.annotate or options.annotate:
             self._generate_annotations(rootwriter, result, options)
 
     def _generate_annotations(self, rootwriter, result, options):
         self.annotate(rootwriter)
 
-        coverage_xml_filename = Options.annotate_coverage_xml or options.annotate_coverage_xml
+        coverage_xml_filename = Directives.annotate_coverage_xml or options.annotate_coverage_xml
         if coverage_xml_filename and os.path.exists(coverage_xml_filename):
             import xml.etree.ElementTree as ET
             coverage_xml = ET.parse(coverage_xml_filename).getroot()
@@ -572,7 +588,9 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         else:
             coverage_xml = None
 
-        rootwriter.save_annotation(result.main_source_file, result.c_file, coverage_xml=coverage_xml)
+        c_file_for_annotation = None if options.annotate_no_c_link else result.c_file
+        # Default to Markdown annotation output
+        rootwriter.save_annotation_md(result.main_source_file, c_file_for_annotation, coverage_xml=coverage_xml)
 
         # if we included files, additionally generate one annotation file for each
         if not self.scope.included_files:
@@ -596,7 +614,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
                     import errno
                     if e.errno != errno.EEXIST:
                         raise
-            rootwriter.save_annotation(source_file, target_file, coverage_xml=coverage_xml)
+            rootwriter.save_annotation_md(source_file, target_file, coverage_xml=coverage_xml)
 
     def _serialize_lineno_map(self, env, ccodewriter):
         tb = env.context.gdb_debug_outputwriter
@@ -903,7 +921,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         code.putln('')
         code.putln('#if !CYTHON_USE_MODULE_STATE')
         code.putln('static PyObject *%s = NULL;' % env.module_cname)
-        if Options.pre_import is not None:
+        if Directives.pre_import is not None:
             code.putln('static PyObject *%s;' % Naming.preimport_cname)
         code.putln('#endif')
 
@@ -913,6 +931,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         code.putln('static const char *%s;' % Naming.filename_cname)
 
         env.use_utility_code(UtilityCode.load_cached("FastTypeChecks", "ModuleSetupCode.c"))
+        env.use_utility_code(UtilityCode.load("GetRuntimeVersion", "ModuleSetupCode.c"))
         if has_np_pythran(env):
             env.use_utility_code(UtilityCode.load_cached("PythranConversion", "CppSupport.cpp"))
 
@@ -956,7 +975,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
             code.putln_openmp("#include <omp.h>")
 
     def generate_filename_table(self, code):
-        from os.path import isabs, basename
+        from os.path import isabs
         code.putln("")
         code.putln("static const char* const %s[] = {" % Naming.filetable_cname)
         if code.globalstate.filename_list:
@@ -1431,7 +1450,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
 
     def generate_cfunction_declarations(self, env, code, definition):
         for entry in env.cfunc_entries:
-            from_pyx = Options.cimport_from_pyx and not entry.visibility == 'extern'
+            from_pyx = Directives.cimport_from_pyx and not entry.visibility == 'extern'
             if (entry.used
                     or entry.visibility == 'public'
                     or entry.api
@@ -1522,6 +1541,19 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
                 type.declaration_code("p"),
                 type.empty_declaration_code()))
 
+    @staticmethod
+    def generate_freelist_condition(code, size_check, type_cname, type):
+        code.globalstate.use_utility_code(
+            UtilityCode.load_cached("CheckTypeForFreelists", "ExtensionTypes.c"))
+        if type.is_final_type:
+            freelist_check = '__PYX_CHECK_FINAL_TYPE_FOR_FREELISTS'
+        else:
+            freelist_check = '__PYX_CHECK_TYPE_FOR_FREELISTS'
+        obj_struct = type.declaration_code("", deref=True)
+        typeptr_cname = code.name_in_slot_module_state(type.typeptr_cname)
+        code.putln(
+            f"if (likely((int)({size_check}) & {freelist_check}({type_cname}, {typeptr_cname}, sizeof({obj_struct}))))")
+
     def generate_new_function(self, scope, code, cclass_entry):
         tp_slot = TypeSlots.ConstructorSlot("tp_new", "__cinit__")
         slot_func = scope.mangle_internal("tp_new")
@@ -1537,7 +1569,10 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         if scope.is_internal:
             # internal classes (should) never need None inits, normal zeroing will do
             py_attrs = []
-        cpp_constructable_attrs = [entry for entry in scope.var_entries if entry.type.needs_cpp_construction]
+        explicitly_constructable_attrs = [
+            entry for entry in scope.var_entries
+            if entry.type.needs_explicit_construction(scope)
+        ]
 
         cinit_func_entry = scope.lookup_here("__cinit__")
         if cinit_func_entry and not cinit_func_entry.is_special:
@@ -1571,7 +1606,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
 
         need_self_cast = (type.vtabslot_cname or
                           (py_buffers or memoryview_slices or py_attrs) or
-                          cpp_constructable_attrs)
+                          explicitly_constructable_attrs)
         if need_self_cast:
             code.putln("%s;" % scope.parent_type.declaration_code("p"))
         if base_type:
@@ -1584,45 +1619,43 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
             code.putln("PyObject *o = %s(t, a, k);" % tp_new)
         else:
             code.putln("PyObject *o;")
-            code.putln("#if CYTHON_COMPILING_IN_LIMITED_API")
-            code.putln("allocfunc alloc_func = (allocfunc)PyType_GetSlot(t, Py_tp_alloc);")
-            code.putln("o = alloc_func(t, 0);")
-            code.putln("#else")
             if freelist_size:
                 code.globalstate.use_utility_code(
                     UtilityCode.load_cached("IncludeStringH", "StringTools.c"))
-                if is_final_type:
-                    type_safety_check = ''
-                else:
-                    type_safety_check = ' & (int)(!__Pyx_PyType_HasFeature(t, (Py_TPFLAGS_IS_ABSTRACT | Py_TPFLAGS_HEAPTYPE)))'
-                obj_struct = type.declaration_code("", deref=True)
                 code.putln("#if CYTHON_USE_FREELISTS")
-                code.putln(
-                    "if (likely((int)(%s > 0) & (int)(t->tp_basicsize == sizeof(%s))%s)) {" % (
-                        code.name_in_slot_module_state(freecount_name), obj_struct, type_safety_check))
+                freecount_name = code.name_in_slot_module_state(freecount_name)
+                freelist_name = code.name_in_slot_module_state(freelist_name)
+                self.generate_freelist_condition(code, f"{freecount_name} > 0", "t", type)
+                code.putln("{")
                 code.putln("o = (PyObject*)%s[--%s];" % (
-                    code.name_in_slot_module_state(freelist_name),
-                    code.name_in_slot_module_state(freecount_name)))
+                    freelist_name,
+                    freecount_name))
+                obj_struct = type.declaration_code("", deref=True)
+                code.putln("#if CYTHON_USE_TYPE_SPECS")
+                # We still hold a reference to the type object held by the previous
+                # user of the freelist object - release it.
+                code.putln("Py_DECREF(Py_TYPE(o));")
+                code.putln("#endif")
                 code.putln("memset(o, 0, sizeof(%s));" % obj_struct)
+                code.putln("#if CYTHON_COMPILING_IN_LIMITED_API")
+                # Although PyObject_INIT should be part of the Limited API, it causes
+                # link errors on some combinations of Python versions and OSs.
+                code.putln("(void) PyObject_Init(o, t);")
+                code.putln("#else")
                 code.putln("(void) PyObject_INIT(o, t);")
+                code.putln("#endif")
                 if scope.needs_gc():
                     code.putln("PyObject_GC_Track(o);")
                 code.putln("} else")
                 code.putln("#endif")
                 code.putln("{")
-            if not is_final_type:
-                code.putln("if (likely(!__Pyx_PyType_HasFeature(t, Py_TPFLAGS_IS_ABSTRACT))) {")
-            code.putln("o = (*t->tp_alloc)(t, 0);")
-            if not is_final_type:
-                code.putln("} else {")
-                code.putln("o = (PyObject *) PyBaseObject_Type.tp_new(t, %s->%s, 0);" % (
-                    Naming.modulestateglobal_cname, Naming.empty_tuple))
-                code.putln("}")
+            code.globalstate.use_utility_code(
+                UtilityCode.load_cached("AllocateExtensionType", "ExtensionTypes.c")
+            )
+            code.putln(f"o = __Pyx_AllocateExtensionType(t, {is_final_type:d});")
         code.putln("if (unlikely(!o)) return 0;")
         if freelist_size and not base_type:
             code.putln('}')
-        if not base_type:
-            code.putln("#endif")
         if need_self_cast:
             code.putln("p = %s;" % type.cast_code("o"))
         #if need_self_cast:
@@ -1643,13 +1676,9 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
                 type.vtabslot_cname,
                 struct_type_cast, type.vtabptr_cname))
 
-        for entry in cpp_constructable_attrs:
-            if entry.is_cpp_optional:
-                decl_code = entry.type.cpp_optional_declaration_code("")
-            else:
-                decl_code = entry.type.empty_declaration_code()
-            code.putln("new((void*)&(p->%s)) %s();" % (
-                entry.cname, decl_code))
+        for entry in explicitly_constructable_attrs:
+            entry.type.generate_explicit_construction(
+                code, entry, extra_access_code="p->")
 
         for entry in py_attrs:
             if entry.name == "__dict__":
@@ -1736,10 +1765,12 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
             dict_slot = None
 
         _, (py_attrs, _, memoryview_slices) = scope.get_refcounted_entries()
-        cpp_destructable_attrs = [entry for entry in scope.var_entries
-                           if entry.type.needs_cpp_construction]
+        explicitly_destructable_attrs = [
+            entry for entry in scope.var_entries
+            if entry.type.needs_explicit_destruction(scope)
+        ]
 
-        if py_attrs or cpp_destructable_attrs or memoryview_slices or weakref_slot or dict_slot:
+        if py_attrs or explicitly_destructable_attrs or memoryview_slices or weakref_slot or dict_slot:
             self.generate_self_cast(scope, code)
 
         if not is_final_type or scope.may_have_finalize():
@@ -1751,9 +1782,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
                 finalised_check = (
                     '(!PyType_IS_GC(Py_TYPE(o)) || !__Pyx_PyObject_GC_IsFinalized(o))')
             code.putln(
-                "if (unlikely("
-                "(PY_VERSION_HEX >= 0x03080000 || __Pyx_PyType_HasFeature(Py_TYPE(o), Py_TPFLAGS_HAVE_FINALIZE))"
-                " && __Pyx_PyObject_GetSlot(o, tp_finalize, destructor)) && %s) {" % finalised_check)
+                "if (unlikely(__Pyx_PyObject_GetSlot(o, tp_finalize, destructor)) && %s) {" % finalised_check)
 
             code.putln("if (__Pyx_PyObject_GetSlot(o, tp_dealloc, destructor) == %s) {" % slot_func_cname)
             # if instance was resurrected by finaliser, return
@@ -1786,8 +1815,8 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         if dict_slot:
             code.putln("if (p->__dict__) PyDict_Clear(p->__dict__);")
 
-        for entry in cpp_destructable_attrs:
-            code.putln("__Pyx_call_destructor(p->%s);" % entry.cname)
+        for entry in explicitly_destructable_attrs:
+            entry.type.generate_explicit_destruction(code, entry, extra_access_code="p->")
 
         for entry in (py_attrs + memoryview_slices):
             code.put_xdecref_clear("p->%s" % entry.cname, entry.type, nanny=False,
@@ -1833,38 +1862,39 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         else:
             freelist_size = scope.directives.get('freelist', 0)
             if freelist_size:
-                freelist_name = scope.mangle_internal(Naming.freelist_name)
-                freecount_name = scope.mangle_internal(Naming.freecount_name)
-
-                if is_final_type:
-                    type_safety_check = ''
-                else:
-                    type_safety_check = (
-                        ' & (int)(!__Pyx_PyType_HasFeature(Py_TYPE(o), (Py_TPFLAGS_IS_ABSTRACT | Py_TPFLAGS_HEAPTYPE)))')
+                freelist_name = code.name_in_slot_module_state(
+                    scope.mangle_internal(Naming.freelist_name))
+                freecount_name = code.name_in_slot_module_state(
+                    scope.mangle_internal(Naming.freecount_name))
 
                 type = scope.parent_type
                 code.putln("#if CYTHON_USE_FREELISTS")
-                code.putln(
-                    "if (((int)(%s < %d) & (int)(Py_TYPE(o)->tp_basicsize == sizeof(%s))%s)) {" % (
-                        code.name_in_slot_module_state(freecount_name),
-                        freelist_size,
-                        type.declaration_code("", deref=True),
-                        type_safety_check))
+                self.generate_freelist_condition(
+                    code, f"{freecount_name} < {freelist_size}",
+                    "Py_TYPE(o)", type)
+                code.putln("{")
                 code.putln("%s[%s++] = %s;" % (
-                    code.name_in_slot_module_state(freelist_name),
-                    code.name_in_slot_module_state(freecount_name),
+                    freelist_name,
+                    freecount_name,
                     type.cast_code("o")))
+                # Deliberately don't DECREF the type object for objects returned to the freelist:
+                # we hold a reference to the type to allow them to be cleaned up properly.
                 code.putln("} else")
                 code.putln("#endif")
                 code.putln("{")
+            code.putln("PyTypeObject *tp = Py_TYPE(o);")
             code.putln("#if CYTHON_USE_TYPE_SLOTS")
             # Asking for PyType_GetSlot(..., Py_tp_free) seems to cause an error in pypy
-            code.putln("(*Py_TYPE(o)->tp_free)(o);")
+            code.putln("(*tp->tp_free)(o);")
             code.putln("#else")
             code.putln("{")
-            code.putln("freefunc tp_free = (freefunc)PyType_GetSlot(Py_TYPE(o), Py_tp_free);")
+            code.putln("freefunc tp_free = (freefunc)PyType_GetSlot(tp, Py_tp_free);")
             code.putln("if (tp_free) tp_free(o);")
             code.putln("}")
+            code.putln("#endif")
+            code.putln("#if CYTHON_USE_TYPE_SPECS")
+            # Undo the INCREF of the type object in tp_new
+            code.putln("Py_DECREF(tp);")
             code.putln("#endif")
             if freelist_size:
                 code.putln("}")
@@ -1996,7 +2026,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
 
         code.start_slotfunc(scope, PyrexTypes.c_returncode_type, "tp_clear", f"{unused}PyObject *o")
 
-        if py_attrs and Options.clear_to_none:
+        if py_attrs and Directives.clear_to_none:
             code.putln("PyObject* tmp;")
 
         if py_attrs or py_buffers:
@@ -2033,7 +2063,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
                 code.globalstate.use_utility_code(
                     UtilityCode.load_cached("CallNextTpClear", "ExtensionTypes.c"))
 
-        if Options.clear_to_none:
+        if Directives.clear_to_none:
             for entry in py_attrs:
                 name = "p->%s" % entry.cname
                 code.putln("tmp = ((PyObject*)%s);" % name)
@@ -2722,6 +2752,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         dict_name = dict_attr.cname
 
         code.putln("")
+        code.putln("#if CYTHON_COMPILING_IN_LIMITED_API && __PYX_LIMITED_VERSION_HEX < 0x030A0000")
         code.putln("static PyObject *%s(PyObject *o, CYTHON_UNUSED void *x) {" % func_name)
         self.generate_self_cast(scope, code)
         code.putln("if (unlikely(!p->%s)){" % dict_name)
@@ -2730,6 +2761,12 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         code.putln("Py_XINCREF(p->%s);" % dict_name)
         code.putln("return p->%s;" % dict_name)
         code.putln("}")
+        code.putln("#else")
+        # PyObject_GenericGetDict has the advantage that it's freethreading thread-safe,
+        # handles both managed and unmanaged dicts (in case we switch to managed in future),
+        # and can potentially do optimizations with per-class shared keys.
+        code.putln(f"#define {func_name} PyObject_GenericGetDict")
+        code.putln("#endif")
 
     def generate_getset_table(self, env, code):
         if env.property_entries:
@@ -2844,17 +2881,13 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         code.putln('PyObject *%s;' % Naming.empty_tuple)
         code.putln('PyObject *%s;' % Naming.empty_bytes)
         code.putln('PyObject *%s;' % Naming.empty_unicode)
-        if Options.pre_import is not None:
+        if Directives.pre_import is not None:
             code.putln('PyObject *%s;' % Naming.preimport_cname)
-        for type_cname, used_name in Naming.used_types_and_macros:
-            code.putln('#ifdef %s' % used_name)
-            code.putln('PyTypeObject *%s;' % type_cname)
-            code.putln('#endif')
 
     def generate_module_state_end(self, env, modules, globalstate):
         module_state = globalstate['module_state_end']
-        module_state_clear = globalstate['module_state_clear']
-        module_state_traverse = globalstate['module_state_traverse']
+        module_state_clear = globalstate['module_state_clear_end']
+        module_state_traverse = globalstate['module_state_traverse_end']
         module_state.putln('} %s;' % Naming.modulestatetype_cname)
         module_state.putln('')
         globalstate.use_utility_code(
@@ -2888,7 +2921,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         module_state.putln('#else')
         module_state.putln('    {0};')
         module_state.putln('#endif')
-        module_state.putln('static %s *%s = &%s_static;' % (
+        module_state.putln('static %s * const %s = &%s_static;' % (
             Naming.modulestatetype_cname,
             Naming.modulestateglobal_cname,
             Naming.modulestateglobal_cname
@@ -2919,14 +2952,6 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
             Naming.empty_bytes)
         code.putln('Py_CLEAR(clear_module_state->%s);' %
             Naming.empty_unicode)
-        code.putln('#ifdef __Pyx_CyFunction_USED')
-        code.putln('Py_CLEAR(clear_module_state->%s);' %
-            Naming.cyfunction_type_cname)
-        code.putln('#endif')
-        code.putln('#ifdef __Pyx_FusedFunction_USED')
-        code.putln('Py_CLEAR(clear_module_state->%s);' %
-            Naming.fusedfunction_type_cname)
-        code.putln('#endif')
         code.putln("#if CYTHON_PEP489_MULTI_PHASE_INIT")
         # In this case we have to remove the module from our lookup table ourself
         # because Python isn't going to do it.
@@ -2944,12 +2969,6 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         code.putln(f'__Pyx_VISIT_CONST(traverse_module_state->{Naming.empty_tuple});')
         code.putln(f'__Pyx_VISIT_CONST(traverse_module_state->{Naming.empty_bytes});')
         code.putln(f'__Pyx_VISIT_CONST(traverse_module_state->{Naming.empty_unicode});')
-        code.putln('#ifdef __Pyx_CyFunction_USED')
-        code.putln(f'Py_VISIT(traverse_module_state->{Naming.cyfunction_type_cname});')
-        code.putln('#endif')
-        code.putln('#ifdef __Pyx_FusedFunction_USED')
-        code.putln(f'Py_VISIT(traverse_module_state->{Naming.fusedfunction_type_cname});')
-        code.putln('#endif')
 
     def generate_module_init_func(self, imported_modules, env, code):
         subfunction = self.mod_init_subfunction(self.pos, self.scope, code)
@@ -2979,14 +2998,9 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
             code.putln("#endif")
         code.putln(header3)
 
-        code.globalstate.use_utility_code(
-            UtilityCode.load("PyVersionSanityCheck", "ModuleSetupCode.c")
-        )
-
         # CPython 3.5+ supports multi-phase module initialisation (gives access to __spec__, __file__, etc.)
         code.putln("#if CYTHON_PEP489_MULTI_PHASE_INIT")
         code.putln("{")
-        code.putln("if (__Pyx_VersionSanityCheck() < 0) return NULL;")
         code.putln("return PyModuleDef_Init(&%s);" % Naming.pymoduledef_cname)
         code.putln("}")
 
@@ -3002,11 +3016,6 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
 
         # start of module init/exec function (pre/post PEP 489)
         code.putln("{")
-
-        code.putln("#if !CYTHON_PEP489_MULTI_PHASE_INIT")
-        code.putln("if (__Pyx_VersionSanityCheck() < 0) return NULL;")
-        code.putln("#endif")
-
         code.putln('int stringtab_initialized = 0;')
         code.putln("#if CYTHON_USE_MODULE_STATE")
         code.putln('int pystate_addmodule_run = 0;')
@@ -3056,7 +3065,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         code.put_code_here(refnanny_import_code)
         code.put_setup_refcount_context(modinit_func_name)
 
-        env.use_utility_code(UtilityCode.load("GetRuntimeVersion", "ModuleSetupCode.c"))
+        code.putln("__Pyx_init_runtime_version();")
         env.use_utility_code(UtilityCode.load("CheckBinaryVersion", "ModuleSetupCode.c"))
         code.put_error_if_neg(self.pos, "__Pyx_check_binary_version("
                                         "__PYX_LIMITED_VERSION_HEX, "
@@ -3064,9 +3073,6 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
                                         "CYTHON_COMPILING_IN_LIMITED_API)"
         )
 
-        code.putln("#ifdef __Pxy_PyFrame_Initialize_Offsets")
-        code.putln("__Pxy_PyFrame_Initialize_Offsets();")
-        code.putln("#endif")
         empty_tuple = code.name_in_main_c_code_module_state(Naming.empty_tuple)
         code.putln("%s = PyTuple_New(0); %s" % (
             empty_tuple, code.error_goto_if_null(empty_tuple, self.pos)))
@@ -3077,10 +3083,6 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         code.putln("%s = PyUnicode_FromStringAndSize(\"\", 0); %s" % (
             empty_unicode, code.error_goto_if_null(empty_unicode, self.pos)))
 
-        for ext_type in ('CyFunction', 'FusedFunction', 'Coroutine', 'Generator', 'AsyncGen'):
-            code.putln("#ifdef __Pyx_%s_USED" % ext_type)
-            code.put_error_if_neg(self.pos, "__pyx_%s_init(%s)" % (ext_type, env.module_cname))
-            code.putln("#endif")
 
         code.putln("/*--- Library function declarations ---*/")
         if env.directives['np_pythran']:
@@ -3101,7 +3103,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         # set up __file__ and __path__, then add the module to sys.modules
         self.generate_module_import_setup(env, code)
 
-        if Options.cache_builtins:
+        if Directives.cache_builtins:
             code.putln("/*--- Builtin init code ---*/")
             code.put_error_if_neg(
                 self.pos,
@@ -3115,6 +3117,11 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         code.put_error_if_neg(
             self.pos,
             f"__Pyx_CreateCodeObjects({Naming.modulestatevalue_cname})")
+
+        # Try to set up a global C-level dispatcher, if provided by mbcore.
+        code.globalstate.use_utility_code(UtilityCode.load_cached("DispatchProbe", "Dispatch.c"))
+        code.putln("/* Attempt to import and register a global C dispatcher (optional) */")
+        code.putln("__Pyx_TrySetupCDispatcher();")
 
         code.putln("/*--- Global type/function init code ---*/")
 
@@ -3166,7 +3173,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         self.generate_wrapped_entries_code(env, code)
         code.putln()
 
-        if Options.generate_cleanup_code:
+        if Directives.generate_cleanup_code:
             code.globalstate.use_utility_code(
                 UtilityCode.load_cached("RegisterModuleCleanup", "ModuleSetupCode.c"))
             code.putln("if (__Pyx_RegisterCleanup()) %s" % code.error_goto(self.pos))
@@ -3260,7 +3267,12 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
                 code.putln("/*--- %s ---*/" % self.description)
                 return code
 
-            def __exit__(self, *args):
+            def __exit__(self, exc_type, exc_value, exc_tb):
+                if exc_type is not None:
+                    # Don't generate any code or do any validations on errors.
+                    self.tempdecl_code = self.call_code = None
+                    return
+
                 code = function_code
                 code.put_finish_refcount_context()
                 code.putln("return 0;")
@@ -3349,7 +3361,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         code.putln("}")
 
     def generate_module_cleanup_func(self, env, code):
-        if not Options.generate_cleanup_code:
+        if not Directives.generate_cleanup_code:
             return
 
         code.putln('static void %s(CYTHON_UNUSED PyObject *self) {' %
@@ -3368,7 +3380,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         code.putln("#endif")
         code.putln(f"{Naming.modulestatevalue_cname} = __Pyx_PyModule_GetState(self);")
 
-        if Options.generate_cleanup_code >= 2:
+        if Directives.generate_cleanup_code >= 2:
             code.putln("/*--- Global cleanup code ---*/")
             rev_entries = list(env.var_entries)
             rev_entries.reverse()
@@ -3384,8 +3396,10 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
                             entry_cname, entry.type,
                             clear_before_decref=True,
                             nanny=False)
+                    if entry.type.needs_explicit_destruction(env):
+                        entry.type.generate_explicit_destruction(code, entry)
         code.putln(f"__Pyx_CleanupGlobals({Naming.modulestatevalue_cname});")
-        if Options.generate_cleanup_code >= 3:
+        if Directives.generate_cleanup_code >= 3:
             code.putln("/*--- Type import cleanup code ---*/")
             for ext_type in sorted(env.types_imported, key=operator.attrgetter('typeptr_cname')):
                 typeptr_cname = code.name_in_main_c_code_module_state(ext_type.typeptr_cname)
@@ -3393,7 +3407,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
                     typeptr_cname, ext_type,
                     clear_before_decref=True,
                     nanny=False)
-        if Options.cache_builtins:
+        if Directives.cache_builtins:
             code.putln("/*--- Builtin cleanup code ---*/")
             for entry in env.cached_builtins:
                 code.put_xdecref_clear(
@@ -3419,12 +3433,17 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
                 code.putln("while (%s > 0) {" % freecount_name)
                 code.putln("PyObject* o = (PyObject*)%s[--%s];" % (
                     freelist_name, freecount_name))
+                code.putln("PyTypeObject *tp = Py_TYPE(o);")
                 code.putln("#if CYTHON_USE_TYPE_SLOTS")
-                code.putln("(*Py_TYPE(o)->tp_free)(o);")
+                code.putln("(*tp->tp_free)(o);")
                 code.putln("#else")
                 # Asking for PyType_GetSlot(..., Py_tp_free) seems to cause an error in pypy
-                code.putln("freefunc tp_free = (freefunc)PyType_GetSlot(Py_TYPE(o), Py_tp_free);")
+                code.putln("freefunc tp_free = (freefunc)PyType_GetSlot(tp, Py_tp_free);")
                 code.putln("if (tp_free) tp_free(o);")
+                code.putln("#endif")
+                code.putln("#if CYTHON_USE_TYPE_SPECS")
+                # Release the reference that "o" owned for its type.
+                code.putln("Py_DECREF(tp);")
                 code.putln("#endif")
                 code.putln("}")
                 code.putln('#endif')  # CYTHON_USE_FREELISTS
@@ -3441,7 +3460,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
 #            if entry.type.is_pyobject and entry.used:
 #                code.putln("Py_DECREF(%s); %s = 0;" % (
 #                    code.entry_as_pyobject(entry), entry.cname))
-        if Options.pre_import is not None:
+        if Directives.pre_import is not None:
             code.put_decref_clear(Naming.preimport_cname, py_object_type,
                                   nanny=False, clear_before_decref=True)
         for cname in [Naming.cython_runtime_cname, Naming.builtins_cname]:
@@ -3453,17 +3472,19 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
 
     def generate_main_method(self, env, code):
         module_is_main = self.is_main_module_flag_cname()
-        if Options.embed == "main":
+        if Directives.embed == "main":
             wmain = "wmain"
         else:
-            wmain = Options.embed
-        main_method = UtilityCode.load_cached("MainFunction", "Embed.c")
-        code.globalstate.use_utility_code(
-            main_method.specialize(
-                module_name=env.module_name,
-                module_is_main=module_is_main,
-                main_method=Options.embed,
-                wmain_method=wmain))
+            wmain = Directives.embed
+        main_method = TempitaUtilityCode.load_cached(
+                "MainFunction", "Embed.c",
+                context={
+                    'module_name': env.module_name,
+                    'module_is_main': module_is_main,
+                    'main_method': Directives.embed,
+                    'wmain_method': wmain,
+                    'embed_modules': tuple(Directives.embed_modules)})
+        code.globalstate.use_utility_code(main_method)
 
     def punycode_module_name(self, prefix, name):
         # adapted from PEP483
@@ -3496,7 +3517,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
             doc = "%s" % code.get_string_const(env.doc)
         else:
             doc = "0"
-        if Options.generate_cleanup_code:
+        if Directives.generate_cleanup_code:
             cleanup_func = "(freefunc)%s" % Naming.cleanup_cname
         else:
             cleanup_func = 'NULL'
@@ -3516,6 +3537,14 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
                       if env.directives["freethreading_compatible"]
                       else "Py_MOD_GIL_USED")
         code.putln("{Py_mod_gil, %s}," % gil_option)
+        code.putln("#endif")
+        code.putln("#if PY_VERSION_HEX >= 0x030C0000 && CYTHON_USE_MODULE_STATE")
+        subinterp_option = {
+            'no': 'Py_MOD_MULTIPLE_INTERPRETERS_NOT_SUPPORTED',
+            'shared_gil': 'Py_MOD_MULTIPLE_INTERPRETERS_SUPPORTED',
+            'own_gil': 'Py_MOD_PER_INTERPRETER_GIL_SUPPORTED'
+        }.get(env.directives["subinterpreters_compatible"])
+        code.putln("{Py_mod_multiple_interpreters, %s}," % subinterp_option)
         code.putln("#endif")
         code.putln("{0, NULL}")
         code.putln("};")
@@ -3635,11 +3664,11 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
                 env.module_cname,
                 builtins_cname,
                 code.error_goto(self.pos)))
-        if Options.pre_import is not None:
+        if Directives.pre_import is not None:
             code.putln(
                 '%s = __Pyx_PyImport_AddModuleRef("%s"); %s' % (
                     Naming.preimport_cname,
-                    Options.pre_import,
+                    Directives.pre_import,
                     code.error_goto_if_null(Naming.preimport_cname, self.pos)))
 
     def generate_global_init_code(self, env, code):
@@ -3649,6 +3678,9 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
             if entry.visibility != 'extern':
                 if entry.used:
                     entry.type.global_init_code(entry, code)
+                if entry.type.needs_explicit_construction(env):
+                    # TODO - this is slightly redundant with global_init_code
+                    entry.type.generate_explicit_construction(code, entry)
 
     def generate_wrapped_entries_code(self, env, code):
         for name, entry in sorted(env.entries.items()):
@@ -3669,43 +3701,57 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
                         code.error_goto(entry.pos)))
                 code.putln("}")
 
+    def _generate_export_code(self, all_entries, utility_code_name, code):
+        # Generic function/pointer export implementation as generator.
+        entries = [
+            entry for entry in all_entries
+            if entry.api or entry.defined_in_pxd or (Directives.cimport_from_pyx and entry.visibility != 'extern')
+        ]
+        if not entries:
+            return
+
+        api_dict = code.funcstate.allocate_temp(py_object_type, manage_ref=True)
+        code.globalstate.use_utility_code(
+            UtilityCode.load_cached("GetApiDict", "ImportExport.c"))
+        code.putln(
+            f"{api_dict} = __Pyx_ApiExport_GetApiDict(); "
+            f"{code.error_goto_if_null(api_dict, self.pos)}"
+        )
+        code.put_gotref(api_dict, py_object_type)
+
+        code.globalstate.use_utility_code(
+            UtilityCode.load_cached(utility_code_name, "ImportExport.c"))
+
+        for entry in entries:
+            name = code.intern_identifier(entry.name)
+            yield (entry, name, api_dict)
+
+        code.put_decref_clear(api_dict, py_object_type)
+        code.funcstate.release_temp(api_dict)
+
     def generate_c_variable_export_code(self, env, code):
-        # Generate code to create PyCFunction wrappers for exported C functions.
-        entries = []
-        for entry in env.var_entries:
-            if (entry.api
-                    or entry.defined_in_pxd
-                    or (Options.cimport_from_pyx and not entry.visibility == 'extern')):
-                entries.append(entry)
-        if entries:
-            env.use_utility_code(UtilityCode.load_cached("VoidPtrExport", "ImportExport.c"))
-            for entry in entries:
-                signature = entry.type.empty_declaration_code()
-                name = code.intern_identifier(entry.name)
-                code.putln('if (__Pyx_ExportVoidPtr(%s, (void *)&%s, "%s") < 0) %s' % (
-                    name, entry.cname, signature,
-                    code.error_goto(self.pos)))
+        """Generate code to create PyCFunction wrappers for exported C functions.
+        """
+        for entry, name, api_dict in self._generate_export_code(env.var_entries, "VoidPtrExport", code):
+            signature = entry.type.empty_declaration_code()
+
+            code.put_error_if_neg(
+                self.pos,
+                f'__Pyx_ExportVoidPtr({api_dict}, {name}, (void *)&{entry.cname}, "{signature}")'
+            )
 
     def generate_c_function_export_code(self, env, code):
-        # Generate code to create PyCFunction wrappers for exported C functions.
-        entries = []
-        for entry in env.cfunc_entries:
-            if (entry.api
-                    or entry.defined_in_pxd
-                    or (Options.cimport_from_pyx and not entry.visibility == 'extern')):
-                entries.append(entry)
-        if entries:
-            env.use_utility_code(
-                UtilityCode.load_cached("FunctionExport", "ImportExport.c"))
+        """Generate code to create PyCFunction wrappers for exported C functions.
+        """
+        for entry, name, api_dict in self._generate_export_code(env.cfunc_entries, "FunctionExport", code):
             # Note: while this looks like it could be more cheaply stored and read from a struct array,
             # investigation shows that the resulting binary is smaller with repeated functions calls.
-            for entry in entries:
-                signature = entry.type.signature_string()
-                code.putln('if (__Pyx_ExportFunction(%s, (void (*)(void))%s, "%s") < 0) %s' % (
-                    entry.name.as_c_string_literal(),
-                    entry.cname,
-                    signature,
-                    code.error_goto(self.pos)))
+            signature = entry.type.signature_string()
+
+            code.put_error_if_neg(
+                self.pos,
+                f'__Pyx_ExportFunction({api_dict}, {name}, (void (*)(void)){entry.cname}, "{signature}")'
+            )
 
     def generate_type_import_code_for_module(self, module, env, code):
         # Generate type import code for all exported extension types in
@@ -3728,72 +3774,66 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
                 # This call modifies the cfunc_entries in-place
                 entry.type.get_all_specialized_function_types()
 
+    def _generate_import_code(self, all_entries, qualified_module_name, utility_code_name, code, used_only=False):
+        # Generic function/pointer import implementation as generator.
+        entries = [
+            entry for entry in all_entries
+            if entry.defined_in_pxd and (not used_only or entry.used)
+        ]
+        if not entries:
+            return
+
+        code.globalstate.use_utility_code(
+            UtilityCode.load_cached(utility_code_name, "ImportExport.c"))
+
+        module_ref = code.funcstate.allocate_temp(py_object_type, manage_ref=True)
+        code.putln(
+            f'{module_ref} = PyImport_ImportModule({qualified_module_name.as_c_string_literal()}); '
+            f'{code.error_goto_if_null(module_ref, self.pos)}'
+        )
+        code.put_gotref(module_ref, py_object_type)
+
+        for entry in entries:
+            yield (module_ref, entry)
+
+        code.put_decref_clear(module_ref, py_object_type)
+        code.funcstate.release_temp(module_ref)
+
     def generate_c_variable_import_code_for_module(self, module, env, code):
-        # Generate import code for all exported C functions in a cimported module.
-        entries = []
-        for entry in module.var_entries:
-            if entry.defined_in_pxd:
-                entries.append(entry)
-        if entries:
-            env.use_utility_code(
-                UtilityCode.load_cached("VoidPtrImport", "ImportExport.c"))
-            temp = code.funcstate.allocate_temp(py_object_type, manage_ref=True)
-            code.putln(
-                '%s = PyImport_ImportModule("%s"); if (!%s) %s' % (
-                    temp,
-                    module.qualified_name,
-                    temp,
-                    code.error_goto(self.pos)))
-            code.put_gotref(temp, py_object_type)
-            for entry in entries:
-                if env is module:
-                    cname = entry.cname
-                else:
-                    cname = module.mangle(Naming.varptr_prefix, entry.name)
-                signature = entry.type.empty_declaration_code()
-                code.putln(
-                    'if (__Pyx_ImportVoidPtr_%s(%s, "%s", (void **)&%s, "%s") < 0) %s' % (
-                        Naming.cyversion,
-                        temp, entry.name, cname, signature,
-                        code.error_goto(self.pos)))
-            code.put_decref_clear(temp, py_object_type)
-            code.funcstate.release_temp(temp)
+        """Generate import code for all exported C functions in a cimported module.
+        """
+        for module_ref, entry in self._generate_import_code(
+                module.var_entries, module.qualified_name, "VoidPtrImport", code, used_only=False):
+            signature = entry.type.empty_declaration_code()
+            cname = entry.cname if env is module else module.mangle(Naming.varptr_prefix, entry.name)
+
+            code.put_error_if_neg(
+                self.pos,
+                f'__Pyx_ImportVoidPtr_{Naming.cyversion}('
+                f'{module_ref}, {entry.name.as_c_string_literal()}, (void **)&{cname}, "{signature}"'
+                f')'
+            )
 
     def generate_c_function_import_code_for_module(self, module, env, code):
-        # Generate import code for all exported C functions in a cimported module.
-        entries = []
-        for entry in module.cfunc_entries:
-            if entry.defined_in_pxd and entry.used:
-                entries.append(entry)
-        if entries:
-            env.use_utility_code(
-                UtilityCode.load_cached("FunctionImport", "ImportExport.c"))
-            temp = code.funcstate.allocate_temp(py_object_type, manage_ref=True)
-            code.putln(
-                '%s = PyImport_ImportModule("%s"); if (!%s) %s' % (
-                    temp,
-                    module.qualified_name,
-                    temp,
-                    code.error_goto(self.pos)))
-            code.put_gotref(temp, py_object_type)
-            for entry in entries:
-                code.putln(
-                    'if (__Pyx_ImportFunction_%s(%s, %s, (void (**)(void))&%s, "%s") < 0) %s' % (
-                        Naming.cyversion,
-                        temp,
-                        entry.name.as_c_string_literal(),
-                        entry.cname,
-                        entry.type.signature_string(),
-                        code.error_goto(self.pos)))
-            code.put_decref_clear(temp, py_object_type)
-            code.funcstate.release_temp(temp)
+        """Generate import code for all exported C functions in a cimported module.
+        """
+        for module_ref, entry in self._generate_import_code(
+                module.cfunc_entries, module.qualified_name, "FunctionImport", code, used_only=True):
+            signature = entry.type.signature_string()
+
+            code.put_error_if_neg(
+                self.pos,
+                f'__Pyx_ImportFunction_{Naming.cyversion}('
+                f'{module_ref}, {entry.name.as_c_string_literal()}, (void (**)(void))&{entry.cname}, "{signature}"'
+                f')'
+            )
 
     def generate_type_init_code(self, env, code):
         # Generate type import code for extern extension types
         # and type ready code for non-extern ones.
         with ModuleImportGenerator(code) as import_generator:
             for entry in env.c_class_entries:
-                if entry.visibility == 'extern' and not entry.utility_code_definition:
+                if entry.visibility == 'extern' and not entry.utility_code:
                     self.generate_type_import_code(env, entry.type, entry.pos, code, import_generator)
                 else:
                     self.generate_base_type_import_code(env, entry, code, import_generator)
@@ -3805,7 +3845,7 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         base_type = entry.type.base_type
         if (base_type and base_type.module_name != env.qualified_name and not
                 (base_type.is_builtin_type or base_type.is_cython_builtin_type)
-                 and not entry.utility_code_definition):
+                 and not entry.utility_code):
             self.generate_type_import_code(env, base_type, self.pos, code, import_generator)
 
     def generate_type_import_code(self, env, type, pos, code, import_generator):
@@ -3833,7 +3873,8 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         sizeof_objstruct = objstruct = type.objstruct_cname if type.typedef_flag else f"struct {type.objstruct_cname}"
         module_name = type.module_name
         type_name = type.name
-        if module_name not in ('__builtin__', 'builtins'):
+        is_builtin = module_name in ('__builtin__', 'builtins')
+        if not is_builtin:
             module_name = f'"{module_name}"'
         elif type_name in Code.ctypedef_builtins_map:
             # Fast path for special builtins, don't actually import
@@ -3856,23 +3897,27 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         typeptr_cname = type.typeptr_cname
         if not is_api:
             typeptr_cname = code.name_in_main_c_code_module_state(typeptr_cname)
-        code.put(
+
+        code.putln(
             f"{typeptr_cname} = __Pyx_ImportType_{Naming.cyversion}("
             f"{module}, {module_name}, {type.name.as_c_string_literal()},"
         )
 
         alignment_func = f"__PYX_GET_STRUCT_ALIGNMENT_{Naming.cyversion}"
-        if sizeof_objstruct != objstruct:
-            code.putln("")  # start in new line
-            code.putln("#if defined(PYPY_VERSION_NUM) && PYPY_VERSION_NUM < 0x050B0000")
-            code.putln(f'sizeof({objstruct}), {alignment_func}({objstruct}),')
-            code.putln("#elif CYTHON_COMPILING_IN_LIMITED_API")
-            code.putln(f'sizeof({objstruct}), {alignment_func}({objstruct}),')
-            code.putln("#else")
-            code.putln(f'sizeof({sizeof_objstruct}), {alignment_func}({sizeof_objstruct}),')
-            code.putln("#endif")
+        code.putln("#if defined(PYPY_VERSION_NUM) && PYPY_VERSION_NUM < 0x050B0000")
+        code.putln(f'sizeof({objstruct}), {alignment_func}({objstruct}),')
+        code.putln("#elif CYTHON_COMPILING_IN_LIMITED_API")
+        if is_builtin:
+            # Builtin types are opaque in when the limited API is enabled
+            # and subsequents attempt to access their fields will trigger
+            # compile errors. Skip the struct size check here so things keep
+            # working when a builtin type is imported but not actually used.
+            code.putln('0, 0,')
         else:
-            code.put(f' sizeof({objstruct}), {alignment_func}({objstruct}),')
+            code.putln(f'sizeof({objstruct}), {alignment_func}({objstruct}),')
+        code.putln('#else')
+        code.putln(f'sizeof({sizeof_objstruct}), {alignment_func}({sizeof_objstruct}),')
+        code.putln("#endif")
 
         # check_size
         if type.check_size and type.check_size in ('error', 'warn', 'ignore'):
@@ -3885,7 +3930,6 @@ class ModuleNode(Nodes.Node, Nodes.BlockNode):
         code.put(f'__Pyx_ImportType_CheckSize_{check_size.title()}_{Naming.cyversion});')
 
         code.putln(f' if (!{typeptr_cname}) {error_code}')
-
     def generate_type_ready_code(self, entry, code):
         Nodes.CClassDefNode.generate_type_ready_code(entry, code)
 
@@ -3961,7 +4005,7 @@ class ModuleImportGenerator:
 
 
 def generate_cfunction_declaration(entry, env, code, definition):
-    from_cy_utility = entry.used and entry.utility_code_definition
+    from_cy_utility = entry.used and entry.utility_code
     if entry.used and entry.inline_func_in_pxd or (not entry.in_cinclude and (
             definition or entry.defined_in_pxd or entry.visibility == 'extern' or from_cy_utility)):
         if entry.visibility == 'extern':

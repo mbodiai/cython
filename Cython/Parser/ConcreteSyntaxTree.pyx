@@ -24,7 +24,7 @@ cdef extern from "parsetok.h":
         int start,
         perrdetail * err_ret,
         int * flags)
-
+import sys
 if sys.version_info < (3, 9):
     from distutils import sysconfig as _sysconfig
 

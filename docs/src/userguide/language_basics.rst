@@ -1031,8 +1031,8 @@ Some things to note:
   which return Python objects. Remember that a function with no declared
   return type implicitly returns a Python object. (Exceptions on such
   functions are implicitly propagated by returning ``NULL``.)
-  
-* There's a known performance pitfall when combining ``nogil`` and 
+
+* There's a known performance pitfall when combining ``nogil`` and
   ``except *`` \ ``@cython.exceptval(check=True)``.
   In this case Cython must always briefly re-acquire the GIL after a function
   call to check if an exception has been raised.  This can commonly happen with a
@@ -1149,7 +1149,7 @@ possibilities.
 .. [#2] Other than signed/unsigned char[].
    The conversion will fail if the length of C array is not known at compile time,
    and when using a slice of a C array.
-   
+
 .. [#4] The automatic conversion of a struct to a ``dict`` (and vice
    versa) does have some potential pitfalls detailed
    :ref:`elsewhere in the documentation <automatic_conversion_pitfalls>`.

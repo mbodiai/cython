@@ -8,20 +8,17 @@ import os
 from collections import defaultdict
 from os.path import basename, splitext
 
-from Cython.Compiler.Options import CompilationOptions
+from Cython.Compiler.Options import DEFAULT_COMPILATION_OPTIONS
 from Cython.Compiler.Main import compile as cython_compile
-from Cython.Compiler.Options import default_options
 
 
 def validate_file(filename):
     module_name = basename(filename)
     c_file = splitext(filename)[0] + '.c'
 
-    options = CompilationOptions(
-        default_options,
-        language_level="3",
-        evaluate_tree_assertions=True,
-    )
+    options = DEFAULT_COMPILATION_OPTIONS.copy()
+    options.language_level = "3"
+    options.evaluate_tree_assertions = True
     result = cython_compile(filename, options=options)
     return result.num_errors
 

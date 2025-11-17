@@ -4,20 +4,28 @@ Python Lexical Analyser
 Scanning an input stream
 """
 
+from typing import TYPE_CHECKING, Any
+
 import cython
 
 cython.declare(BOL=object, EOL=object, EOF=object, NOT_FOUND=object)  # noqa:E402
 
 from . import Errors
-from .Regexps import BOL, EOL, EOF
+from .Regexps import BOL, EOF, EOL
 
+if TYPE_CHECKING:
+    from .Lexicons import Lexicon
+    from typing import IO
+    from Cython.Compiler.Scanning import SourceDescriptor
+else:
+    Lexicon = object
+    IO = object
+    SourceDescriptor = object
 NOT_FOUND = object()
 
 
 class Scanner:
-    """
-    A Scanner is used to read tokens from a stream of characters
-    using the token set specified by a Plex.Lexicon.
+    """A Scanner is used to read tokens from a stream of characters using the token set specified by a Plex.Lexicon.
 
     Constructor:
 
@@ -26,7 +34,6 @@ class Scanner:
         See the docstring of the __init__ method for details.
 
     Methods:
-
       See the docstrings of the individual methods for more
       information.
 
@@ -70,10 +77,28 @@ class Scanner:
     #  state_name = ''       # Name of initial state
     #  queue = None          # list of tokens and positions to be returned
     #  trace = 0
-
-    def __init__(self, lexicon, stream, name='', initial_pos=None):
-        """
-        Scanner(lexicon, stream, name = '')
+    lexicon:"Lexicon"
+    stream:"IO"
+    name:"str|SourceDescriptor"
+    initial_pos:tuple[int, int, int]|None
+    trace:int
+    buffer:str
+    buf_start_pos:int
+    next_pos:int
+    cur_pos:int
+    cur_line:int
+    start_pos:int
+    current_scanner_position_tuple:tuple[str, int, int]
+    last_token_position_tuple:tuple[str, int, int]
+    text:str|None
+    initial_state:dict|None
+    state_name:str|None
+    queue:list[tuple[tuple[Any, str], tuple[str, int, int]]]
+    input_state:int
+    cur_char:str
+    cur_line_start:int
+    def __init__(self, lexicon:"Lexicon", stream:"IO", name:"str|SourceDescriptor"='', initial_pos:tuple[int, int, int]=None):
+        """Scanner constructor.
 
           |lexicon| is a Plex.Lexicon instance specifying the lexical tokens
           to be recognised.
@@ -101,7 +126,7 @@ class Scanner:
         self.stream = stream
         self.name = name
         self.queue = []
-        self.initial_state = None
+        self.initial_state= None
         self.begin('')
         self.next_pos = 0
         self.cur_pos = 0
@@ -112,12 +137,11 @@ class Scanner:
             self.cur_line, self.cur_line_start = initial_pos[1], -initial_pos[2]
 
     def read(self):
-        """
-        Read the next lexical token from the stream and return a
+        """Read the next lexical token from the stream and return a
         tuple (value, text), where |value| is the value associated with
         the token as specified by the Lexicon, and |text| is the actual
         string read from the stream. Returns (None, '') on end of file.
-        """
+        """  # noqa: D205
         queue = self.queue
         while not queue:
             self.text, action = self.scan_a_token()
@@ -158,14 +182,12 @@ class Scanner:
                 self.start_pos - self.buf_start_pos:
                 self.cur_pos - self.buf_start_pos]
             return (text, action)
-        else:
-            if self.cur_pos == self.start_pos:
-                if self.cur_char is EOL:
-                    self.next_char()
-                if self.cur_char is None or self.cur_char is EOF:
-                    return ('', None)
-            raise Errors.UnrecognizedInput(self, self.state_name)
 
+        if self.cur_pos == self.start_pos and (self.cur_char is None or self.cur_char is EOF):
+            return ('', None)
+        raise Errors.UnrecognizedInput(self, self.state_name)
+
+    @cython.final
     def run_machine_inlined(self):
         """
         Inlined version of run_machine for speed.
@@ -278,37 +300,6 @@ class Scanner:
             if action is not None:
                 print("Doing %s" % action)
         return action
-
-    def next_char(self):
-        input_state: cython.int = self.input_state
-        if self.trace:
-            print("Scanner: next: %s [%d] %d" % (" " * 20, input_state, self.cur_pos))
-        if input_state == 1:
-            self.cur_pos = self.next_pos
-            c = self.read_char()
-            if c == '\n':
-                self.cur_char = EOL
-                self.input_state = 2
-            elif not c:
-                self.cur_char = EOL
-                self.input_state = 4
-            else:
-                self.cur_char = c
-        elif input_state == 2:
-            self.cur_char = '\n'
-            self.input_state = 3
-        elif input_state == 3:
-            self.cur_line += 1
-            self.cur_line_start = self.cur_pos = self.next_pos
-            self.cur_char = BOL
-            self.input_state = 1
-        elif input_state == 4:
-            self.cur_char = EOF
-            self.input_state = 5
-        else:  # input_state = 5
-            self.cur_char = ''
-        if self.trace:
-            print("--> [%d] %d %r" % (input_state, self.cur_pos, self.cur_char))
 
     def position(self) -> tuple:
         """

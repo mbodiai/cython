@@ -1,3 +1,5 @@
+
+import cython
 def f(x: cython.double):
     return x ** 2 - x
 

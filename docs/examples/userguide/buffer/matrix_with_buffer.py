@@ -1,8 +1,8 @@
 # distutils: language = c++
 from cython.cimports.cpython import Py_buffer
 from cython.cimports.libcpp.vector import vector
-
-@cython.cclass
+from cython import cclass
+@cclass
 class Matrix:
     ncols: cython.Py_ssize_t
     shape: cython.Py_ssize_t[2]
