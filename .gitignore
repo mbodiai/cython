@@ -83,3 +83,7 @@ newstuff
 **/*.python-version
 # Cython inline build artifacts
 /generated/
+# On branches that track self-hosting compiler artifacts, allow committed
+# generated sources and Dispatch utility to be visible despite *.c ignores.
+!generated/**
+!Cython/Utility/Dispatch.c
