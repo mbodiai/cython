@@ -3733,6 +3733,17 @@ class DefNodeWrapper(FuncDefNode):
     defnode = None
     target = None  # Target DefNode
     needs_values_cleanup = False
+    # Fast-arg/vectorcall support
+    fast_arg_parsing = True
+    # Whether to also emit the legacy dict-based ParseKeywords/RejectKeywords fallback
+    fast_arg_fallback = False
+    fast_arg_param_cname = None
+    fast_arg_info_cname = None
+    _fast_arg_tables_generated = False
+    fast_arg_required_pos = 0
+    fast_arg_max_pos = 0
+    fast_arg_accepts_keywords = False
+    vectorcall_cname = None
 
     def __init__(self, *args, **kwargs):
         FuncDefNode.__init__(self, *args, **kwargs)
@@ -3742,6 +3753,8 @@ class DefNodeWrapper(FuncDefNode):
         self.num_required_args = self.target.num_required_args
         self.self_in_stararg = self.target.self_in_stararg
         self.signature = None
+        self.fast_arg_fallback = self.target.local_scope.directives.get(
+            'optimize.fast_arg_fallback', False)
 
     def analyse_declarations(self, env):
         target_entry = self.target.entry
@@ -3751,6 +3764,7 @@ class DefNodeWrapper(FuncDefNode):
         target_entry.pymethdef_cname = punycodify_name(Naming.pymethdef_prefix + prefix + name)
 
         self.signature = target_entry.signature
+        self._determine_fast_arg_support()
 
         self.np_args_idx = self.target.np_args_idx
 
@@ -3775,6 +3789,33 @@ class DefNodeWrapper(FuncDefNode):
             for ass in entry.cf_assignments:
                 if not ass.is_arg and ass.lhs.is_name:
                     ass.lhs.cf_maybe_null = True
+
+    def _determine_fast_arg_support(self):
+        """
+        Decide if we can use the fast-argument parser / vectorcall path.
+        Constraints:
+          - wrapper must already be using fastcall
+          - no *args / **kwargs
+          - no fused args
+          - all args must be PyObject without conversions
+        """
+        if not self.signature.use_fastcall:
+            self.fast_arg_parsing = False
+            return
+        if self.target.star_arg or self.target.starstar_arg:
+            self.fast_arg_parsing = False
+            return
+        if self.target.has_fused_arguments:
+            self.fast_arg_parsing = False
+            return
+        for arg in self.args:
+            if not arg.type.is_pyobject or arg.needs_conversion:
+                self.fast_arg_parsing = False
+                return
+        self.fast_arg_required_pos = max(
+            0, self.target.num_required_args - self.target.num_required_kw_args)
+        self.fast_arg_max_pos = sum(1 for arg in self.args if not arg.kw_only)
+        self.fast_arg_parsing = True
 
     def signature_has_nongeneric_args(self):
         argcount = len(self.args)
@@ -3854,6 +3895,8 @@ class DefNodeWrapper(FuncDefNode):
         code.mark_pos(self.pos)
         code.putln("")
         code.putln("/* function exit code */")
+
+        self.vectorcall_cname = self.generate_vectorcall_function(env, code)
 
         # ----- Error cleanup
         values_cleaned_up_label = code.new_label("cleaned_up")
@@ -4061,7 +4104,19 @@ class DefNodeWrapper(FuncDefNode):
             self.generate_stararg_copy_code(code)
 
         else:
-            self.generate_tuple_and_keyword_parsing_code(self.args, code, decl_code)
+            if self.fast_arg_parsing:
+                self.generate_argument_values_setup_code(self.args, code, decl_code)
+                if self.fast_arg_fallback:
+                    code.putln("#if CYTHON_METH_FASTCALL")
+                    self._generate_fast_argument_parsing_code(code, end_label)
+                    code.putln("#else")
+                    self.generate_tuple_and_keyword_parsing_code(
+                        self.args, code, decl_code, values_already_setup=True)
+                    code.putln("#endif")
+                else:
+                    self._generate_fast_argument_parsing_code(code, end_label)
+            else:
+                self.generate_tuple_and_keyword_parsing_code(self.args, code, decl_code)
             self.needs_values_cleanup = True
 
         code.error_label = old_error_label
@@ -4087,6 +4142,223 @@ class DefNodeWrapper(FuncDefNode):
             code.putln("return %s;" % self.error_value())
 
         code.put_label(end_label)
+
+    def _fast_arg_flags(self, arg):
+        flags = []
+        if not arg.kw_only:
+            flags.append("__PYX_PARAM_ACCEPTS_POS")
+        if not arg.pos_only:
+            flags.append("__PYX_PARAM_ACCEPTS_KW")
+        if arg.kw_only:
+            flags.append("__PYX_PARAM_IS_KWONLY")
+        if arg.pos_only:
+            flags.append("__PYX_PARAM_IS_POSONLY")
+        return " | ".join(flags) if flags else "0"
+
+    def _ensure_fast_arg_tables(self, code):
+        if self._fast_arg_tables_generated:
+            return
+        decls_code = code.globalstate['decls']
+        param_count = len(self.args)
+        param_cname = punycodify_name(Naming.parammeta_prefix + self.target.entry.func_cname)
+        info_cname = punycodify_name(Naming.paraminfo_prefix + self.target.entry.func_cname)
+        optional_count = 0
+        accepts_keywords = False
+        if param_count:
+            decls_code.putln("static const __Pyx_ParamMeta %s[%d] = {" % (param_cname, param_count))
+            for arg in self.args:
+                name_entry = code.globalstate.get_py_string_const(arg.entry.name, identifier=False)
+                name_cname = name_entry.cname
+                flags = self._fast_arg_flags(arg)
+                if "__PYX_PARAM_ACCEPTS_KW" in flags:
+                    accepts_keywords = True
+                if arg.default:
+                    default_index = optional_count
+                    optional_count += 1
+                else:
+                    default_index = "__PYX_PARAM_DEFAULT_MISSING"
+                decls_code.putln("{%s, %s, 0, %s}," % (
+                    name_cname, flags, default_index))
+            decls_code.putln("};")
+            params_expr = param_cname
+        else:
+            params_expr = "NULL"
+        defaults_expr = "NULL"
+        allow_keywords = self.target.local_scope.directives['always_allow_keywords']
+        self.fast_arg_accepts_keywords = accepts_keywords and allow_keywords
+        func_name_literal = self.target.entry.qualified_name.as_c_string_literal()
+        decls_code.putln("static const __Pyx_FastArgInfo %s = {" % info_cname)
+        decls_code.putln(
+            "%s, %s, %d, %d, %d, %d, %d, %s" % (
+                params_expr, defaults_expr, param_count, optional_count,
+                self.fast_arg_required_pos, self.fast_arg_max_pos,
+                self.num_required_kw_args, func_name_literal))
+        decls_code.putln("};")
+        self.fast_arg_param_cname = params_expr
+        self.fast_arg_info_cname = info_cname
+        self._fast_arg_tables_generated = True
+
+    def _generate_fast_argument_parsing_code(self, code, end_label):
+        code.globalstate.use_utility_code(
+            UtilityCode.load_cached("RaiseArgTupleInvalid", "FunctionArguments.c"))
+        code.globalstate.use_utility_code(
+            UtilityCode.load_cached("RaiseDoubleKeywords", "FunctionArguments.c"))
+        code.globalstate.use_utility_code(
+            UtilityCode.load_cached("RaiseKeywordRequired", "FunctionArguments.c"))
+        code.globalstate.use_utility_code(
+            UtilityCode.load_cached("RaiseUnexpectedKeywords", "FunctionArguments.c"))
+        code.globalstate.use_utility_code(
+            UtilityCode.load_cached("FastParseKeywords", "FunctionArguments.c"))
+        self._ensure_fast_arg_tables(code)
+        param_count = len(self.args)
+        code.putln("{")
+        if param_count:
+            entries = ", ".join("&values[%d]" % i for i in range(param_count))
+            code.putln("PyObject **__pyx_fastlocals[%d] = {%s};" % (param_count, entries))
+            locals_expr = "__pyx_fastlocals"
+        else:
+            code.putln("PyObject **__pyx_fastlocals = NULL;")
+            locals_expr = "__pyx_fastlocals"
+        code.putln(
+            "int __pyx_fastparse_result = __Pyx_FastParseKeywords(&%s, %s, %s, %s, %s);" % (
+                self.fast_arg_info_cname, Naming.args_cname, Naming.nargs_cname,
+                Naming.kwds_cname, locals_expr))
+        code.use_label(end_label)
+        code.putln("if (likely(__pyx_fastparse_result == __PYX_FASTPARSE_SUCCESS)) {")
+        self.generate_argument_defaults_assignment_code(self.args, code)
+        code.putln("goto %s;" % end_label)
+        code.putln("}")
+        code.use_label(code.error_label)
+        code.putln("if (__pyx_fastparse_result == __PYX_FASTPARSE_ERROR) goto %s;" % code.error_label)
+        code.putln("}")
+
+    def generate_vectorcall_function(self, env, code):
+        if not self.fast_arg_parsing:
+            return None
+        lenv = self.target.local_scope
+        self_entry = lenv.lookup_here("self") if hasattr(lenv, "lookup_here") else None
+        if not self_entry and self.args:
+            self_entry = getattr(self.args[0], "entry", None)
+        arg_self_cname = getattr(self_entry, "cname", None)
+        cyfunc_self_cname = Naming.self_cname
+        vectorcall_cname = punycodify_name(
+            Naming.vectorcall_prefix + self.target.entry.func_cname)
+        code.globalstate.use_utility_code(
+            UtilityCode.load_cached("CythonFunctionShared", "CythonFunction.c"))
+        is_py_self_arg = bool(self_entry and getattr(self_entry.type, "is_pyobject", False))
+        code.putln("#if CYTHON_METH_FASTCALL && CYTHON_VECTORCALL")
+        code.putln(
+            "static PyObject *%s(PyObject *func, PyObject *const *args, "
+            "size_t nargsf, PyObject *kwnames) {" % vectorcall_cname)
+        code.enter_cfunc_scope(lenv)
+        code.return_from_error_cleanup_label = code.new_label()
+        self.generate_argument_declarations(lenv, code)
+        tempvardecl_code = code.insertion_point()
+        retval_init = ' = 0' if self.return_type.is_pyobject else ''
+        if not self.return_type.is_void:
+            code.putln('%s%s;' % (
+                self.return_type.declaration_code(Naming.retval_cname),
+                retval_init))
+        code.put_declare_refcount_context()
+        code.put_setup_refcount_context(EncodedString('%s (vectorcall)' % self.name))
+        code.putln("__pyx_CyFunctionObject *cyfunc = (__pyx_CyFunctionObject *)func;")
+        if arg_self_cname and is_py_self_arg and arg_self_cname != cyfunc_self_cname:
+            # ensure self declared
+            already_declared = False
+            for arg in self.args:
+                if getattr(arg, 'entry', None) and arg.entry.cname == arg_self_cname:
+                    if arg.is_generic:
+                        already_declared = True
+                    break
+            if not already_declared:
+                code.putln("PyObject *%s = NULL;" % arg_self_cname)
+        code.putln("PyObject *%s = NULL;" % cyfunc_self_cname)
+        code.putln("PyObject *const *%s = args;" % Naming.args_cname)
+        code.putln("Py_ssize_t %s = PyVectorcall_NARGS(nargsf);" % Naming.nargs_cname)
+        code.putln("PyObject *%s = kwnames;" % Naming.kwds_cname)
+        code.putln("%s = NULL;" % Naming.kwvalues_cname)
+        code.putln(
+            "switch (__Pyx_CyFunction_Vectorcall_CheckArgs(cyfunc, %s, %s)) {" %
+            (Naming.nargs_cname, Naming.kwds_cname))
+        code.putln("case 1:")
+        code.putln("    %s = %s[0];" % (cyfunc_self_cname, Naming.args_cname))
+        code.putln("    %s += 1;" % Naming.args_cname)
+        code.putln("    %s -= 1;" % Naming.nargs_cname)
+        if arg_self_cname and is_py_self_arg:
+            code.putln("    %s = %s;" % (arg_self_cname, cyfunc_self_cname))
+        code.putln("    break;")
+        code.putln("case 0:")
+        code.putln("#if CYTHON_COMPILING_IN_LIMITED_API")
+        code.putln(
+            "    %s = PyCFunction_GetSelf(((__pyx_CyFunctionObject*)cyfunc)->func);" % cyfunc_self_cname)
+        code.putln(
+            "    if (unlikely(!%s) && PyErr_Occurred()) %s" % (cyfunc_self_cname, code.error_goto(self.pos)))
+        code.putln("#else")
+        code.putln("    %s = ((PyCFunctionObject*)cyfunc)->m_self;" % cyfunc_self_cname)
+        code.putln("#endif")
+        if arg_self_cname and is_py_self_arg:
+            code.putln("    %s = %s;" % (arg_self_cname, cyfunc_self_cname))
+        code.putln("    break;")
+        code.putln("default:")
+        code.putln("    return NULL;")
+        code.putln("}")
+        previous_cleanup_flag = self.needs_values_cleanup
+        self.needs_values_cleanup = True
+        self.generate_argument_values_setup_code(self.args, code, tempvardecl_code)
+        code.putln(
+            "%s = __Pyx_KwValues_%s(%s, %s);" % (
+                Naming.kwvalues_cname, self.signature.fastvar, Naming.args_cname, Naming.nargs_cname))
+        old_error_label = code.error_label
+        vectorcall_error_label = code.new_error_label()
+        code.error_label = vectorcall_error_label
+        end_label = code.new_label("vectorcall_argument_unpacking_done")
+        self._generate_fast_argument_parsing_code(code, end_label)
+        code.put_label(end_label)
+        self.generate_argument_type_tests(code)
+        self.generate_function_body(code)
+        tempvardecl_code.put_temp_declarations(code.funcstate)
+        code.mark_pos(self.pos)
+        code.putln("")
+        code.putln("/* vectorcall exit code */")
+        values_cleaned_up_label = code.new_label("vectorcall_cleaned_up")
+        if code.label_used(code.error_label):
+            code.put_goto(code.return_label)
+            code.put_label(code.error_label)
+            for cname, type in code.funcstate.all_managed_temps():
+                code.put_xdecref(cname, type)
+            err_val = self.error_value()
+            if err_val is not None:
+                code.putln("%s = %s;" % (Naming.retval_cname, err_val))
+            self.generate_argument_values_cleanup_code(code)
+            code.put_goto(values_cleaned_up_label)
+        code.put_label(code.return_label)
+        self.generate_argument_values_cleanup_code(code)
+        code.put_label(values_cleaned_up_label)
+        for entry in lenv.var_entries:
+            if entry.is_arg:
+                if entry.xdecref_cleanup:
+                    code.put_var_xdecref(entry)
+                else:
+                    code.put_var_decref(entry)
+        var_entries_set = set(lenv.var_entries)
+        for arg in self.args:
+            if not arg.type.is_pyobject and arg.entry not in var_entries_set:
+                if arg.entry.xdecref_cleanup:
+                    code.put_var_xdecref(arg.entry)
+                else:
+                    code.put_var_decref(arg.entry)
+        code.put_finish_refcount_context()
+        if not self.return_type.is_void:
+            code.putln("return %s;" % Naming.retval_cname)
+        else:
+            code.putln("Py_INCREF(Py_None);")
+            code.putln("return Py_None;")
+        code.putln("}")
+        code.error_label = old_error_label
+        code.exit_cfunc_scope()
+        code.putln("#endif /* CYTHON_METH_FASTCALL && CYTHON_VECTORCALL */")
+        self.needs_values_cleanup = previous_cleanup_flag
+        return vectorcall_cname
 
     def generate_arg_xdecref(self, arg, code):
         if arg:
@@ -4125,7 +4397,7 @@ class DefNodeWrapper(FuncDefNode):
             code.globalstate.use_utility_code(
                 UtilityCode.load_cached("KeywordStringCheck", "FunctionArguments.c"))
             code.putln(
-                f"if (unlikely(__Pyx_CheckKeywordStrings({Naming.kwds_cname}) == -1)) {goto_error}"
+                f"if (unlikely(__Pyx_CheckKeywordStrings({Naming.kwds_cname}, {function_name}, 1) == -1)) {goto_error}"
             )
 
             # If the **kwargs parameter is unused, we leave it NULL.
@@ -4197,9 +4469,10 @@ class DefNodeWrapper(FuncDefNode):
                 f"{star_arg_cname} = {Naming.args_cname};")
             self.star_arg.entry.xdecref_cleanup = 0
 
-    def generate_tuple_and_keyword_parsing_code(self, args, code, decl_code):
+    def generate_tuple_and_keyword_parsing_code(self, args, code, decl_code, values_already_setup=False):
         code.globalstate.use_utility_code(
             UtilityCode.load_cached("fastcall", "FunctionArguments.c"))
+        function_name = self.name.as_c_string_literal()
 
         self_name_csafe = self.name.as_c_string_literal()
 
@@ -4262,7 +4535,8 @@ class DefNodeWrapper(FuncDefNode):
         # C-typed default arguments are handled at conversion time,
         # so their array value is NULL in the end if no argument
         # was passed for them.
-        self.generate_argument_values_setup_code(all_args, code, decl_code)
+        if not values_already_setup:
+            self.generate_argument_values_setup_code(all_args, code, decl_code)
 
         # If all args are positional-only, we can raise an error
         # straight away if we receive a non-empty kw-dict.
