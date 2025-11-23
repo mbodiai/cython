@@ -3113,6 +3113,7 @@ class AdjustDefByDirectives(CythonTransform, SkipDeclarations):
             node = node.as_cfunction(
                 overridable=True, modifiers=modifiers, nogil=nogil,
                 returns=return_type_node, except_val=except_val, has_explicit_exc_clause=has_explicit_exc_clause)
+            node.mb_c_directive = "ccall"
             return self.visit(node)
         if 'cfunc' in self.directives:
             if self.in_py_class:
@@ -3121,6 +3122,7 @@ class AdjustDefByDirectives(CythonTransform, SkipDeclarations):
                 node = node.as_cfunction(
                     overridable=False, modifiers=modifiers, nogil=nogil, with_gil=with_gil,
                     returns=return_type_node, except_val=except_val, has_explicit_exc_clause=has_explicit_exc_clause)
+                node.mb_c_directive = "cfunc"
                 return self.visit(node)
         if 'inline' in modifiers:
             error(node.pos, "Python functions cannot be declared 'inline'")
@@ -3166,6 +3168,195 @@ class AdjustDefByDirectives(CythonTransform, SkipDeclarations):
         self.in_py_class = False
         self.visitchildren(node)
         self.in_py_class = old_in_pyclass
+        return node
+
+
+class RewritePureCFuncAnnotations(CythonTransform, SkipDeclarations):
+    """
+    Allow @cython.cfunc/@cython.ccall pure Python declarations to keep using
+    idiomatic Python/typing annotations by rewriting them into equivalent
+    Cython-friendly forms (e.g. list[int] -> object, int -> long, None -> void).
+
+    This runs before AlignFunctionDefinitions so that declaration analysis
+    sees the rewritten annotations.
+    """
+
+    type_map = {
+        "builtins.int": "long",
+        "int": "long",
+        "builtins.float": "double",
+        "float": "double",
+        "builtins.bool": "bint",
+        "bool": "bint",
+        "Py_ssize_t": "Py_ssize_t",
+        "builtins.bytes": "uchar[:]",
+        "bytes": "uchar[:]",
+        "memoryview": "uchar[:]",
+        "BufferUnion": "uchar[:]",
+        "WriteableBufferUnion": "uchar[:]",
+        "ReadableBufferUnion": "uchar[:]",
+        "B": "uchar",
+        "b": "char",
+        "H": "ushort",
+        "h": "short",
+        "I": "uint",
+        "i": "int",
+        "Q": "ulonglong",
+        "q": "longlong",
+        "f": "float",
+        "d": "double",
+        "typing.Any": "object",
+        "Any": "object",
+        "object": "object",
+        "builtins.object": "object",
+        "None": "void",
+        "NoneType": "void",
+    }
+
+    def _make_name_node(self, name, pos):
+        enc = EncodedString(name)
+        node = ExprNodes.NameNode(pos, name=enc)
+        node.cython_attribute = enc
+        return node
+
+    def _make_memview_node(self, base_name, pos):
+        base = self._make_name_node(base_name, pos)
+        none = ExprNodes.NoneNode(pos)
+        slice_node = ExprNodes.SliceNode(pos, start=none, stop=none, step=none)
+        return ExprNodes.IndexNode(pos, base=base, index=slice_node)
+
+    def _dotted_name(self, node):
+        parts = []
+        cur = node
+        while isinstance(cur, ExprNodes.AttributeNode):
+            parts.append(str(cur.attribute))
+            cur = cur.obj
+        if isinstance(cur, ExprNodes.NameNode):
+            parts.append(str(cur.name))
+            return ".".join(reversed(parts))
+        return None
+
+    def _map_annotation_name(self, dotted_name, pos):
+        target = self.type_map.get(dotted_name)
+        if not target:
+            return None
+        if target.endswith("[:]"):
+            return self._make_memview_node(target[:-3], pos)
+        return self._make_name_node(target, pos)
+
+    def _rewrite_annotation(self, annotation):
+        if annotation is None:
+            return None
+        if isinstance(annotation, ExprNodes.NameNode):
+            mapped = self._map_annotation_name(str(annotation.name), annotation.pos)
+            return mapped or annotation
+        if isinstance(annotation, ExprNodes.AttributeNode):
+            annotation.obj = self._rewrite_annotation(annotation.obj)
+            dotted = self._dotted_name(annotation) or str(annotation.attribute)
+            mapped = self._map_annotation_name(dotted, annotation.pos)
+            return mapped or annotation
+        if isinstance(annotation, ExprNodes.IndexNode):
+            annotation.base = self._rewrite_annotation(annotation.base)
+            annotation.index = self._rewrite_annotation(annotation.index)
+            return annotation
+        if isinstance(annotation, ExprNodes.SequenceNode):
+            annotation.args = [self._rewrite_annotation(arg) for arg in annotation.args]
+            return annotation
+        if isinstance(annotation, ExprNodes.SliceNode):
+            annotation.start = self._rewrite_annotation(annotation.start)
+            annotation.stop = self._rewrite_annotation(annotation.stop)
+            annotation.step = self._rewrite_annotation(annotation.step)
+            return annotation
+        if isinstance(annotation, ExprNodes.BitwiseOrNode):
+            annotation.operand1 = self._rewrite_annotation(annotation.operand1)
+            annotation.operand2 = self._rewrite_annotation(annotation.operand2)
+            return annotation
+        return annotation
+
+    def _extract_targets(self, target):
+        if target is None:
+            return []
+        if target.is_name:
+            return [(target.name, target.pos)]
+        if target.is_sequence_constructor:
+            names = []
+            for arg in target.args:
+                names.extend(self._extract_targets(arg))
+            return names
+        return []
+
+    def _iterator_is_range(self, iterator):
+        seq = getattr(iterator, "sequence", None)
+        if not isinstance(seq, ExprNodes.SimpleCallNode):
+            return False
+        func = seq.function
+        if isinstance(func, ExprNodes.NameNode) and func.name == "range":
+            return True
+        if isinstance(func, ExprNodes.NameNode) and func.name == "reversed":
+            args = list(seq.args or [])
+            return (
+                len(args) == 1
+                and isinstance(args[0], ExprNodes.SimpleCallNode)
+                and isinstance(args[0].function, ExprNodes.NameNode)
+                and args[0].function.name == "range"
+            )
+        return False
+
+    def _gather_range_locals(self, node, out):
+        if node is None:
+            return
+        if isinstance(node, Nodes.StatListNode):
+            for stat in node.stats:
+                self._gather_range_locals(stat, out)
+            return
+        if isinstance(node, Nodes.ForInStatNode):
+            iterator = node.iterator
+            if isinstance(iterator, ExprNodes.IteratorNode) and self._iterator_is_range(iterator):
+                for name, pos in self._extract_targets(node.target):
+                    out.setdefault(name, self._make_name_node("Py_ssize_t", pos))
+            self._gather_range_locals(node.body, out)
+            self._gather_range_locals(node.else_clause, out)
+            return
+        if isinstance(node, Nodes.ForFromStatNode):
+            for name, pos in self._extract_targets(node.target):
+                out.setdefault(name, self._make_name_node("Py_ssize_t", pos))
+            self._gather_range_locals(node.body, out)
+            self._gather_range_locals(node.else_clause, out)
+            return
+        # Generic recursion
+        if hasattr(node, "body"):
+            self._gather_range_locals(getattr(node, "body"), out)
+        if hasattr(node, "else_clause"):
+            self._gather_range_locals(getattr(node, "else_clause"), out)
+        for attr in getattr(node, "child_attrs", ()):
+            child = getattr(node, attr, None)
+            if isinstance(child, list):
+                for sub in child:
+                    self._gather_range_locals(sub, out)
+            else:
+                self._gather_range_locals(child, out)
+
+    def visit_CFuncDefNode(self, node):
+        directive = getattr(node, "mb_c_directive", None)
+        if not directive:
+            self.visitchildren(node)
+            return node
+
+        for arg in node.declarator.args:
+            if getattr(arg, "annotation", None):
+                arg.annotation = self._rewrite_annotation(arg.annotation)
+
+        if node.directive_returns is not None:
+            node.directive_returns = self._rewrite_annotation(node.directive_returns)
+
+        range_locals = {}
+        self._gather_range_locals(node.body, range_locals)
+        if range_locals:
+            node.directive_locals = node.directive_locals or {}
+            for name, typ in range_locals.items():
+                node.directive_locals.setdefault(name, typ)
+
+        self.visitchildren(node)
         return node
 
 

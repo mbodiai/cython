@@ -161,7 +161,7 @@ def create_pipeline(context, mode, exclude_classes=()):
     from .ParseTreeTransforms import ExpandInplaceOperators, ParallelRangeTransform
     from .ParseTreeTransforms import CalculateQualifiedNamesTransform
     from .TypeInference import MarkParallelAssignments, MarkOverflowingArithmetic
-    from .ParseTreeTransforms import AdjustDefByDirectives, AlignFunctionDefinitions, AutoCpdefFunctionDefinitions
+    from .ParseTreeTransforms import AdjustDefByDirectives, AlignFunctionDefinitions, AutoCpdefFunctionDefinitions, RewritePureCFuncAnnotations
     from .ParseTreeTransforms import RemoveUnreachableCode, GilCheck, CoerceCppTemps
     from .FlowControl import ControlFlowAnalysis
     from .AnalysedTreeTransforms import AutoTestDictTransform
@@ -200,6 +200,7 @@ def create_pipeline(context, mode, exclude_classes=()):
         ParallelRangeTransform(context),
         WithTransform(),
         AdjustDefByDirectives(context),
+        RewritePureCFuncAnnotations(context),
         _align_function_definitions,
         MarkClosureVisitor(context),
         AutoCpdefFunctionDefinitions(context),
