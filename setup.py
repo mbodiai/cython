@@ -1,8 +1,9 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 try:
     from setuptools import setup, Extension
 except ImportError:
     from distutils.core import setup, Extension
+from glob import glob
 import os
 import re
 import stat
@@ -18,7 +19,7 @@ is_cpython = platform.python_implementation() == 'CPython'
 
 # this specifies which versions of python we support, pip >= 9 knows to skip
 # versions of packages which are not compatible with the running python
-PYTHON_REQUIRES = '>=3.9'
+PYTHON_REQUIRES = '>=3.8'
 
 TRACKER_URL = "https://github.com/cython/cython/issues/"
 
@@ -90,29 +91,56 @@ else:
 def compile_cython_modules(profile=False, coverage=False, compile_minimal=False, compile_more=False, cython_with_refnanny=False,
                            cython_limited_api=None):
     source_root = os.path.abspath(os.path.dirname(__file__))
+
+    # Clean up any in-tree compiled extension artifacts that might shadow sources and
+    # cause ABI mismatches during early imports (e.g., setuptools importing
+    # Cython.Compiler.Main triggers Symtab->Code import before our build runs).
+    # We only remove artifacts within the Cython package tree in this repo.
+    for pattern in (
+        os.path.join(source_root, 'Cython', 'Compiler', '*.so'),
+        os.path.join(source_root, 'Cython', 'Compiler', '*.pyd'),
+        os.path.join(source_root, 'Cython', 'Plex', '*.so'),
+        os.path.join(source_root, 'Cython', 'Plex', '*.pyd'),
+        os.path.join(source_root, 'Cython', '*.so'),
+        os.path.join(source_root, 'Cython', '*.pyd'),
+    ):
+        for path in glob(pattern):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
     compiled_modules = [
-        "Cython.Plex.Actions",
-        "Cython.Plex.Scanners",
-        "Cython.Compiler.FlowControl",
+        # Keep a small core of C extensions that substantially speed up the compiler
+        # but avoid compiling modules (like Plex.* or Visitor/Code) whose call
+        # signatures are sensitive to our calling-convention changes.
         "Cython.Compiler.LineTable",
-        "Cython.Compiler.Scanning",
-        "Cython.Compiler.Visitor",
         "Cython.Runtime.refnanny",
     ]
     if not compile_minimal:
         compiled_modules.extend([
+            # Keep StringIOTree for faster annotation/HTML generation,
+            # but leave Cython.Compiler.Code as pure Python for now to
+            # avoid ABI/segfault risks in this fork.
+            "Cython.StringIOTree",
+        ])
+    if compile_more and not compile_minimal:
+        compiled_modules.extend([
+            # Additional modules that upstream builds by default.
+            "Cython.Plex.Actions",
+            "Cython.Plex.Scanners",
             "Cython.Plex.Machines",
             "Cython.Plex.Transitions",
             "Cython.Plex.DFA",
+            "Cython.Compiler.FlowControl",
+            "Cython.Compiler.Scanning",
+            "Cython.Compiler.Visitor",
             "Cython.Compiler.Code",
             "Cython.Compiler.FusedNode",
             "Cython.Compiler.Parsing",
             "Cython.Tempita._tempita",
-            "Cython.StringIOTree",
             "Cython.Utils",
-        ])
-    if compile_more and not compile_minimal:
-        compiled_modules.extend([
+            # The “compile more” set from upstream.
             "Cython.Compiler.Lexicon",
             "Cython.Compiler.Pythran",
             "Cython.Build.Dependencies",
@@ -164,6 +192,7 @@ def compile_cython_modules(profile=False, coverage=False, compile_minimal=False,
         extra_defines.append(('CYTHON_TRACE', '1'))
 
     extensions = []
+    cython_inc_dir = os.path.join(source_root, "Cython", "Includes")
     for module in compiled_modules:
         source_file = os.path.join(source_root, *module.split('.'))
         pyx_source_file = source_file + ".py"
@@ -178,6 +207,7 @@ def compile_cython_modules(profile=False, coverage=False, compile_minimal=False,
             module, sources=[pyx_source_file],
             define_macros=(defines + (extra_defines if '.refnanny' not in module else [])),
             depends=dep_files,
+            cython_include_dirs=[cython_inc_dir],
             **extra_extension_args))
         # XXX hack around setuptools quirk for '*.pyx' sources
         extensions[-1].sources[0] = pyx_source_file
@@ -186,20 +216,12 @@ def compile_cython_modules(profile=False, coverage=False, compile_minimal=False,
     extensions.sort(key=lambda ext: os.path.getsize(ext.sources[0]), reverse=True)
 
     from Cython.Distutils.build_ext import build_ext as cy_build_ext
-    build_ext = None
-    try:
-        # Use the setuptools build_ext in preference, because it
-        # gets limited api filenames right, and should inherit itself from
-        # Cython's own build_ext. But failing that, use the Cython build_ext
-        # directly.
-        from setuptools.command.build_ext import build_ext
-        if cy_build_ext not in build_ext.__mro__:
-            build_ext = cy_build_ext
-    except ImportError:
-        build_ext = cy_build_ext
+    # Prefer Cython's build_ext to avoid setuptools eagerly importing
+    # Cython.Compiler.Main (which can trigger premature imports of compiled modules).
+    build_ext = cy_build_ext
 
-    from Cython.Compiler.Options import get_directive_defaults
-    get_directive_defaults().update(
+    from Cython.Compiler.Directives import DIRECTIVE_DEFAULTS
+    DIRECTIVE_DEFAULTS.update(
         language_level=3,
         auto_pickle=False,
         binding=False,
@@ -207,10 +229,10 @@ def compile_cython_modules(profile=False, coverage=False, compile_minimal=False,
         autotestdict=False,
     )
     if profile:
-        get_directive_defaults()['profile'] = True
+        DIRECTIVE_DEFAULTS['profile'] = True
         sys.stderr.write("Enabled profiling for the Cython binary modules\n")
     if coverage:
-        get_directive_defaults()['linetrace'] = True
+        DIRECTIVE_DEFAULTS['linetrace'] = True
         sys.stderr.write("Enabled line tracing and profiling for the Cython binary modules\n")
 
     # not using cythonize() directly to let distutils decide whether building extensions was requested
@@ -326,6 +348,9 @@ def check_limited_api_option(name):
     def handle_arg(arg: str):
         arg = arg.lower()
         if arg == "true":
+            # Default to Python 3.9 limited API unless running on an older version.
+            if sys.version_info >= (3, 9):
+                return (3, 9)
             return sys.version_info[:2]
         if arg == "false":
             return None
@@ -351,7 +376,12 @@ cython_profile = check_option('cython-profile')
 cython_coverage = check_option('cython-coverage')
 cython_with_refnanny = check_option('cython-with-refnanny')
 
-compile_cython_itself = not check_option('no-cython-compile')
+# By default, do not compile Cython's own C extensions (they are an optional optimisation).
+compile_cython_itself = (
+    check_option('cython-compile')
+    or check_option('cython-compile-all')
+    or check_option('cython-compile-minimal')
+)
 
 if compile_cython_itself and sysconfig.get_config_var("Py_GIL_DISABLED"):
     # On freethreaded builds there's good reasons not to compile Cython by default.
@@ -419,10 +449,9 @@ def run_build():
         name='Cython',
         version=version,
         url='https://cython.org/',
-        author='Robert Bradshaw, Stefan Behnel, David Woods, Greg Ewing, et al.',
+        authors=['Robert Bradshaw', 'Stefan Behnel', 'David Woods', 'Greg Ewing', 'et al.'],
         author_email='cython-devel@python.org',
         description="The Cython compiler for writing C extensions in the Python language.",
-        long_description_content_type="text/x-rst",
         long_description=textwrap.dedent("""\
         The Cython language makes writing C extensions for the Python language as
         easy as Python itself.  Cython is a source code translator based on Pyrex_,
@@ -453,14 +482,13 @@ def run_build():
         .. _Pyrex: https://www.cosc.canterbury.ac.nz/greg.ewing/python/Pyrex/
 
         """) + collect_changelog(version),
-        license='Apache-2.0',
         classifiers=[
             dev_status(version),
             "Intended Audience :: Developers",
-            "License :: OSI Approved :: Apache Software License",
             "Operating System :: OS Independent",
             "Programming Language :: Python",
             "Programming Language :: Python :: 3",
+            "Programming Language :: Python :: 3.8",
             "Programming Language :: Python :: 3.9",
             "Programming Language :: Python :: 3.10",
             "Programming Language :: Python :: 3.11",
@@ -469,6 +497,7 @@ def run_build():
             "Programming Language :: Python :: 3.14",
             "Programming Language :: Python :: Implementation :: CPython",
             "Programming Language :: Python :: Implementation :: PyPy",
+            "Programming Language :: Python :: Implementation :: Stackless",
             "Programming Language :: C",
             "Programming Language :: C++",
             "Programming Language :: Cython",
