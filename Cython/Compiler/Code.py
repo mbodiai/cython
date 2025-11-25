@@ -466,8 +466,8 @@ class UtilityCodeBase(AbstractUtilityCode):
             r'^%(C)s+  @(?P<tag> .+)'
         ) % {'C': re.escape(line_comment_char)}, re.VERBOSE).match
 
-    @classmethod
-    def _add_utility(cls, utility, name, type, lines, begin_lineno, tags=None):
+    @staticmethod
+    def _add_utility(utility, name, section_type, lines, begin_lineno, tags=None):
         if utility is None:
             return
 
@@ -477,22 +477,22 @@ class UtilityCodeBase(AbstractUtilityCode):
                 new_code = Template(code).substitute(vars(Naming))
             except (KeyError, ValueError) as e:
                 raise RuntimeError(
-                    f"Error parsing templated utility code '{name}.{type}' at line {begin_lineno:d}: {e}")
+                    f"Error parsing templated utility code '{name}.{section_type}' at line {begin_lineno:d}: {e}")
             if new_code == code:
                 raise RuntimeError(
-                    f"Found useless 'substitute: naming' declaration without replacements. ({name}.{type}:{begin_lineno:d})")
+                    f"Found useless 'substitute: naming' declaration without replacements. ({name}.{section_type}:{begin_lineno:d})")
             code = new_code
 
         # remember correct line numbers at least until after templating
         code = '\n' * begin_lineno + code
 
-        if type == 'proto':
+        if section_type == 'proto':
             utility[0] = code
-        elif type == 'impl':
+        elif section_type == 'impl':
             utility[1] = code
         else:
             all_tags = utility[2]
-            all_tags[type] = code
+            all_tags[section_type] = code
 
         if tags:
             all_tags = utility[2]
@@ -505,6 +505,7 @@ class UtilityCodeBase(AbstractUtilityCode):
         if utilities:
             return utilities
 
+        add_utility = cls._add_utility
         _, ext = os.path.splitext(path)
         if ext in ('.pyx', '.py', '.pxd', '.pxi'):
             comment = '#'
@@ -523,7 +524,7 @@ class UtilityCodeBase(AbstractUtilityCode):
         utilities = defaultdict(lambda: [None, None, {}])
         lines = []
         tags = defaultdict(set)
-        utility = name = type = None
+        utility = name = section_type = None
         begin_lineno = 0
 
         for lineno, line in enumerate(all_lines):
@@ -531,7 +532,7 @@ class UtilityCodeBase(AbstractUtilityCode):
             if m is None:
                 lines.append(rstrip(strip_comments(line)))
             elif m.group('name'):
-                cls._add_utility(utility, name, type, lines, begin_lineno, tags)
+                add_utility(utility, name, section_type, lines, begin_lineno, tags)
 
                 begin_lineno = lineno + 1
                 del lines[:]
@@ -540,9 +541,9 @@ class UtilityCodeBase(AbstractUtilityCode):
                 name = m.group('name')
                 mtype = match_type(name)
                 if mtype:
-                    name, type = mtype.groups()
+                    name, section_type = mtype.groups()
                 else:
-                    type = 'impl'
+                    section_type = 'impl'
                 utility = utilities[name]
             else:
                 tag_value = m.group('tag')
@@ -554,9 +555,9 @@ class UtilityCodeBase(AbstractUtilityCode):
                 tag_value = tag_value.strip()
 
                 if tag_name not in ('requires', 'substitute', 'proto_block'):
-                    raise RuntimeError(f"Found unknown tag name '{tag_name}' in utility section {name}.{type}")
+                    raise RuntimeError(f"Found unknown tag name '{tag_name}' in utility section {name}.{section_type}")
                 if not re.match(r'\S+$', tag_value):
-                    raise RuntimeError(f"Found invalid tag value '{tag_value}' in utility section {name}.{type}")
+                    raise RuntimeError(f"Found invalid tag value '{tag_value}' in utility section {name}.{section_type}")
 
                 tags[tag_name].add(tag_value)
                 lines.append('')  # keep line number correct
@@ -565,7 +566,7 @@ class UtilityCodeBase(AbstractUtilityCode):
             raise ValueError("Empty utility code file")
 
         # Don't forget to add the last utility code
-        cls._add_utility(utility, name, type, lines, begin_lineno, tags)
+        add_utility(utility, name, section_type, lines, begin_lineno, tags)
 
         utilities = dict(utilities)  # un-defaultdict-ify
         cls._utility_cache[path] = utilities
@@ -626,10 +627,15 @@ class UtilityCodeBase(AbstractUtilityCode):
         return cls(**kwargs)
 
     @classmethod
-    def load_cached(cls, utility_code_name, from_file, __cache={}):
+    def load_cached(cls, utility_code_name=None, from_file=None, __cache={}, *rest):
         """
         Calls .load(), but using a per-type cache based on utility name and file name.
         """
+        if not isinstance(cls, type):
+            # If binding failed (e.g. mis-bound classmethod), shift arguments manually.
+            from_file = utility_code_name
+            utility_code_name = cls
+            cls = UtilityCodeBase
         key = (utility_code_name, from_file, cls)
         try:
             return __cache[key]

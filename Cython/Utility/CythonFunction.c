@@ -1206,6 +1206,36 @@ static PyObject * __Pyx_CyFunction_Vectorcall_FASTCALL_KEYWORDS_METHOD(PyObject 
 }
 #endif
 
+static PyObject * __Pyx_CyFunction_descr_get(PyObject *self, PyObject *obj, PyObject *type)
+{
+    __pyx_CyFunctionObject *func = (__pyx_CyFunctionObject *) self;
+
+    if (func->flags & __Pyx_CYFUNCTION_STATICMETHOD) {
+        Py_INCREF(self);
+        return self;
+    }
+
+    if (obj == Py_None)
+        obj = NULL;
+
+    if (!obj && (func->flags & __Pyx_CYFUNCTION_CLASSMETHOD)) {
+        obj = type;
+        if (!obj)
+            obj = (PyObject *) Py_TYPE(self);
+    }
+
+    if (!obj) {
+        Py_INCREF(self);
+        return self;
+    }
+
+#if CYTHON_COMPILING_IN_LIMITED_API
+    return __Pyx_PyMethod_New(self, obj, type);
+#else
+    return PyMethod_New(self, obj);
+#endif
+}
+
 static PyType_Slot __pyx_CyFunctionType_slots[] = {
     {Py_tp_dealloc, (void *)__Pyx_CyFunction_dealloc},
     {Py_tp_repr, (void *)__Pyx_CyFunction_repr},
@@ -1215,7 +1245,7 @@ static PyType_Slot __pyx_CyFunctionType_slots[] = {
     {Py_tp_methods, (void *)__pyx_CyFunction_methods},
     {Py_tp_members, (void *)__pyx_CyFunction_members},
     {Py_tp_getset, (void *)__pyx_CyFunction_getsets},
-    {Py_tp_descr_get, (void *)__Pyx_PyMethod_New},
+    {Py_tp_descr_get, (void *)__Pyx_CyFunction_descr_get},
     {0, 0},
 };
 

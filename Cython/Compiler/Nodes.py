@@ -4289,8 +4289,6 @@ class DefNodeWrapper(FuncDefNode):
         code.put_declare_refcount_context()
         code.put_setup_refcount_context(EncodedString('%s (vectorcall)' % self.name))
         code.putln("__pyx_CyFunctionObject *cyfunc = (__pyx_CyFunctionObject *)func;")
-        if needs_py_self:
-            code.putln("int __pyx_is_classmethod = (cyfunc->flags & __Pyx_CYFUNCTION_CLASSMETHOD) != 0;")
         if needs_py_self and arg_self_cname != cyfunc_self_cname:
             already_declared = False
             for arg in self.args:
@@ -4302,38 +4300,52 @@ class DefNodeWrapper(FuncDefNode):
                 code.putln("PyObject *%s = NULL;" % arg_self_cname)
         code.putln("PyObject *%s = NULL;" % cyfunc_self_cname)
         code.putln("PyObject *const *%s = args;" % Naming.args_cname)
+        code.putln("PyObject *const *__pyx_argsorig = %s;" % Naming.args_cname)
         code.putln("Py_ssize_t %s = PyVectorcall_NARGS(nargsf);" % Naming.nargs_cname)
+        if self.fast_arg_fallback:
+            code.putln("Py_ssize_t __pyx_nargsorig = %s;" % Naming.nargs_cname)
         code.putln("PyObject *%s = kwnames;" % Naming.kwds_cname)
         code.putln("%s = NULL;" % Naming.kwvalues_cname)
         if needs_py_self:
-            code.putln("if (!__pyx_is_classmethod) {")
+            code.putln("int __pyx_has_self = 0;")
+            code.putln("PyObject **__pyx_allocated_args = NULL;")
             code.putln(
-                "    switch (__Pyx_CyFunction_Vectorcall_CheckArgs(cyfunc, %s, %s)) {" %
+                "switch (__Pyx_CyFunction_Vectorcall_CheckArgs(cyfunc, %s, %s)) {" %
                 (Naming.nargs_cname, Naming.kwds_cname))
-            code.putln("    case 1:")
-            code.putln("        %s = %s[0];" % (cyfunc_self_cname, Naming.args_cname))
-            code.putln("        %s += 1;" % Naming.args_cname)
-            code.putln("        %s -= 1;" % Naming.nargs_cname)
-            code.putln("        %s = %s;" % (arg_self_cname, cyfunc_self_cname))
-            code.putln("        break;")
-            code.putln("    case 0:")
+            code.putln("case 1:")
+            code.putln("    %s = %s[0];" % (cyfunc_self_cname, Naming.args_cname))
+            code.putln("    %s = %s;" % (arg_self_cname, cyfunc_self_cname))
+            code.putln("    __pyx_has_self = 1;")
+            code.putln("    break;")
+            code.putln("case 0:")
             code.putln("#if CYTHON_COMPILING_IN_LIMITED_API")
             code.putln(
-                "        %s = PyCFunction_GetSelf(((__pyx_CyFunctionObject*)cyfunc)->func);" % cyfunc_self_cname)
+                "    %s = PyCFunction_GetSelf(((__pyx_CyFunctionObject*)cyfunc)->func);" % cyfunc_self_cname)
             code.putln(
-                "        if (unlikely(!%s) && PyErr_Occurred()) %s" % (cyfunc_self_cname, code.error_goto(self.pos)))
+                "    if (unlikely(!%s) && PyErr_Occurred()) %s" % (cyfunc_self_cname, code.error_goto(self.pos)))
             code.putln("#else")
-            code.putln("        %s = ((PyCFunctionObject*)cyfunc)->m_self;" % cyfunc_self_cname)
+            code.putln("    %s = ((PyCFunctionObject*)cyfunc)->m_self;" % cyfunc_self_cname)
             code.putln("#endif")
-            code.putln("        %s = %s;" % (arg_self_cname, cyfunc_self_cname))
-            code.putln("        break;")
-            code.putln("    default:")
-            code.putln("        return NULL;")
+            code.putln("    %s = %s;" % (arg_self_cname, cyfunc_self_cname))
+            code.putln("    break;")
+            code.putln("default:")
+            code.putln("    return NULL;")
+            code.putln("}")
+            code.putln("if (!__pyx_has_self && %s) {" % cyfunc_self_cname)
+            code.putln("    Py_ssize_t __pyx_args_len = %s + 1;" % Naming.nargs_cname)
+            code.putln("    PyObject *__pyx_temp_args[8];")
+            code.putln("    if (__pyx_args_len > (Py_ssize_t)(sizeof(__pyx_temp_args) / sizeof(__pyx_temp_args[0]))) {")
+            code.putln("        __pyx_allocated_args = (PyObject **)PyMem_Malloc(__pyx_args_len * sizeof(PyObject*));")
+            code.putln("        if (unlikely(!__pyx_allocated_args)) %s" % code.error_goto(self.pos))
+            code.putln("        %s = (PyObject *const *)__pyx_allocated_args;" % Naming.args_cname)
+            code.putln("    } else {")
+            code.putln("        %s = __pyx_temp_args;" % Naming.args_cname)
             code.putln("    }")
-            code.putln("} else {")
-            code.putln(
-                "    if (unlikely(__Pyx_CyFunction_Vectorcall_CheckArgs(cyfunc, %s, %s) == -1)) return NULL;" %
-                (Naming.nargs_cname, Naming.kwds_cname))
+            code.putln("    ((PyObject **) %s)[0] = %s;" % (Naming.args_cname, cyfunc_self_cname))
+            code.putln("    for (Py_ssize_t __pyx_i = 0; __pyx_i < %s; __pyx_i++) {" % Naming.nargs_cname)
+            code.putln("        ((PyObject **) %s)[__pyx_i + 1] = __pyx_argsorig[__pyx_i];" % Naming.args_cname)
+            code.putln("    }")
+            code.putln("    %s = __pyx_args_len;" % Naming.nargs_cname)
             code.putln("}")
         else:
             code.putln(
@@ -4341,7 +4353,7 @@ class DefNodeWrapper(FuncDefNode):
                 (Naming.nargs_cname, Naming.kwds_cname))
         previous_cleanup_flag = self.needs_values_cleanup
         self.needs_values_cleanup = True
-        self.generate_argument_values_setup_code(self.args, code, tempvardecl_code)
+        self.generate_argument_values_setup_code(self.args, code, tempvardecl_code, defaults_func_cname="cyfunc")
         code.putln(
             "%s = __Pyx_KwValues_%s(%s, %s);" % (
                 Naming.kwvalues_cname, self.signature.fastvar, Naming.args_cname, Naming.nargs_cname))
@@ -4371,6 +4383,8 @@ class DefNodeWrapper(FuncDefNode):
         code.put_label(code.return_label)
         self.generate_argument_values_cleanup_code(code)
         code.put_label(values_cleaned_up_label)
+        if needs_py_self:
+            code.putln("if (__pyx_allocated_args) PyMem_Free(__pyx_allocated_args);")
         for entry in lenv.var_entries:
             if entry.is_arg:
                 if entry.xdecref_cleanup:
@@ -4804,7 +4818,7 @@ class DefNodeWrapper(FuncDefNode):
                 code.putln('}')
                 code.put_var_gotref(self.star_arg.entry)
 
-    def generate_argument_values_setup_code(self, args, code, decl_code):
+    def generate_argument_values_setup_code(self, args, code, decl_code, defaults_func_cname=None):
         max_args = len(args)
         # the 'values' array collects references to arguments
         # before doing any type coercion etc.. Whether they are borrowed or not
@@ -4813,9 +4827,11 @@ class DefNodeWrapper(FuncDefNode):
             max_args, ','.join('0'*max_args)))
 
         if self.target.defaults_struct:
+            if defaults_func_cname is None:
+                defaults_func_cname = Naming.self_cname
             code.putln('struct %s *%s = __Pyx_CyFunction_Defaults(struct %s, %s);' % (
                 self.target.defaults_struct, Naming.dynamic_args_cname,
-                self.target.defaults_struct, Naming.self_cname))
+                self.target.defaults_struct, f"(PyObject *){defaults_func_cname}"))
 
     def generate_argument_defaults_assignment_code(self, args, code):
         # Assign the default values to the empty entries of the 'values' array.

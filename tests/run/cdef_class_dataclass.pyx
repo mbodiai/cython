@@ -88,7 +88,7 @@ cdef class InheritsFromDataclass(BasicDataclass):
     e: cython.int = 0
 
     def __post_init__(self):
-        print "In __post_init__"
+        print("In __post_init__")
 
 @cython.dataclasses.dataclass
 cdef class InheritsFromNotADataclass(NotADataclass):

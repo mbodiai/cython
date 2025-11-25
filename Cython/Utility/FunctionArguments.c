@@ -1119,9 +1119,12 @@ static int __Pyx_FastParseKeywords(
     PyObject *kwnames,
     PyObject **const *localslots)
 {
-    Py_ssize_t i;
+    Py_ssize_t i = 0;
+    Py_ssize_t required_kwonly = info->required_kwonly;
     Py_ssize_t positional_args = nargs;
     const __Pyx_ParamMeta *params = info->params;
+    Py_ssize_t pos_index = 0;
+    int __pyx_result = __PYX_FASTPARSE_ERROR;
     if (unlikely(positional_args < info->required_pos || positional_args > info->max_pos)) {
         __Pyx_RaiseArgtupleInvalid(
             info->func_name,
@@ -1131,7 +1134,6 @@ static int __Pyx_FastParseKeywords(
             positional_args);
         return __PYX_FASTPARSE_ERROR;
     }
-    Py_ssize_t pos_index = 0;
     for (i = 0; i < info->param_count && pos_index < positional_args; i++) {
         const __Pyx_ParamMeta *param = params + i;
         if (!(param->flags & __PYX_PARAM_ACCEPTS_POS))
@@ -1151,7 +1153,6 @@ static int __Pyx_FastParseKeywords(
         goto bad;
     }
 
-    Py_ssize_t required_kwonly = info->required_kwonly;
     if (kwnames && __Pyx_PyTuple_GET_SIZE(kwnames)) {
         Py_ssize_t nkwargs = __Pyx_PyTuple_GET_SIZE(kwnames);
 #if !CYTHON_ASSUME_SAFE_SIZE
@@ -1233,7 +1234,8 @@ static int __Pyx_FastParseKeywords(
             positional_args);
         goto bad;
     }
-    return __PYX_FASTPARSE_SUCCESS;
+    __pyx_result = __PYX_FASTPARSE_SUCCESS;
+    goto done;
 bad:
     for (i = 0; i < info->param_count; i++) {
         PyObject **slot = localslots[i];
@@ -1242,6 +1244,7 @@ bad:
             *slot = NULL;
         }
     }
-    return __PYX_FASTPARSE_ERROR;
+done:
+    return __pyx_result;
 }
 #endif /* CYTHON_METH_FASTCALL */

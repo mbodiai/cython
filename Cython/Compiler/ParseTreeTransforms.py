@@ -3445,8 +3445,6 @@ class MarkClosureVisitor(CythonTransform):
         self.visitchildren(node)
         node.needs_closure = self.needs_closure
         self.needs_closure = True
-        if node.needs_closure and node.overridable:
-            error(node.pos, "closures inside cpdef functions not yet supported")
         return node
 
     def visit_LambdaNode(self, node):
@@ -3528,10 +3526,15 @@ class CreateClosureClasses(CythonTransform):
 
         if not from_closure and (self.path or inner_node):
             if not inner_node:
-                if not node.py_cfunc_node:
-                    raise InternalError("DefNode does not have assignment node")
-                inner_node = node.py_cfunc_node
-            inner_node.needs_closure_code = False
+                inner_node = getattr(node, 'py_cfunc_node', None)
+                if inner_node is None and getattr(node, 'py_func_stat', None):
+                    stats = getattr(node.py_func_stat, 'stats', None)
+                    if stats:
+                        inner_node = stats[0]
+                if inner_node is None:
+                    inner_node = node
+            if hasattr(inner_node, 'needs_closure_code'):
+                inner_node.needs_closure_code = False
             node.needs_outer_scope = False
 
         if node.is_generator:
@@ -3616,11 +3619,8 @@ class CreateClosureClasses(CythonTransform):
         return node
 
     def visit_CFuncDefNode(self, node):
-        if not node.overridable:
-            return self.visit_FuncDefNode(node)
-        else:
-            self.visitchildren(node)
-            return node
+        # Treat cpdef/cfunc/ccall like def for closure handling.
+        return self.visit_FuncDefNode(node)
 
     def visit_GeneratorExpressionNode(self, node):
         node = _HandleGeneratorArguments()(node)
