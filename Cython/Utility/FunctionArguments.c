@@ -1035,9 +1035,10 @@ bad:
     return NULL;
 }
 #endif
+#endif /* CYTHON_METH_FASTCALL */
 
-#if CYTHON_METH_FASTCALL
 //////////////////// FastParseKeywords.proto ////////////////////
+#if CYTHON_METH_FASTCALL
 #define __PYX_PARAM_ACCEPTS_POS   0x01u
 #define __PYX_PARAM_ACCEPTS_KW    0x02u
 #define __PYX_PARAM_IS_KWONLY     0x04u
@@ -1048,7 +1049,7 @@ bad:
 #define __PYX_PARAM_DEFAULT_MISSING      ((unsigned short)0xFFFFu)
 
 typedef struct {
-    PyObject *name;
+    unsigned short name_index;  /* index into __pyx_string_tab */
     unsigned short flags;
     unsigned short converter;
     unsigned short default_index;
@@ -1076,8 +1077,10 @@ static int __Pyx_FastParseKeywords(
     Py_ssize_t nargs,
     PyObject *kwnames,
     PyObject **const *localslots); /*proto*/
+#endif /* CYTHON_METH_FASTCALL */
 
 //////////////////// FastParseKeywords ////////////////////
+#if CYTHON_METH_FASTCALL
 static CYTHON_INLINE Py_ssize_t __Pyx_FastArg_FindKeyword(
     PyObject *name,
     const __Pyx_ParamMeta *params,
@@ -1085,15 +1088,19 @@ static CYTHON_INLINE Py_ssize_t __Pyx_FastArg_FindKeyword(
 {
     Py_ssize_t i;
     for (i = 0; i < param_count; i++) {
-        PyObject *param_name = params[i].name;
-        if (!param_name)
+        unsigned short idx = params[i].name_index;
+        if (idx == (unsigned short)__PYX_PARAM_DEFAULT_MISSING)
             continue;
+        PyObject *param_name = __pyx_mstate_global->__pyx_string_tab[idx];
         if (param_name == name) {
             return i;
         }
     }
     for (i = 0; i < param_count; i++) {
-        PyObject *param_name = params[i].name;
+        unsigned short idx = params[i].name_index;
+        if (idx == (unsigned short)__PYX_PARAM_DEFAULT_MISSING)
+            continue;
+        PyObject *param_name = __pyx_mstate_global->__pyx_string_tab[idx];
         if (param_name && param_name != name) {
             int eq = __Pyx_PyUnicode_Equals(param_name, name, Py_EQ);
             if (unlikely(eq != 0)) {
@@ -1187,7 +1194,10 @@ static int __Pyx_FastParseKeywords(
             if ((param->flags & __PYX_PARAM_IS_KWONLY) &&
                 param->default_index == __PYX_PARAM_DEFAULT_MISSING &&
                 !*localslots[i]) {
-                __Pyx_RaiseKeywordRequired(info->func_name, param->name);
+                unsigned short name_index = param->name_index;
+                PyObject *param_name = name_index == __PYX_PARAM_DEFAULT_MISSING ?
+                    NULL : __pyx_mstate_global->__pyx_string_tab[name_index];
+                __Pyx_RaiseKeywordRequired(info->func_name, param_name);
                 goto bad;
             }
         }
@@ -1209,7 +1219,10 @@ static int __Pyx_FastParseKeywords(
             continue;
         }
         if (param->flags & __PYX_PARAM_IS_KWONLY) {
-            __Pyx_RaiseKeywordRequired(info->func_name, param->name);
+            unsigned short name_index = param->name_index;
+            PyObject *param_name = name_index == __PYX_PARAM_DEFAULT_MISSING ?
+                NULL : __pyx_mstate_global->__pyx_string_tab[name_index];
+            __Pyx_RaiseKeywordRequired(info->func_name, param_name);
             goto bad;
         }
         __Pyx_RaiseArgtupleInvalid(
@@ -1231,7 +1244,4 @@ bad:
     }
     return __PYX_FASTPARSE_ERROR;
 }
-#endif /* FastParseKeywords */
-#endif
-
-#endif
+#endif /* CYTHON_METH_FASTCALL */
