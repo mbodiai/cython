@@ -841,3 +841,6 @@ default_options = dict(
     shared_c_file_path=None,
     shared_utility_qualified_name = None,
 )
+
+# Shared default option instance for callers that want a ready-to-use set.
+DEFAULT_COMPILATION_OPTIONS = CompilationOptions()

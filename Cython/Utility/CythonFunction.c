@@ -113,10 +113,13 @@ static CYTHON_INLINE void __Pyx_CyFunction_SetAnnotationsDict(PyObject *m,
 static int __pyx_CyFunction_init(PyObject *module);
 
 #if CYTHON_METH_FASTCALL
+#if CYTHON_VECTORCALL
 static PyObject * __Pyx_CyFunction_Vectorcall_NOARGS(PyObject *func, PyObject *const *args, size_t nargsf, PyObject *kwnames);
 static PyObject * __Pyx_CyFunction_Vectorcall_O(PyObject *func, PyObject *const *args, size_t nargsf, PyObject *kwnames);
 static PyObject * __Pyx_CyFunction_Vectorcall_FASTCALL_KEYWORDS(PyObject *func, PyObject *const *args, size_t nargsf, PyObject *kwnames);
 static PyObject * __Pyx_CyFunction_Vectorcall_FASTCALL_KEYWORDS_METHOD(PyObject *func, PyObject *const *args, size_t nargsf, PyObject *kwnames);
+static CYTHON_INLINE int __Pyx_CyFunction_Vectorcall_CheckArgs(__pyx_CyFunctionObject *cyfunc, Py_ssize_t nargs, PyObject *kwnames);
+#endif
 #if CYTHON_COMPILING_IN_LIMITED_API
 #define __Pyx_CyFunction_func_vectorcall(f) (((__pyx_CyFunctionObject*)f)->func_vectorcall)
 #else
@@ -751,6 +754,7 @@ static PyObject *__Pyx_CyFunction_Init(__pyx_CyFunctionObject *op, PyMethodDef *
     op->func_annotations = NULL;
     op->func_is_coroutine = NULL;
 #if CYTHON_METH_FASTCALL
+#if CYTHON_VECTORCALL
     switch (ml->ml_flags & (METH_VARARGS | METH_FASTCALL | METH_NOARGS | METH_O | METH_KEYWORDS | METH_METHOD)) {
     case METH_NOARGS:
         __Pyx_CyFunction_func_vectorcall(op) = __Pyx_CyFunction_Vectorcall_NOARGS;
@@ -774,6 +778,9 @@ static PyObject *__Pyx_CyFunction_Init(__pyx_CyFunctionObject *op, PyMethodDef *
         Py_DECREF(op);
         return NULL;
     }
+#else
+    __Pyx_CyFunction_func_vectorcall(op) = NULL;
+#endif
 #endif
     return (PyObject *) op;
 }
@@ -1044,9 +1051,16 @@ static CYTHON_INLINE int __Pyx_CyFunction_Vectorcall_CheckArgs(__pyx_CyFunctionO
         ret = 1;
     }
     if (unlikely(kwnames) && unlikely(__Pyx_PyTuple_GET_SIZE(kwnames))) {
-        __Pyx_CyFunction_raise_type_error(
-            cyfunc, "takes no keyword arguments");
-        return -1;
+#if CYTHON_COMPILING_IN_LIMITED_API
+        unsigned int ml_flags = PyCFunction_GetFlags(cyfunc->func);
+#else
+        unsigned int ml_flags = ((PyCFunctionObject*)cyfunc)->m_ml->ml_flags;
+#endif
+        if (unlikely(!(ml_flags & METH_KEYWORDS))) {
+            __Pyx_CyFunction_raise_type_error(
+                cyfunc, "takes no keyword arguments");
+            return -1;
+        }
     }
     return ret;
 }

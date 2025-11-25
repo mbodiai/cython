@@ -3,7 +3,6 @@ try:
     from setuptools import setup, Extension
 except ImportError:
     from distutils.core import setup, Extension
-from glob import glob
 import os
 import re
 import stat
@@ -19,7 +18,7 @@ is_cpython = platform.python_implementation() == 'CPython'
 
 # this specifies which versions of python we support, pip >= 9 knows to skip
 # versions of packages which are not compatible with the running python
-PYTHON_REQUIRES = '>=3.8'
+PYTHON_REQUIRES = '>=3.9'
 
 TRACKER_URL = "https://github.com/cython/cython/issues/"
 
@@ -91,56 +90,29 @@ else:
 def compile_cython_modules(profile=False, coverage=False, compile_minimal=False, compile_more=False, cython_with_refnanny=False,
                            cython_limited_api=None):
     source_root = os.path.abspath(os.path.dirname(__file__))
-
-    # Clean up any in-tree compiled extension artifacts that might shadow sources and
-    # cause ABI mismatches during early imports (e.g., setuptools importing
-    # Cython.Compiler.Main triggers Symtab->Code import before our build runs).
-    # We only remove artifacts within the Cython package tree in this repo.
-    for pattern in (
-        os.path.join(source_root, 'Cython', 'Compiler', '*.so'),
-        os.path.join(source_root, 'Cython', 'Compiler', '*.pyd'),
-        os.path.join(source_root, 'Cython', 'Plex', '*.so'),
-        os.path.join(source_root, 'Cython', 'Plex', '*.pyd'),
-        os.path.join(source_root, 'Cython', '*.so'),
-        os.path.join(source_root, 'Cython', '*.pyd'),
-    ):
-        for path in glob(pattern):
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-
     compiled_modules = [
-        # Keep a small core of C extensions that substantially speed up the compiler
-        # but avoid compiling modules (like Plex.* or Visitor/Code) whose call
-        # signatures are sensitive to our calling-convention changes.
+        "Cython.Plex.Actions",
+        "Cython.Plex.Scanners",
+        "Cython.Compiler.FlowControl",
         "Cython.Compiler.LineTable",
+        "Cython.Compiler.Scanning",
+        "Cython.Compiler.Visitor",
         "Cython.Runtime.refnanny",
     ]
     if not compile_minimal:
         compiled_modules.extend([
-            # Keep StringIOTree for faster annotation/HTML generation,
-            # but leave Cython.Compiler.Code as pure Python for now to
-            # avoid ABI/segfault risks in this fork.
-            "Cython.StringIOTree",
-        ])
-    if compile_more and not compile_minimal:
-        compiled_modules.extend([
-            # Additional modules that upstream builds by default.
-            "Cython.Plex.Actions",
-            "Cython.Plex.Scanners",
             "Cython.Plex.Machines",
             "Cython.Plex.Transitions",
             "Cython.Plex.DFA",
-            "Cython.Compiler.FlowControl",
-            "Cython.Compiler.Scanning",
-            "Cython.Compiler.Visitor",
             "Cython.Compiler.Code",
             "Cython.Compiler.FusedNode",
             "Cython.Compiler.Parsing",
             "Cython.Tempita._tempita",
+            "Cython.StringIOTree",
             "Cython.Utils",
-            # The “compile more” set from upstream.
+        ])
+    if compile_more and not compile_minimal:
+        compiled_modules.extend([
             "Cython.Compiler.Lexicon",
             "Cython.Compiler.Pythran",
             "Cython.Build.Dependencies",
@@ -348,9 +320,6 @@ def check_limited_api_option(name):
     def handle_arg(arg: str):
         arg = arg.lower()
         if arg == "true":
-            # Default to Python 3.9 limited API unless running on an older version.
-            if sys.version_info >= (3, 9):
-                return (3, 9)
             return sys.version_info[:2]
         if arg == "false":
             return None
@@ -376,12 +345,7 @@ cython_profile = check_option('cython-profile')
 cython_coverage = check_option('cython-coverage')
 cython_with_refnanny = check_option('cython-with-refnanny')
 
-# By default, do not compile Cython's own C extensions (they are an optional optimisation).
-compile_cython_itself = (
-    check_option('cython-compile')
-    or check_option('cython-compile-all')
-    or check_option('cython-compile-minimal')
-)
+compile_cython_itself = not check_option('no-cython-compile')
 
 if compile_cython_itself and sysconfig.get_config_var("Py_GIL_DISABLED"):
     # On freethreaded builds there's good reasons not to compile Cython by default.

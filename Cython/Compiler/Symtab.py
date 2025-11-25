@@ -1426,6 +1426,7 @@ class ModuleScope(Scope):
         self.types_imported = set()
         self.included_files = []
         self.has_extern_class = 0
+        self.cpp = bool(context.cpp) if context is not None else False
         self.cached_builtins = []
         self.undeclared_cached_builtins = []
         self.namespace_cname = self.module_cname

@@ -3,6 +3,8 @@
 # Possible version formats: "3.1.0", "3.1.0a1", "3.1.0a1.dev0"
 __version__ = "3.3.0a0"
 
+import inspect
+
 
 # BEGIN shameless copy from Cython/minivect/minitypes.py
 
@@ -142,7 +144,18 @@ def inline(f, *args, **kwds):
         global _cython_inline
         if _cython_inline is None:
             from Cython.Build.Inline import cython_inline as _cython_inline
-        return _cython_inline(f, *args, **kwds)
+        locals_arg = kwds.pop('locals', None)
+        globals_arg = kwds.pop('globals', None)
+        if locals_arg is None or globals_arg is None:
+            frame = inspect.currentframe().f_back
+            try:
+                if locals_arg is None:
+                    locals_arg = frame.f_locals
+                if globals_arg is None:
+                    globals_arg = frame.f_globals
+            finally:
+                del frame
+        return _cython_inline(f, *args, locals=locals_arg, globals=globals_arg, **kwds)
     else:
         assert len(args) == len(kwds) == 0
         return f

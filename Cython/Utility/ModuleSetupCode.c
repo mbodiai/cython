@@ -771,9 +771,16 @@ static int __Pyx_init_co_variables(void); /* proto */
 #endif
 
 #if CYTHON_METH_FASTCALL
-  #define __Pyx_METH_FASTCALL METH_FASTCALL
-  #define __Pyx_PyCFunction_FastCall __Pyx_PyCFunctionFast
-  #define __Pyx_PyCFunction_FastCallWithKeywords __Pyx_PyCFunctionFastWithKeywords
+  #if CYTHON_VECTORCALL
+    #define __Pyx_METH_FASTCALL METH_FASTCALL
+    #define __Pyx_PyCFunction_FastCall __Pyx_PyCFunctionFast
+    #define __Pyx_PyCFunction_FastCallWithKeywords __Pyx_PyCFunctionFastWithKeywords
+  #else
+    // Downgrade to VARARGS/KW when vectorcall is disabled at compile time.
+    #define __Pyx_METH_FASTCALL METH_VARARGS
+    #define __Pyx_PyCFunction_FastCall PyCFunction
+    #define __Pyx_PyCFunction_FastCallWithKeywords PyCFunctionWithKeywords
+  #endif
 #else
   #define __Pyx_METH_FASTCALL METH_VARARGS
   #define __Pyx_PyCFunction_FastCall PyCFunction

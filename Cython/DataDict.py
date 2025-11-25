@@ -4,6 +4,8 @@ import copy
 from typing import Any, Self
 
 class DataDict(dict):
+    _MISSING = object()
+
     def copy(self) -> Self:
         cp = type(self)()
         cp.update(self)
@@ -97,3 +99,29 @@ class DataDict(dict):
 
     def dict(self) -> dict[str, Any]:
         return type(self)(**self)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        try:
+            return self[key]
+        except KeyError:
+            value = self._get_field_default(key)
+            if value is self._MISSING:
+                return default
+            return value
+
+    def _get_field_default(self, key: str) -> Any:
+        cur: Any = self
+        remaining = key
+        while True:
+            fields = getattr(type(cur), "__dataclass_fields__", {})
+            if "." in remaining:
+                head, remaining = remaining.split(".", 1)
+                if head not in fields:
+                    return self._MISSING
+                cur = getattr(cur, head)
+                if not isinstance(cur, DataDict):
+                    return self._MISSING
+                continue
+            if remaining in fields:
+                return getattr(cur, remaining)
+            return self._MISSING

@@ -1464,7 +1464,8 @@ class StringConst:
             f"_{self.cname[len(Naming.const_prefix):]}"
         )
 
-        py_string = PyStringConst(pystring_cname, encoding, intern, is_unicode)
+        py_string = PyStringConst(
+            pystring_cname, encoding, intern=intern, is_unicode=is_unicode)
         self.py_strings[key] = py_string
         return py_string
 
@@ -1476,12 +1477,14 @@ class PyStringConst:
     # encoding    string
     # intern      boolean
     # is_unicode  boolean
+    # index       Optional[int]   index in __pyx_string_tab
 
-    def __init__(self, cname, encoding, intern=False, is_unicode=False):
+    def __init__(self, cname, encoding, intern=False, is_unicode=False, index=None):
         self.cname = cname
         self.encoding = encoding
         self.is_unicode = is_unicode
         self.intern = intern
+        self.index = index
 
     def __lt__(self, other):
         return self.cname < other.cname
@@ -1543,6 +1546,7 @@ class GlobalState:
         'module_state_traverse',
         'module_state_traverse_contents',
         'module_state_traverse_end',
+        'fastarg_tables',  # custom section for fast-arg metadata; must follow constant_name_defines
         'module_code',  # user code goes here
         'module_exttypes',
         'initfunc_declarations',
@@ -1595,6 +1599,7 @@ class GlobalState:
         self.cached_cmethods = {}
         self.initialised_constants = set()
         self.shared_utility_functions = []
+        self.pystring_table_index = 0
 
         writer.set_global_state(self)
         self.rootwriter = writer
@@ -1804,6 +1809,9 @@ class GlobalState:
         # return a Python string constant, creating a new one if necessary
         c_string: StringConst = self.get_string_const(text, c_used=False)
         py_string = c_string.get_py_string_const(text.encoding, identifier)
+        if py_string.index is None and py_string.is_unicode:
+            py_string.index = self.pystring_table_index
+            self.pystring_table_index += 1
         return py_string
 
     def get_py_codeobj_const(self, node):
@@ -2021,15 +2029,38 @@ class GlobalState:
                     if py_string.is_unicode and not isinstance(text, str):
                         text = StringEncoding.EncodedString(text.decode(py_string.encoding or 'UTF-8'))
 
-                    (py_unicode_consts if py_string.is_unicode else py_bytes_consts).append((
-                        py_string.intern and py_string.is_unicode,
-                        py_string.cname,
-                        text,
-                    ))
+                    (py_unicode_consts if py_string.is_unicode else py_bytes_consts).append(
+                        (py_string, text)
+                    )
+
+        # Ensure deterministic ordering that matches the indices used in fast-arg tables.
+        py_unicode_consts.sort(
+            key=lambda item: (
+                item[0].index if item[0].index is not None else 1 << 30,
+                item[0].cname,
+            )
+        )
+        for idx, (py_string, _) in enumerate(py_unicode_consts):
+            if py_string.index is None:
+                py_string.index = idx
+
+        start_index = len(py_unicode_consts)
+        py_bytes_consts.sort(key=lambda item: item[0].cname)
+        for offset, (py_string, _) in enumerate(py_bytes_consts):
+            if py_string.index is None:
+                py_string.index = start_index + offset
+
+        # Repackage in the legacy tuple shape expected downstream.
+        py_unicode_consts = [
+            (py_string.intern and py_string.is_unicode, py_string.cname, text)
+            for py_string, text in py_unicode_consts
+        ]
+        py_bytes_consts = [
+            (py_string.intern and py_string.is_unicode, py_string.cname, text)
+            for py_string, text in py_bytes_consts
+        ]
 
         c_consts.sort()
-        py_bytes_consts.sort()
-        py_unicode_consts.sort()
 
         # Generate C string constants.
         decls_writer = self.parts['string_decls']

@@ -24,6 +24,13 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, ParamSpec, Type
 
 from typing_extensions import NamedTuple, TypeIs
 
+try:
+    from Cython.Utility.ImportUtils import smart_import as _smart_import
+except Exception:  # pragma: no cover - fallback for bootstrapping
+    def _smart_import(name: str, /, *, mode: str = "eager"):
+        import importlib
+        return importlib.import_module(name)
+
 if TYPE_CHECKING:
     import cython
 else:
@@ -151,14 +158,13 @@ def is_method_like(obj: Any) -> TypeIs[types.MethodType]:
 
 def isimport(obj, module: str | None = None) -> TypeIs[types.ModuleType | types.FunctionType | type]:
     """Check if object is imported by module from another module."""
-    from mbcore.utils.import_utils import smart_import
 
     mod = module or get_last_frame_module()
     if isbuiltin(obj):
         return False
     if ismodule(obj):
         return obj.__name__ != mod
-    mod = smart_import(mod)
+    mod = _smart_import(mod)
     name = obj.__name__ if isinstance(obj, types.ModuleType | types.FunctionType | type) else type(obj).__name__
     file = getsourcefile(mod)
     if file is None:
@@ -438,7 +444,10 @@ def resolve_root_and_main() -> tuple[PackageRoot, MainFile]:
     f = get_first_frame()
     main_file = f.f_code.co_filename
     if not main_file or main_file.startswith("<") or main_file.endswith(">") or main_file == "string" or not Path(main_file).exists():
-        warnings.warn(f"mbcore was unable to resolve the __main__ module for {main_file!r}; returning __main__ and the main file path", stacklevel=2)
+        warnings.warn(
+            f"Could not resolve the __main__ module for {main_file!r}; returning __main__ and the main file path",
+            stacklevel=2,
+        )
         return Path.cwd(), Path(main_file)
     path = Path(main_file).resolve()
     # If pointing at a file, start from its parent
@@ -1384,9 +1393,9 @@ if TYPE_CHECKING:
     ) -> dict[str, Any]:
         return _get_annotations(func, globals=globalns, locals=localns or {}, eval_str=eval_str)
 else:
-    from mbcore.utils.import_utils import smart_import
     def get_annotations(func, globalns=None, localns=None, eval_str=False):
-        return smart_import("inspect.get_annotations")(func, globals=globalns, locals=localns or {}, eval_str=eval_str)
+        inspect_mod = _smart_import("inspect")
+        return inspect_mod.get_annotations(func, globals=globalns, locals=localns or {}, eval_str=eval_str)
 
 PosOnlyNames = tuple[str, ...]
 PosOrKwNames = tuple[str, ...]

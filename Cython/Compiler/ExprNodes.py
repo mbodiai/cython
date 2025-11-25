@@ -10470,6 +10470,15 @@ class PyCFunctionNode(ExprNode, ModuleNameMixin):
                 self.code_object.py_result(),
                 code.error_goto_if_null(self.result(), self.pos)))
 
+        # Hook up per-function vectorcall entry when available.
+        vectorcall_cname = getattr(getattr(def_node, "py_wrapper", None), "vectorcall_cname", None)
+        if vectorcall_cname:
+            code.putln("#if CYTHON_METH_FASTCALL && CYTHON_VECTORCALL")
+            code.putln(
+                "__Pyx_CyFunction_func_vectorcall((__pyx_CyFunctionObject*)%s) = %s;" % (
+                    self.result(), vectorcall_cname))
+            code.putln("#endif")
+
         self.generate_gotref(code)
         code.put_make_object_deferred(self.result())
 

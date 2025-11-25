@@ -2474,7 +2474,7 @@ if VALUE is not None:
 
         self.seen_vars_stack.pop()
 
-        if "ufunc" in lenv.directives:
+        if lenv.directives.get("ufunc"):
             from . import UFuncs
             return UFuncs.convert_to_ufunc(node)
         return node
@@ -3088,13 +3088,19 @@ class AdjustDefByDirectives(CythonTransform, SkipDeclarations):
 
     def visit_DefNode(self, node):
         modifiers = []
-        if 'inline' in self.directives:
+        if self.directives.get('inline'):
             modifiers.append('inline')
         nogil = self.directives.get('nogil')
         with_gil = self.directives.get('with_gil')
         except_val = self.directives.get('exceptval')
         has_explicit_exc_clause = False if except_val is None else True
         return_type_node = self.directives.get('returns')
+        cfunc_present = dict.__contains__(self.directives, 'cfunc')
+        cfunc_directive = self.directives.get('cfunc')
+        has_cfunc = cfunc_present and cfunc_directive not in (False,)
+        ccall_present = dict.__contains__(self.directives, 'ccall')
+        ccall_directive = self.directives.get('ccall')
+        has_ccall = ccall_present and ccall_directive not in (False,)
         if return_type_node is None and self.directives['annotation_typing']:
             return_type_node = node.return_type_annotation
             # for Python annotations, prefer safe exception handling by default
@@ -3103,10 +3109,10 @@ class AdjustDefByDirectives(CythonTransform, SkipDeclarations):
         elif except_val is None:
             # backward compatible default: no exception check, unless there's also a "@returns" declaration
             except_val = (None, True if return_type_node else False)
-        if self.directives.get('c_compile_guard') and 'cfunc' not in self.directives:
+        if self.directives.get('c_compile_guard') and not has_cfunc:
             error(node.pos, "c_compile_guard only allowed on C functions")
-        if 'ccall' in self.directives:
-            if 'cfunc' in self.directives:
+        if has_ccall:
+            if has_cfunc:
                 error(node.pos, "cfunc and ccall directives cannot be combined")
             if with_gil:
                 error(node.pos, "ccall functions cannot be declared 'with_gil'")
@@ -3115,7 +3121,7 @@ class AdjustDefByDirectives(CythonTransform, SkipDeclarations):
                 returns=return_type_node, except_val=except_val, has_explicit_exc_clause=has_explicit_exc_clause)
             node.mb_c_directive = "ccall"
             return self.visit(node)
-        if 'cfunc' in self.directives:
+        if has_cfunc:
             if self.in_py_class:
                 error(node.pos, "cfunc directive is not allowed here")
             else:
@@ -3153,7 +3159,9 @@ class AdjustDefByDirectives(CythonTransform, SkipDeclarations):
         return node
 
     def visit_PyClassDefNode(self, node):
-        if any(directive in self.directives for directive in self.converts_to_cclass):
+        if any(dict.__contains__(self.directives, directive) and
+               self.directives.get(directive) not in (False, None)
+               for directive in self.converts_to_cclass):
             node = node.as_cclass()
             return self.visit(node)
         else:
