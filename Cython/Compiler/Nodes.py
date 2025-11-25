@@ -3676,8 +3676,18 @@ class DefNode(FuncDefNode):
             arg_code = 'void'  # No arguments
         dc = self.return_type.declaration_code(self.entry.pyfunc_cname)
 
-        decls_code = code.globalstate['decls']
+        # Emit a forward declaration early (in decls) so wrappers can call the body without
+        # implicit declarations, and also in module_code (after string macros) for existing
+        # expectations about ordering.
+        decls_proto = code.globalstate['decls']
         preprocessor_guard = self.get_preprocessor_guard()
+        if preprocessor_guard:
+            decls_proto.putln(preprocessor_guard)
+        decls_proto.putln(
+            "static %s(%s); /* proto */" % (dc, arg_code))
+
+        # Emit after string macros are defined; module_code section comes after constant_name_defines.
+        decls_code = code.globalstate['module_code']
         if preprocessor_guard:
             decls_code.putln(preprocessor_guard)
         decls_code.putln(
@@ -3896,8 +3906,6 @@ class DefNodeWrapper(FuncDefNode):
         code.putln("")
         code.putln("/* function exit code */")
 
-        self.vectorcall_cname = self.generate_vectorcall_function(env, code)
-
         # ----- Error cleanup
         values_cleaned_up_label = code.new_label("cleaned_up")
         if code.label_used(code.error_label):
@@ -3941,6 +3949,10 @@ class DefNodeWrapper(FuncDefNode):
             code.putln("return %s;" % Naming.retval_cname)
         code.putln('}')
         code.exit_cfunc_scope()
+
+        # Generate the standalone vectorcall entry (outside the wrapper body).
+        self.vectorcall_cname = self.generate_vectorcall_function(env, code)
+
         if preprocessor_guard:
             code.putln("#endif /*!(%s)*/" % preprocessor_guard)
 
@@ -4158,13 +4170,19 @@ class DefNodeWrapper(FuncDefNode):
     def _ensure_fast_arg_tables(self, code):
         if self._fast_arg_tables_generated:
             return
-        decls_code = code.globalstate['decls']
+        # Emit tables after constant_name_defines to ensure string macros are in scope.
+        decls_code = code.globalstate['fastarg_tables']
         param_count = len(self.args)
         param_cname = punycodify_name(Naming.parammeta_prefix + self.target.entry.func_cname)
         info_cname = punycodify_name(Naming.paraminfo_prefix + self.target.entry.func_cname)
         optional_count = 0
         accepts_keywords = False
         if param_count:
+            # Define name index macros locally so static initialisers have integer constants.
+            for arg in self.args:
+                name_entry = code.globalstate.get_py_string_const(arg.entry.name, identifier=False)
+                name_cname = name_entry.cname
+                decls_code.putln(f"#define {name_cname}_IDX {name_entry.index}")
             decls_code.putln("static const __Pyx_ParamMeta %s[%d] = {" % (param_cname, param_count))
             for arg in self.args:
                 name_entry = code.globalstate.get_py_string_const(arg.entry.name, identifier=False)
@@ -4177,7 +4195,7 @@ class DefNodeWrapper(FuncDefNode):
                     optional_count += 1
                 else:
                     default_index = "__PYX_PARAM_DEFAULT_MISSING"
-                decls_code.putln("{%s, %s, 0, %s}," % (
+                decls_code.putln("{%s_IDX, %s, 0, %s}," % (
                     name_cname, flags, default_index))
             decls_code.putln("};")
             params_expr = param_cname
@@ -4226,19 +4244,25 @@ class DefNodeWrapper(FuncDefNode):
         code.use_label(end_label)
         code.putln("if (likely(__pyx_fastparse_result == __PYX_FASTPARSE_SUCCESS)) {")
         self.generate_argument_defaults_assignment_code(self.args, code)
+        for i, arg in enumerate(self.args):
+            self.generate_arg_assignment(arg, f"values[{i}]", code)
         code.putln("goto %s;" % end_label)
         code.putln("}")
         code.use_label(code.error_label)
-        code.putln("if (__pyx_fastparse_result == __PYX_FASTPARSE_ERROR) goto %s;" % code.error_label)
+        code.putln(f"if (__pyx_fastparse_result == __PYX_FASTPARSE_ERROR) {code.error_goto(self.pos)}")
         code.putln("}")
 
     def generate_vectorcall_function(self, env, code):
         if not self.fast_arg_parsing:
             return None
+        # Use a fresh writer insertion point so we don't disturb the current funcstate.
+        code = code.globalstate.parts['module_code'].insertion_point()
         lenv = self.target.local_scope
+        first_arg = self.args[0] if self.args else None
         self_entry = lenv.lookup_here("self") if hasattr(lenv, "lookup_here") else None
-        if not self_entry and self.args:
-            self_entry = getattr(self.args[0], "entry", None)
+        if not self_entry and first_arg:
+            if getattr(first_arg, "is_self_arg", False) or getattr(first_arg, "is_type_arg", False):
+                self_entry = getattr(first_arg, "entry", None)
         arg_self_cname = getattr(self_entry, "cname", None)
         cyfunc_self_cname = Naming.self_cname
         vectorcall_cname = punycodify_name(
@@ -4246,6 +4270,9 @@ class DefNodeWrapper(FuncDefNode):
         code.globalstate.use_utility_code(
             UtilityCode.load_cached("CythonFunctionShared", "CythonFunction.c"))
         is_py_self_arg = bool(self_entry and getattr(self_entry.type, "is_pyobject", False))
+        first_arg_is_self = bool(first_arg and getattr(first_arg, "is_self_arg", False))
+        first_arg_is_type = bool(first_arg and getattr(first_arg, "is_type_arg", False))
+        needs_py_self = bool(arg_self_cname and is_py_self_arg and (first_arg_is_self or first_arg_is_type))
         code.putln("#if CYTHON_METH_FASTCALL && CYTHON_VECTORCALL")
         code.putln(
             "static PyObject *%s(PyObject *func, PyObject *const *args, "
@@ -4262,8 +4289,9 @@ class DefNodeWrapper(FuncDefNode):
         code.put_declare_refcount_context()
         code.put_setup_refcount_context(EncodedString('%s (vectorcall)' % self.name))
         code.putln("__pyx_CyFunctionObject *cyfunc = (__pyx_CyFunctionObject *)func;")
-        if arg_self_cname and is_py_self_arg and arg_self_cname != cyfunc_self_cname:
-            # ensure self declared
+        if needs_py_self:
+            code.putln("int __pyx_is_classmethod = (cyfunc->flags & __Pyx_CYFUNCTION_CLASSMETHOD) != 0;")
+        if needs_py_self and arg_self_cname != cyfunc_self_cname:
             already_declared = False
             for arg in self.args:
                 if getattr(arg, 'entry', None) and arg.entry.cname == arg_self_cname:
@@ -4277,31 +4305,40 @@ class DefNodeWrapper(FuncDefNode):
         code.putln("Py_ssize_t %s = PyVectorcall_NARGS(nargsf);" % Naming.nargs_cname)
         code.putln("PyObject *%s = kwnames;" % Naming.kwds_cname)
         code.putln("%s = NULL;" % Naming.kwvalues_cname)
-        code.putln(
-            "switch (__Pyx_CyFunction_Vectorcall_CheckArgs(cyfunc, %s, %s)) {" %
-            (Naming.nargs_cname, Naming.kwds_cname))
-        code.putln("case 1:")
-        code.putln("    %s = %s[0];" % (cyfunc_self_cname, Naming.args_cname))
-        code.putln("    %s += 1;" % Naming.args_cname)
-        code.putln("    %s -= 1;" % Naming.nargs_cname)
-        if arg_self_cname and is_py_self_arg:
-            code.putln("    %s = %s;" % (arg_self_cname, cyfunc_self_cname))
-        code.putln("    break;")
-        code.putln("case 0:")
-        code.putln("#if CYTHON_COMPILING_IN_LIMITED_API")
-        code.putln(
-            "    %s = PyCFunction_GetSelf(((__pyx_CyFunctionObject*)cyfunc)->func);" % cyfunc_self_cname)
-        code.putln(
-            "    if (unlikely(!%s) && PyErr_Occurred()) %s" % (cyfunc_self_cname, code.error_goto(self.pos)))
-        code.putln("#else")
-        code.putln("    %s = ((PyCFunctionObject*)cyfunc)->m_self;" % cyfunc_self_cname)
-        code.putln("#endif")
-        if arg_self_cname and is_py_self_arg:
-            code.putln("    %s = %s;" % (arg_self_cname, cyfunc_self_cname))
-        code.putln("    break;")
-        code.putln("default:")
-        code.putln("    return NULL;")
-        code.putln("}")
+        if needs_py_self:
+            code.putln("if (!__pyx_is_classmethod) {")
+            code.putln(
+                "    switch (__Pyx_CyFunction_Vectorcall_CheckArgs(cyfunc, %s, %s)) {" %
+                (Naming.nargs_cname, Naming.kwds_cname))
+            code.putln("    case 1:")
+            code.putln("        %s = %s[0];" % (cyfunc_self_cname, Naming.args_cname))
+            code.putln("        %s += 1;" % Naming.args_cname)
+            code.putln("        %s -= 1;" % Naming.nargs_cname)
+            code.putln("        %s = %s;" % (arg_self_cname, cyfunc_self_cname))
+            code.putln("        break;")
+            code.putln("    case 0:")
+            code.putln("#if CYTHON_COMPILING_IN_LIMITED_API")
+            code.putln(
+                "        %s = PyCFunction_GetSelf(((__pyx_CyFunctionObject*)cyfunc)->func);" % cyfunc_self_cname)
+            code.putln(
+                "        if (unlikely(!%s) && PyErr_Occurred()) %s" % (cyfunc_self_cname, code.error_goto(self.pos)))
+            code.putln("#else")
+            code.putln("        %s = ((PyCFunctionObject*)cyfunc)->m_self;" % cyfunc_self_cname)
+            code.putln("#endif")
+            code.putln("        %s = %s;" % (arg_self_cname, cyfunc_self_cname))
+            code.putln("        break;")
+            code.putln("    default:")
+            code.putln("        return NULL;")
+            code.putln("    }")
+            code.putln("} else {")
+            code.putln(
+                "    if (unlikely(__Pyx_CyFunction_Vectorcall_CheckArgs(cyfunc, %s, %s) == -1)) return NULL;" %
+                (Naming.nargs_cname, Naming.kwds_cname))
+            code.putln("}")
+        else:
+            code.putln(
+                "if (unlikely(__Pyx_CyFunction_Vectorcall_CheckArgs(cyfunc, %s, %s) == -1)) return NULL;" %
+                (Naming.nargs_cname, Naming.kwds_cname))
         previous_cleanup_flag = self.needs_values_cleanup
         self.needs_values_cleanup = True
         self.generate_argument_values_setup_code(self.args, code, tempvardecl_code)
@@ -5714,9 +5751,13 @@ class CClassDefNode(ClassDefNode):
         if self.bases and len(self.bases.args) > 1:
             self.entry.type.multiple_bases = True
 
+    DATACLASS_NAMEDTUPLE_DIRECTIVE = 'dataclasses.namedtuple_base'
+
     def _handle_cclass_decorators(self, env):
         extra_directives = {}
         if not self.decorators:
+            if self._strip_namedtuple_base(env):
+                extra_directives[self.DATACLASS_NAMEDTUPLE_DIRECTIVE] = True
             return extra_directives
 
         from . import ExprNodes
@@ -5739,6 +5780,8 @@ class CClassDefNode(ClassDefNode):
                 extra_directives["total_ordering"] = True
                 continue
             elif known_name == "dataclasses.dataclass":
+                if self._strip_namedtuple_base(env):
+                    extra_directives[self.DATACLASS_NAMEDTUPLE_DIRECTIVE] = True
                 args = None
                 kwds = {}
                 if decorator_call:
@@ -5756,6 +5799,35 @@ class CClassDefNode(ClassDefNode):
             error(remaining_decorators[0].pos, "Cdef functions/classes cannot take arbitrary decorators.")
         self.decorators = remaining_decorators
         return extra_directives
+
+    def _strip_namedtuple_base(self, env):
+        """
+        Drop typing.NamedTuple (or similarly imported) bases so that we can treat the
+        resulting dataclass as a regular cdef class. We later inject tuple helpers.
+        """
+        bases = getattr(self, 'bases', None)
+        if not bases or not getattr(bases, 'args', None):
+            return False
+        from . import ExprNodes
+        new_args = []
+        removed = False
+        for base_expr in bases.args:
+            known_name = Builtin.exprnode_to_known_standard_library_name(base_expr, env)
+            is_namedtuple = known_name in ("typing.NamedTuple", "collections.NamedTuple")
+            if not is_namedtuple:
+                if isinstance(base_expr, ExprNodes.NameNode):
+                    is_namedtuple = base_expr.name in (
+                        EncodedString("NamedTuple"), EncodedString("typing.NamedTuple"))
+                elif isinstance(base_expr, ExprNodes.AttributeNode):
+                    dotted = base_expr.as_cython_attribute()
+                    is_namedtuple = dotted in ("typing.NamedTuple", "collections.NamedTuple")
+            if is_namedtuple:
+                removed = True
+                continue
+            new_args.append(base_expr)
+        if removed:
+            bases.args = new_args
+        return removed
 
     def analyse_declarations(self, env):
         #print "CClassDefNode.analyse_declarations:", self.class_name

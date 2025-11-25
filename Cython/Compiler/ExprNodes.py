@@ -15300,7 +15300,7 @@ class AnnotationNode(ExprNode):
 
             if arg_type is None:
                 self._warn_on_unknown_annotation(env, annotation)
-                return [], arg_type
+                return [], py_object_type
 
             if annotation.is_string_literal:
                 warning(annotation.pos,
