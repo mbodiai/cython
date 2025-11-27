@@ -1125,7 +1125,9 @@ static int __Pyx_FastParseKeywords(
     const __Pyx_ParamMeta *params = info->params;
     Py_ssize_t pos_index = 0;
     int __pyx_result = __PYX_FASTPARSE_ERROR;
-    if (unlikely(positional_args < info->required_pos || positional_args > info->max_pos)) {
+    // Only check upper bound here; lower bound is checked after keyword processing
+    // since keywords can satisfy required positional parameters.
+    if (unlikely(positional_args > info->max_pos)) {
         __Pyx_RaiseArgtupleInvalid(
             info->func_name,
             0,

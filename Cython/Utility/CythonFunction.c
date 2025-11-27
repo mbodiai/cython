@@ -1210,13 +1210,16 @@ static PyObject * __Pyx_CyFunction_descr_get(PyObject *self, PyObject *obj, PyOb
 {
     __pyx_CyFunctionObject *func = (__pyx_CyFunctionObject *) self;
 
-    if (func->flags & __Pyx_CYFUNCTION_STATICMETHOD) {
+    if (obj == Py_None)
+        obj = NULL;
+
+    // For staticmethod, only return self unchanged when accessed via the class
+    // (obj is None/NULL). When __get__ is called with an actual object, create
+    // a bound method like regular Python functions do.
+    if ((func->flags & __Pyx_CYFUNCTION_STATICMETHOD) && !obj) {
         Py_INCREF(self);
         return self;
     }
-
-    if (obj == Py_None)
-        obj = NULL;
 
     if (!obj && (func->flags & __Pyx_CYFUNCTION_CLASSMETHOD)) {
         obj = type;

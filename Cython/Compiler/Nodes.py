@@ -2890,12 +2890,30 @@ class CFuncDefNode(FuncDefNode):
             cfunc = ExprNodes.NameNode(self.pos, name=self.entry.name)
             call_arg_names = arg_names
         elif self.type.is_static_method:
-            class_entry = self.entry.scope.parent_type.entry
+            # Get the class entry - CClassScope has parent_type, PyClassScope doesn't
+            if hasattr(self.entry.scope, 'parent_type'):
+                class_entry = self.entry.scope.parent_type.entry
+            else:
+                # PyClassScope - look up the class by name in the outer scope
+                scope = self.entry.scope
+                class_entry = scope.outer_scope.lookup(scope.class_name)
             class_node = ExprNodes.NameNode(self.pos, name=class_entry.name)
             class_node.entry = class_entry
             cfunc = ExprNodes.AttributeNode(self.pos, obj=class_node, attribute=self.entry.name)
         else:
-            type_entry = self.type.args[0].type.entry
+            # Get the class type entry from the first argument's type if available,
+            # otherwise fall back to the parent scope's type (e.g., for pure Python mode
+            # where 'self' may be typed as a generic object).
+            first_arg_type = self.type.args[0].type
+            if hasattr(first_arg_type, 'entry') and first_arg_type.entry:
+                type_entry = first_arg_type.entry
+            elif hasattr(self.entry.scope, 'parent_type'):
+                # CClassScope has parent_type
+                type_entry = self.entry.scope.parent_type.entry
+            else:
+                # PyClassScope - look up the class by name in the outer scope
+                scope = self.entry.scope
+                type_entry = scope.outer_scope.lookup(scope.class_name)
             type_arg = ExprNodes.NameNode(self.pos, name=type_entry.name)
             type_arg.entry = type_entry
             cfunc = ExprNodes.AttributeNode(self.pos, obj=type_arg, attribute=self.entry.name)
@@ -3833,6 +3851,10 @@ class DefNodeWrapper(FuncDefNode):
         if self.target.has_fused_arguments:
             self.fast_arg_parsing = False
             return
+        if getattr(self.target, "specialized_cpdefs", None):
+            # Fused dispatcher functions should not use fast arg parsing
+            self.fast_arg_parsing = False
+            return
         scope = getattr(self.target.entry, "scope", None)
         if scope is not None and (scope.is_py_class_scope or scope.is_c_class_scope):
             # Methods are bound and receive self/cls implicitly, which currently
@@ -4245,7 +4267,7 @@ class DefNodeWrapper(FuncDefNode):
         defaults_expr = "NULL"
         allow_keywords = self.target.local_scope.directives['always_allow_keywords']
         self.fast_arg_accepts_keywords = accepts_keywords and allow_keywords
-        func_name_literal = self.target.entry.qualified_name.as_c_string_literal()
+        func_name_literal = self.target.entry.name.as_c_string_literal()
         decls_code.putln("static const __Pyx_FastArgInfo %s = {" % info_cname)
         decls_code.putln(
             "%s, %s, %d, %d, %d, %d, %d, %s" % (
@@ -4352,8 +4374,8 @@ class DefNodeWrapper(FuncDefNode):
         if needs_py_self:
             code.putln("if (!__pyx_is_classmethod) {")
             code.putln(
-                "    switch (__Pyx_CyFunction_Vectorcall_CheckArgs(cyfunc, %s, %s)) {" %
-                (Naming.nargs_cname, Naming.kwds_cname))
+                "    switch (__Pyx_CyFunction_Vectorcall_CheckArgs(cyfunc, %s, NULL)) {" %
+                (Naming.nargs_cname,))
             code.putln("    case 1:")
             code.putln("        %s = %s[0];" % (cyfunc_self_cname, Naming.args_cname))
             code.putln("        %s += 1;" % Naming.args_cname)
@@ -4376,8 +4398,8 @@ class DefNodeWrapper(FuncDefNode):
             code.putln("    }")
             code.putln("} else {")
             code.putln(
-                "    if (unlikely(__Pyx_CyFunction_Vectorcall_CheckArgs(cyfunc, %s, %s) == -1)) return NULL;" %
-                (Naming.nargs_cname, Naming.kwds_cname))
+                "    if (unlikely(__Pyx_CyFunction_Vectorcall_CheckArgs(cyfunc, %s, NULL) == -1)) return NULL;" %
+                (Naming.nargs_cname,))
             code.putln("}")
         else:
             # For closures and other functions without an explicit self/cls argument,
@@ -4385,8 +4407,8 @@ class DefNodeWrapper(FuncDefNode):
             # can access the captured outer scope. Borrow the callable itself.
             code.putln("%s = (PyObject *)cyfunc;" % cyfunc_self_cname)
             code.putln(
-                "if (unlikely(__Pyx_CyFunction_Vectorcall_CheckArgs(cyfunc, %s, %s) == -1)) return NULL;" %
-                (Naming.nargs_cname, Naming.kwds_cname))
+                "if (unlikely(__Pyx_CyFunction_Vectorcall_CheckArgs(cyfunc, %s, NULL) == -1)) return NULL;" %
+                (Naming.nargs_cname,))
         previous_cleanup_flag = self.needs_values_cleanup
         self.needs_values_cleanup = True
         self.generate_argument_values_setup_code(self.args, code, tempvardecl_code)
@@ -5395,7 +5417,10 @@ class OverrideCheckNode(StatNode):
         code.putln("/* Check if called by wrapper */")
         code.putln("if (unlikely(%s)) ;" % Naming.skip_dispatch_cname)
         code.putln("/* Check if overridden in Python */")
-        if self.py_func.is_module_scope or self.py_func.entry.scope.lookup_here("__dict__"):
+        scope = self.py_func.entry.scope
+        # For PyClassScope (pure Python mode) or if __dict__ is present, use simpler check.
+        # CClassScope has parent_type, PyClassScope doesn't.
+        if self.py_func.is_module_scope or scope.is_py_class_scope or scope.lookup_here("__dict__"):
             code.putln("else {")
         else:
             code.putln("else if (")
@@ -5404,7 +5429,7 @@ class OverrideCheckNode(StatNode):
             # passes and thus takes the slow route.
             # Therefore we do a less thorough check - if the type hasn't changed then clearly it hasn't
             # been overridden, and if the type isn't GC then it also won't have been overridden.
-            typeptr_cname = code.name_in_module_state(self.py_func.entry.scope.parent_type.typeptr_cname)
+            typeptr_cname = code.name_in_module_state(scope.parent_type.typeptr_cname)
             code.putln(f"unlikely(Py_TYPE({self_arg}) != "
                         f"{typeptr_cname} &&")
             code.putln(f"__Pyx_PyType_HasFeature(Py_TYPE({self_arg}), Py_TPFLAGS_HAVE_GC))")

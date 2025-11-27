@@ -3160,7 +3160,7 @@ class AdjustDefByDirectives(CythonTransform, SkipDeclarations):
 
     def visit_PyClassDefNode(self, node):
         if any(dict.__contains__(self.directives, directive) and
-               self.directives.get(directive) not in (False, None)
+               self.directives.get(directive) is not False
                for directive in self.converts_to_cclass):
             node = node.as_cclass()
             return self.visit(node)

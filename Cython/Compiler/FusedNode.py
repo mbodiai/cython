@@ -789,14 +789,15 @@ class FusedCFuncDefNode(StatListNode):
             decl_code.getvalue(), env.global_scope())
         ast.scope = env
         # FIXME: for static methods of cdef classes, we build the wrong signature here: first arg becomes 'self'
-        ast.analyse_declarations(env)
         py_func = ast.stats[-1]  # the DefNode
-        self.fragment_scope = ast.scope
-
+        # Set specialized_cpdefs BEFORE analyse_declarations so that _determine_fast_arg_support()
+        # knows this is a fused dispatcher and disables fast arg parsing appropriately.
         if isinstance(self.node, DefNode):
             py_func.specialized_cpdefs = self.nodes[:]
         else:
             py_func.specialized_cpdefs = [n.py_func for n in self.nodes]
+        ast.analyse_declarations(env)
+        self.fragment_scope = ast.scope
 
         return py_func
 
