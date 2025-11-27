@@ -17,6 +17,23 @@ from .TreeFragment import TreeFragment
 from .ParseTreeTransforms import NormalizeTree, SkipDeclarations
 from .Options import copy_inherited_directives
 
+_NAMEDTUPLE_METHODS = """
+def __iter__(self):
+    return iter({tuple_expr})
+
+def __len__(self):
+    return {tuple_len}
+
+def __getitem__(self, index):
+    return {tuple_expr}[index]
+
+def count(self, value):
+    return {tuple_expr}.count(value)
+
+def index(self, value, start=0, stop=9223372036854775807):
+    return {tuple_expr}.index(value, start, stop)
+"""
+
 def make_dataclasses_module_callnode(pos):
     dataclass_loader_utilitycode = UtilityCode.load_cached(
             "LoadDataclassesModule", "Dataclasses.c")
@@ -352,6 +369,11 @@ def handle_cclass_dataclass(node, dataclass_args, analyse_decs_transform):
     generate_hash_code(code, kwargs['unsafe_hash'], kwargs['eq'], kwargs['frozen'], node, fields)
 
     stats.stats += code.generate_tree().stats
+
+    namedtuple_helpers = None
+    if node.scope.directives.get(Nodes.CClassDefNode.DATACLASS_NAMEDTUPLE_DIRECTIVE):
+        namedtuple_helpers = _inject_namedtuple_helpers(node, fields)
+        stats.stats.extend(namedtuple_helpers)
 
     # turn off annotation typing, so all arguments to __init__ are accepted as
     # generic objects and thus can accept _HAS_DEFAULT_FACTORY.
@@ -862,3 +884,22 @@ def _set_up_dataclass_fields(node, fields, dataclass_module):
     return (variables_assignment_stats
             + [dataclass_fields_assignment]
             + dc_fields_namevalue_assignments.stats)
+
+
+def _build_namedtuple_tuple_expr(fields):
+    values = [f"self.{name}" for name, field in fields.items() if not field.private]
+    if not values:
+        return "()"
+    inner = ", ".join(values)
+    if len(values) == 1:
+        inner += ","
+    return f"({inner})"
+
+
+def _inject_namedtuple_helpers(node, fields):
+    tuple_expr = _build_namedtuple_tuple_expr(fields)
+    fragment = TreeFragment(
+        _NAMEDTUPLE_METHODS.format(tuple_expr=tuple_expr, tuple_len=sum(1 for field in fields.values() if not field.private)),
+        pipeline=[NormalizeTree(None)])
+    helpers = fragment.substitute({})
+    return helpers.stats

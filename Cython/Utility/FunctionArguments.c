@@ -105,6 +105,7 @@ static void __Pyx_RaiseArgtupleInvalid(
 
 
 //////////////////// RaiseKeywordRequired.proto ////////////////////
+
 #if !defined(__Pyx_RaiseKeywordRequired_DEFINED) && !defined(__PYX_FASTARG_ERROR_HELPERS)
 static void __Pyx_RaiseKeywordRequired(const char* func_name, PyObject* kw_name); /*proto*/
 #endif
@@ -172,7 +173,7 @@ static void __Pyx_RaiseMappingExpectedError(PyObject* arg) {
 
 //////////////////// KeywordStringCheck.proto ////////////////////
 
-static CYTHON_INLINE int __Pyx_CheckKeywordStrings(PyObject *kw); /*proto*/
+static CYTHON_INLINE int __Pyx_CheckKeywordStrings(PyObject *kw, const char* function_name, int kw_allowed); /*proto*/
 
 //////////////////// KeywordStringCheck ////////////////////
 
@@ -182,7 +183,9 @@ static CYTHON_INLINE int __Pyx_CheckKeywordStrings(PyObject *kw); /*proto*/
 // The "kw" argument is either a dict (for METH_VARARGS) or a tuple
 // (for METH_FASTCALL), both non-empty.
 
-static int __Pyx_CheckKeywordStrings(PyObject *kw) {
+static int __Pyx_CheckKeywordStrings(PyObject *kw, const char* function_name, int kw_allowed) {
+    CYTHON_UNUSED_VAR(function_name);
+    CYTHON_UNUSED_VAR(kw_allowed);
     // PyPy appears to check keyword types at call time, not at unpacking time.
 #if CYTHON_COMPILING_IN_PYPY && !defined(PyArg_ValidateKeywordArguments)
     CYTHON_UNUSED_VAR(kw);
@@ -999,7 +1002,40 @@ static CYTHON_INLINE PyObject * __Pyx_GetKwValue_FASTCALL(PyObject *kwnames, PyO
     }
     return NULL;  /* not found (no exception set) */
 }
+
+#if CYTHON_COMPILING_IN_CPYTHON && PY_VERSION_HEX >= 0x030d0000 || CYTHON_COMPILING_IN_LIMITED_API
+CYTHON_UNUSED static PyObject *__Pyx_KwargsAsDict_FASTCALL(PyObject *kwnames, PyObject *const *kwvalues) {
+    Py_ssize_t i, nkwargs;
+    PyObject *dict;
+#if !CYTHON_ASSUME_SAFE_SIZE
+    nkwargs = PyTuple_Size(kwnames);
+    if (unlikely(nkwargs < 0)) return NULL;
+#else
+    nkwargs = PyTuple_GET_SIZE(kwnames);
 #endif
+
+    dict = PyDict_New();
+    if (unlikely(!dict))
+        return NULL;
+
+    for (i=0; i<nkwargs; i++) {
+#if !CYTHON_ASSUME_SAFE_MACROS
+        PyObject *key = PyTuple_GetItem(kwnames, i);
+        if (!key) goto bad;
+#else
+        PyObject *key = PyTuple_GET_ITEM(kwnames, i);
+#endif
+        if (unlikely(PyDict_SetItem(dict, key, kwvalues[i]) < 0))
+            goto bad;
+    }
+    return dict;
+
+bad:
+    Py_DECREF(dict);
+    return NULL;
+}
+#endif
+#endif /* CYTHON_METH_FASTCALL */
 
 //////////////////// FastParseKeywords.proto ////////////////////
 #if CYTHON_METH_FASTCALL
@@ -1083,10 +1119,12 @@ static int __Pyx_FastParseKeywords(
     PyObject *kwnames,
     PyObject **const *localslots)
 {
-    Py_ssize_t i;
-    Py_ssize_t positional_args = nargs;
+    Py_ssize_t i = 0;
     Py_ssize_t required_kwonly = info->required_kwonly;
+    Py_ssize_t positional_args = nargs;
     const __Pyx_ParamMeta *params = info->params;
+    Py_ssize_t pos_index = 0;
+    int __pyx_result = __PYX_FASTPARSE_ERROR;
     if (unlikely(positional_args < info->required_pos || positional_args > info->max_pos)) {
         __Pyx_RaiseArgtupleInvalid(
             info->func_name,
@@ -1096,7 +1134,6 @@ static int __Pyx_FastParseKeywords(
             positional_args);
         return __PYX_FASTPARSE_ERROR;
     }
-    Py_ssize_t pos_index = 0;
     for (i = 0; i < info->param_count && pos_index < positional_args; i++) {
         const __Pyx_ParamMeta *param = params + i;
         if (!(param->flags & __PYX_PARAM_ACCEPTS_POS))
@@ -1197,7 +1234,8 @@ static int __Pyx_FastParseKeywords(
             positional_args);
         goto bad;
     }
-    return __PYX_FASTPARSE_SUCCESS;
+    __pyx_result = __PYX_FASTPARSE_SUCCESS;
+    goto done;
 bad:
     for (i = 0; i < info->param_count; i++) {
         PyObject **slot = localslots[i];
@@ -1206,39 +1244,7 @@ bad:
             *slot = NULL;
         }
     }
-    return __PYX_FASTPARSE_ERROR;
+done:
+    return __pyx_result;
 }
 #endif /* CYTHON_METH_FASTCALL */
-
-#if CYTHON_METH_FASTCALL && (CYTHON_COMPILING_IN_CPYTHON && PY_VERSION_HEX >= 0x030d0000 || CYTHON_COMPILING_IN_LIMITED_API)
-CYTHON_UNUSED static PyObject *__Pyx_KwargsAsDict_FASTCALL(PyObject *kwnames, PyObject *const *kwvalues) {
-    Py_ssize_t i, nkwargs;
-    PyObject *dict;
-#if !CYTHON_ASSUME_SAFE_SIZE
-    nkwargs = PyTuple_Size(kwnames);
-    if (unlikely(nkwargs < 0)) return NULL;
-#else
-    nkwargs = PyTuple_GET_SIZE(kwnames);
-#endif
-
-    dict = PyDict_New();
-    if (unlikely(!dict))
-        return NULL;
-
-    for (i=0; i<nkwargs; i++) {
-#if !CYTHON_ASSUME_SAFE_MACROS
-        PyObject *key = PyTuple_GetItem(kwnames, i);
-        if (!key) goto bad;
-#else
-        PyObject *key = PyTuple_GET_ITEM(kwnames, i);
-#endif
-        if (unlikely(PyDict_SetItem(dict, key, kwvalues[i]) < 0))
-            goto bad;
-    }
-    return dict;
-
-bad:
-    Py_DECREF(dict);
-    return NULL;
-}
-#endif
