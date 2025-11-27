@@ -103,6 +103,7 @@ cdef class PyStringConst:
     cdef readonly object encoding
     cdef readonly bint is_unicode
     cdef readonly bint intern
+    cdef public object index
 
 
 #class GlobalState(object):

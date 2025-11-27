@@ -407,6 +407,8 @@ def cython_inline_module(
         *,
         pyx_references: bool | None = None,
         output_path: str | Path | None = None,
+        locals: dict | None = None,
+        globals: dict | None = None,
 ):
     """Compile a full module-level Cython code string (pure decorators allowed) and import it.
 
@@ -466,8 +468,9 @@ def cython_inline_module(
         pyx_file = base_path.with_suffix('.pyx')
         pxd_path = base_path.with_suffix('.pxd')
 
+    # Always load the freshly built extension when present (do not reuse the Python module).
     if module_name in sys.modules and module_path.is_file():
-        return sys.modules[module_name]
+        sys.modules.pop(module_name, None)
 
     if not artifact_dir.exists():
         artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -499,23 +502,24 @@ def cython_inline_module(
             'compiler_directives': directives,
             'quiet': quiet,
             'annotate': True,
+            'force': True,
         }
         cythonize_kwargs['emit_linenums'] = emit_linenums
         cythonize_kwargs['c_line_in_traceback'] = c_line_in_traceback
-        cythonize_kwargs['annotate_no_c_link'] = annotate_no_c_link
         build_extension.extensions = cythonize(**cythonize_kwargs)
-        build_extension.build_temp = Path(pyx_file).parent
-        build_extension.build_lib = artifact_dir
+        build_extension.build_temp = str(Path(pyx_file).parent)
+        build_extension.build_lib = str(artifact_dir)
         build_extension.run()
 
         # Generate .pxd for cimporting extension types
         generate_pxd_file(pyx_file, artifact_dir, module_name)
 
+    module_path_str = str(module_path)
     if sys.platform == 'win32' and sys.version_info >= (3, 8):
         with os.add_dll_directory(str(module_path.parent.resolve())):
-            module = load_dynamic(module_name, module_path)
+            module = load_dynamic(module_name, module_path_str)
     else:
-        module = load_dynamic(module_name, module_path)
+        module = load_dynamic(module_name, module_path_str)
     return module
 
 

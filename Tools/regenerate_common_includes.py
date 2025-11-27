@@ -16,8 +16,9 @@ import shutil
 import sys
 from pathlib import Path
 
-from Cython.Build import cythonize
 from Cython.Compiler import Options as CythonOptions
+
+from Cython.Build import cythonize
 
 DEFAULT_BUILD_DIR = Path("generated/common_include_build")
 DEFAULT_MODULES = [

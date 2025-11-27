@@ -3326,6 +3326,9 @@ class DefNode(FuncDefNode):
             self.declare_pyfunction(env)
 
         self.analyse_signature(env)
+        if self.needs_closure:
+            # Fastcall wrappers do not currently support closure-capturing Python defs.
+            self.entry.signature.use_fastcall = False
         self.return_type = self.entry.signature.return_type()
         # if a signature annotation provides a more specific return object type, use it
         if self.return_type is py_object_type and self.return_type_annotation:
@@ -3335,6 +3338,8 @@ class DefNode(FuncDefNode):
                     self.return_type = return_type
 
         self.create_local_scope(env)
+        if getattr(self.local_scope, "is_closure_scope", False) or getattr(self.local_scope, "closure_var_entries", None):
+            self.entry.signature.use_fastcall = False
 
         self.py_wrapper = DefNodeWrapper(
             self.pos,
@@ -3495,20 +3500,19 @@ class DefNode(FuncDefNode):
         #    calling convention
         mf = sig.method_flags()
         if mf and TypeSlots.method_varargs in mf and not self.entry.is_special:
+            uses_args_tuple = False
             # 3. If the function uses the full args tuple, it's more
             #    efficient to use METH_VARARGS. This happens when the function
             #    takes *args but no other positional arguments (apart from
             #    possibly self). We don't do the analogous check for keyword
             #    arguments since the kwargs dict is copied anyway.
-            if self.star_arg:
+            if self.star_arg and not uses_args_tuple:
                 uses_args_tuple = True
                 for arg in self.args:
                     if (arg.is_generic and not arg.kw_only and
                             not arg.is_self_arg and not arg.is_type_arg):
                         # Other positional argument
                         uses_args_tuple = False
-            else:
-                uses_args_tuple = False
 
             if not uses_args_tuple:
                 sig = self.entry.signature = sig.with_fastcall()
@@ -3810,6 +3814,19 @@ class DefNodeWrapper(FuncDefNode):
         if not self.signature.use_fastcall:
             self.fast_arg_parsing = False
             return
+        if getattr(self.target, "needs_closure", False):
+            # Functions that close over outer variables rely on closure cells;
+            # keep them on the legacy parsing path to avoid unsafe fastcall/vectorcall handling.
+            self.fast_arg_parsing = False
+            return
+        lenv = getattr(self.target, "local_scope", None)
+        if lenv is not None:
+            if getattr(lenv, "is_closure_scope", False):
+                self.fast_arg_parsing = False
+                return
+            if getattr(lenv, "closure_var_entries", None):
+                self.fast_arg_parsing = False
+                return
         if self.target.star_arg or self.target.starstar_arg:
             self.fast_arg_parsing = False
             return
@@ -3826,7 +3843,6 @@ class DefNodeWrapper(FuncDefNode):
         if first_arg and getattr(first_arg, "name", None) in ("self", "cls"):
             self.fast_arg_parsing = False
             return
-        lenv = getattr(self.target, "local_scope", None)
         if lenv is not None and hasattr(lenv, "lookup_here"):
             self_entry = lenv.lookup_here("self")
             if self_entry and getattr(self_entry.type, "is_pyobject", False):
@@ -4364,6 +4380,10 @@ class DefNodeWrapper(FuncDefNode):
                 (Naming.nargs_cname, Naming.kwds_cname))
             code.putln("}")
         else:
+            # For closures and other functions without an explicit self/cls argument,
+            # we still need a valid cyfunc pointer so __Pyx_CyFunction_GetClosure()
+            # can access the captured outer scope. Borrow the callable itself.
+            code.putln("%s = (PyObject *)cyfunc;" % cyfunc_self_cname)
             code.putln(
                 "if (unlikely(__Pyx_CyFunction_Vectorcall_CheckArgs(cyfunc, %s, %s) == -1)) return NULL;" %
                 (Naming.nargs_cname, Naming.kwds_cname))

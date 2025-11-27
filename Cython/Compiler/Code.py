@@ -1471,8 +1471,8 @@ class StringConst:
 
 
 class PyStringConst:
-    """Global info about a Python string constant held by GlobalState.
-    """
+    """Global info about a Python string constant held by GlobalState."""
+    __slots__ = ("cname", "encoding", "is_unicode", "intern", "index")
     # cname       string
     # encoding    string
     # intern      boolean
