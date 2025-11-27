@@ -4482,7 +4482,7 @@ class DefNodeWrapper(FuncDefNode):
             code.globalstate.use_utility_code(
                 UtilityCode.load_cached("KeywordStringCheck", "FunctionArguments.c"))
             code.putln(
-                f"if (unlikely(__Pyx_CheckKeywordStrings({Naming.kwds_cname}) == -1)) {goto_error}"
+                f"if (unlikely(__Pyx_CheckKeywordStrings({Naming.kwds_cname}, {function_name}, 1) == -1)) {goto_error}"
             )
 
             # If the **kwargs parameter is unused, we leave it NULL.
