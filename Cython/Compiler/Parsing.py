@@ -2160,7 +2160,7 @@ inequality_relations = cython.declare(frozenset, frozenset((
 
 
 @cython.cfunc
-def p_target(s: PyrexScanner, terminator: str):
+def p_target(s: PyrexScanner, terminator):
     pos = s.position()
     expr = p_starred_expr(s)
     if s.sy == ',':
@@ -3137,8 +3137,33 @@ def p_c_array_declarator(s: PyrexScanner, base):
 @cython.cfunc
 def p_c_func_declarator(s: PyrexScanner, pos, ctx, base, cmethod_flag: cython.bint):
     # Opening paren has already been skipped
+    # Parse arguments with support for positional-only (/) and keyword-only (*) markers
     args = p_c_arg_list(s, ctx, cmethod_flag = cmethod_flag,
                         nonempty_declarators = 0)
+    # Handle positional-only marker /
+    if s.sy == '/':
+        if len(args) == 0:
+            s.error("Got zero positional-only arguments despite presence of "
+                    "positional-only specifier '/'")
+        s.next()
+        # Mark all args to the left as pos only
+        for arg in args:
+            arg.pos_only = 1
+        if s.sy == ',':
+            s.next()
+            args.extend(p_c_arg_list(s, ctx, cmethod_flag=0,
+                                     nonempty_declarators=0))
+    # Handle keyword-only marker *
+    if s.sy == '*':
+        s.next()
+        # After *, all remaining args are keyword-only
+        if s.sy == ',':
+            s.next()
+            kwonly_args = p_c_arg_list(s, ctx, cmethod_flag=0,
+                                       nonempty_declarators=0, kw_only=True)
+            args.extend(kwonly_args)
+        elif s.sy not in (')', '...'):
+            s.error("Syntax error in C function argument list after '*'")
     ellipsis = p_optional_ellipsis(s)
     s.expect(')')
     nogil = p_nogil(s)

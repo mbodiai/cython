@@ -1114,6 +1114,37 @@ class CAnalysedBaseTypeNode(Node):
         return self.type
 
 
+class CAnnotationBaseTypeNode(CBaseTypeNode):
+    """
+    Wraps an annotation expression (AnnotationNode or ExprNode) and resolves
+    it to a C type during analyse(). Used for converting pure Python annotations
+    to C types in cppclass definitions.
+    """
+    # annotation    AnnotationNode or ExprNode
+
+    child_attrs = ["annotation"]
+
+    def __init__(self, pos, annotation):
+        Node.__init__(self, pos)
+        self.annotation = annotation
+
+    def analyse(self, env, could_be_name=False):
+        from . import ExprNodes
+        annotation = self.annotation
+
+        # If it's an AnnotationNode, get the inner expression
+        if isinstance(annotation, ExprNodes.AnnotationNode):
+            annotation = annotation.expr
+
+        # Try to resolve as a type
+        arg_type = annotation.analyse_as_type(env)
+        if arg_type is None:
+            from .Errors import error
+            error(self.pos, "Cannot resolve type from annotation")
+            return PyrexTypes.error_type
+        return arg_type
+
+
 class CSimpleBaseTypeNode(CBaseTypeNode):
     # name             string
     # module_path      [string]     Qualifying name components
@@ -1668,8 +1699,12 @@ class CppClassNode(CStructOrUnionDefNode, BlockNode):
     #  base_classes  [CBaseTypeNode]
     #  templates     [(string, bool)] or None
     #  decorators    [DecoratorNode] or None
+    #  expose        boolean          If True, auto-generate Python wrapper cclass
+    #  wrapper_name  string or None   Name of Python wrapper (original name when expose=True)
 
     decorators = None
+    expose = False
+    wrapper_name = None
 
     def declare(self, env):
         if self.templates is None:
@@ -2697,6 +2732,7 @@ class CFuncDefNode(FuncDefNode):
     override = None
     template_declaration = None
     is_const_method = False
+    is_cppmethod = False  # True for C++ struct/class methods (no self param)
     py_func_stat = None
     _code_object = None
 
@@ -3297,6 +3333,104 @@ class DefNode(FuncDefNode):
                             api=False,
                             directive_locals=getattr(cfunc, 'directive_locals', {}),
                             directive_returns=returns)
+
+    def as_cppmethod(self, scope=None, returns=None, except_val=None, has_explicit_exc_clause=False,
+                     modifiers=None, nogil=False):
+        """
+        Convert a Python def to a C++ class method.
+        The first argument (self) is removed since C++ methods use implicit 'this'.
+        References to 'self.attr' in the body become 'this->attr'.
+        """
+        if self.star_arg:
+            error(self.star_arg.pos, "C++ method cannot have star argument")
+        if self.starstar_arg:
+            error(self.starstar_arg.pos, "C++ method cannot have starstar argument")
+
+        exception_value, exception_check = except_val or (None, False)
+
+        # Skip the first argument (self) - C++ methods have implicit 'this'
+        method_args = self.args[1:] if self.args else []
+
+        cfunc_args = []
+        for formal_arg in method_args:
+            name_declarator, type = formal_arg.analyse(scope, nonempty=1)
+            cfunc_args.append(PyrexTypes.CFuncTypeArg(name=name_declarator.name,
+                                                      cname=None,
+                                                      annotation=formal_arg.annotation,
+                                                      type=py_object_type,
+                                                      pos=formal_arg.pos))
+
+        cfunc_type = PyrexTypes.CFuncType(return_type=py_object_type,
+                                          args=cfunc_args,
+                                          has_varargs=False,
+                                          exception_value=None,
+                                          exception_check=exception_check,
+                                          nogil=nogil,
+                                          with_gil=False,
+                                          is_overridable=False)
+
+        if exception_value is None and cfunc_type.exception_value is not None:
+            from .ExprNodes import ConstNode
+            exception_value = ConstNode.for_type(
+                self.pos, value=str(cfunc_type.exception_value), type=cfunc_type.return_type,
+                constant_result=cfunc_type.exception_value.python_value)
+
+        declarator = CFuncDeclaratorNode(self.pos,
+                                         base=CNameDeclaratorNode(self.pos, name=self.name, cname=None),
+                                         args=method_args,
+                                         has_varargs=False,
+                                         exception_check=cfunc_type.exception_check,
+                                         exception_value=exception_value,
+                                         has_explicit_exc_clause=has_explicit_exc_clause,
+                                         with_gil=False,
+                                         nogil=cfunc_type.nogil)
+
+        # Transform the body to replace 'self.attr' with just 'attr' (accessing via this->)
+        # Get the self argument name (usually 'self' but could be different)
+        self_name = self.args[0].declared_name() if self.args else 'self'
+        transformed_body = self._transform_self_references(self.body, self_name)
+
+        return CFuncDefNode(self.pos,
+                            modifiers=modifiers or [],
+                            base_type=CAnalysedBaseTypeNode(self.pos, type=cfunc_type.return_type),
+                            declarator=declarator,
+                            body=transformed_body,
+                            doc=self.doc,
+                            overridable=False,
+                            type=cfunc_type,
+                            with_gil=False,
+                            nogil=cfunc_type.nogil,
+                            visibility='private',
+                            api=False,
+                            directive_locals={},
+                            directive_returns=returns,
+                            is_cppmethod=True)
+
+    def _transform_self_references(self, body, self_name):
+        """
+        Transform references to self.attr into just attr for C++ methods.
+        In C++, member access is via implicit 'this', so self.x becomes just x.
+        """
+        from . import ExprNodes
+        from .Visitor import CythonTransform
+
+        class SelfTransform(CythonTransform):
+            def visit_AttributeNode(self, node):
+                self.visitchildren(node)
+                # Check if this is self.something
+                if (isinstance(node.obj, ExprNodes.NameNode) and
+                        node.obj.name == self_name):
+                    # Replace self.attr with just a NameNode for attr
+                    return ExprNodes.NameNode(node.pos, name=node.attribute)
+                return node
+
+            def visit_NameNode(self, node):
+                # If we encounter just 'self' by itself (not self.attr), that's an error
+                # But let's leave it for now and let later analysis catch it
+                return node
+
+        transform = SelfTransform(None)
+        return transform(body)
 
     def is_cdef_func_compatible(self):
         """Determines if the function's signature is compatible with a
@@ -5624,6 +5758,79 @@ class PyClassDefNode(ClassDefNode):
                              in_pxd=False,
                              doc=self.doc)
 
+    def as_cppclass(self, expose=False):
+        """
+        Return this node as if it were declared as a C++ class (no PyObject_HEAD).
+        Used for pure C/C++ types that can be used in templates.
+
+        If expose=True, the cppclass name is prefixed with _ and the expose flag
+        is set so that AnalyseDeclarationsTransform can generate a Python wrapper.
+        """
+        from . import ExprNodes
+
+        attributes = []
+
+        # Process body statements to extract fields and methods
+        if hasattr(self.body, 'stats'):
+            for stat in self.body.stats:
+                # Handle annotated attributes: x: cython.double
+                if isinstance(stat, ExprStatNode):
+                    expr = stat.expr
+                    if hasattr(expr, 'annotation') and expr.annotation is not None:
+                        if hasattr(expr, 'name'):
+                            # Create a CVarDefNode for the field using CAnnotationBaseTypeNode
+                            # to defer type resolution to analyse_declarations
+                            base_type = CAnnotationBaseTypeNode(stat.pos, expr.annotation)
+                            var_node = CVarDefNode(
+                                stat.pos,
+                                visibility='public',
+                                base_type=base_type,
+                                declarators=[CNameDeclaratorNode(stat.pos, name=expr.name, cname=None)],
+                                in_pxd=False,
+                                api=False,
+                                overridable=False,
+                                modifiers=[],
+                                doc=None,
+                            )
+                            attributes.append(var_node)
+                # Handle CompilerDirectivesNode wrapping methods with @cython.cfunc
+                elif isinstance(stat, CompilerDirectivesNode):
+                    # Keep the whole directive node - it will be processed by
+                    # AdjustDefByDirectives.visit_CppClassNode
+                    attributes.append(stat)
+                # Handle methods: def foo(self) -> ... with @cython.cfunc
+                elif isinstance(stat, DefNode):
+                    # Raw DefNode without directive wrapper
+                    attributes.append(stat)
+                elif isinstance(stat, CFuncDefNode):
+                    attributes.append(stat)
+                elif isinstance(stat, PassStatNode):
+                    pass  # Ignore pass statements
+
+        # When expose=True, prefix the C++ struct name with _ and store the wrapper name
+        if expose:
+            wrapper_name = self.name
+            cpp_name = '_' + self.name
+        else:
+            wrapper_name = None
+            cpp_name = self.name
+
+        cpp_class_node = CppClassNode(
+            self.pos,
+            name=cpp_name,
+            cname=None,
+            visibility='private',
+            in_pxd=False,
+            attributes=attributes,
+            base_classes=[],
+            templates=None,
+            decorators=self.decorators,
+        )
+        cpp_class_node.expose = expose
+        cpp_class_node.wrapper_name = wrapper_name
+
+        return cpp_class_node
+
     def create_scope(self, env):
         genv = env
         while genv.is_py_class_scope or genv.is_c_class_scope:
@@ -5823,9 +6030,13 @@ class CClassDefNode(ClassDefNode):
         if self.bases and len(self.bases.args) > 1:
             self.entry.type.multiple_bases = True
 
+    DATACLASS_NAMEDTUPLE_DIRECTIVE = 'dataclasses.namedtuple_base'
+
     def _handle_cclass_decorators(self, env):
         extra_directives = {}
         if not self.decorators:
+            if self._strip_namedtuple_base(env):
+                extra_directives[self.DATACLASS_NAMEDTUPLE_DIRECTIVE] = True
             return extra_directives
 
         from . import ExprNodes
@@ -5848,6 +6059,8 @@ class CClassDefNode(ClassDefNode):
                 extra_directives["total_ordering"] = True
                 continue
             elif known_name == "dataclasses.dataclass":
+                if self._strip_namedtuple_base(env):
+                    extra_directives[self.DATACLASS_NAMEDTUPLE_DIRECTIVE] = True
                 args = None
                 kwds = {}
                 if decorator_call:
@@ -5865,6 +6078,35 @@ class CClassDefNode(ClassDefNode):
             error(remaining_decorators[0].pos, "Cdef functions/classes cannot take arbitrary decorators.")
         self.decorators = remaining_decorators
         return extra_directives
+
+    def _strip_namedtuple_base(self, env):
+        """
+        Drop typing.NamedTuple (or similarly imported) bases so that we can treat the
+        resulting dataclass as a regular cdef class. We later inject tuple helpers.
+        """
+        bases = getattr(self, 'bases', None)
+        if not bases or not getattr(bases, 'args', None):
+            return False
+        from . import ExprNodes
+        new_args = []
+        removed = False
+        for base_expr in bases.args:
+            known_name = Builtin.exprnode_to_known_standard_library_name(base_expr, env)
+            is_namedtuple = known_name in ("typing.NamedTuple", "collections.NamedTuple")
+            if not is_namedtuple:
+                if isinstance(base_expr, ExprNodes.NameNode):
+                    is_namedtuple = base_expr.name in (
+                        EncodedString("NamedTuple"), EncodedString("typing.NamedTuple"))
+                elif isinstance(base_expr, ExprNodes.AttributeNode):
+                    dotted = base_expr.as_cython_attribute()
+                    is_namedtuple = dotted in ("typing.NamedTuple", "collections.NamedTuple")
+            if is_namedtuple:
+                removed = True
+                continue
+            new_args.append(base_expr)
+        if removed:
+            bases.args = new_args
+        return removed
 
     def analyse_declarations(self, env):
         #print "CClassDefNode.analyse_declarations:", self.class_name
