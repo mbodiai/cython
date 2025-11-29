@@ -372,6 +372,7 @@ directive_types = {
     'inline' : None,
     'staticmethod' : None,
     'cclass' : None,
+    'cppclass' : None,  # decorator to create a C++ class (no PyObject_HEAD, usable in templates)
     'no_gc_clear' : bool,
     'no_gc' : bool,
     'returns' : type,
@@ -414,6 +415,7 @@ directive_scopes = {  # defaults to available everywhere
     'no_gc' : ('cclass',),
     'internal' : ('cclass',),
     'cclass' : ('class', 'cclass', 'with statement'),
+    'cppclass' : ('class',),
     'autotestdict' : ('module',),
     'autotestdict.all' : ('module',),
     'autotestdict.cdef' : ('module',),

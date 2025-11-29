@@ -1699,12 +1699,8 @@ class CppClassNode(CStructOrUnionDefNode, BlockNode):
     #  base_classes  [CBaseTypeNode]
     #  templates     [(string, bool)] or None
     #  decorators    [DecoratorNode] or None
-    #  expose        boolean          If True, auto-generate Python wrapper cclass
-    #  wrapper_name  string or None   Name of Python wrapper (original name when expose=True)
 
     decorators = None
-    expose = False
-    wrapper_name = None
 
     def declare(self, env):
         if self.templates is None:
@@ -5758,13 +5754,10 @@ class PyClassDefNode(ClassDefNode):
                              in_pxd=False,
                              doc=self.doc)
 
-    def as_cppclass(self, expose=False):
+    def as_cppclass(self):
         """
         Return this node as if it were declared as a C++ class (no PyObject_HEAD).
         Used for pure C/C++ types that can be used in templates.
-
-        If expose=True, the cppclass name is prefixed with _ and the expose flag
-        is set so that AnalyseDeclarationsTransform can generate a Python wrapper.
         """
         from . import ExprNodes
 
@@ -5807,17 +5800,9 @@ class PyClassDefNode(ClassDefNode):
                 elif isinstance(stat, PassStatNode):
                     pass  # Ignore pass statements
 
-        # When expose=True, prefix the C++ struct name with _ and store the wrapper name
-        if expose:
-            wrapper_name = self.name
-            cpp_name = '_' + self.name
-        else:
-            wrapper_name = None
-            cpp_name = self.name
-
-        cpp_class_node = CppClassNode(
+        return CppClassNode(
             self.pos,
-            name=cpp_name,
+            name=self.name,
             cname=None,
             visibility='private',
             in_pxd=False,
@@ -5826,10 +5811,6 @@ class PyClassDefNode(ClassDefNode):
             templates=None,
             decorators=self.decorators,
         )
-        cpp_class_node.expose = expose
-        cpp_class_node.wrapper_name = wrapper_name
-
-        return cpp_class_node
 
     def create_scope(self, env):
         genv = env

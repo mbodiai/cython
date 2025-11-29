@@ -23,6 +23,7 @@ from .Visitor import VisitorTransform, TreeVisitor
 from .Visitor import CythonTransform, EnvTransform, ScopeTrackingTransform
 from .UtilNodes import LetNode, LetRefNode
 from .TreeFragment import TreeFragment
+from . import StringEncoding
 from .StringEncoding import EncodedString
 from .Errors import error, warning, CompileError, InternalError
 
@@ -3076,6 +3077,7 @@ class AdjustDefByDirectives(CythonTransform, SkipDeclarations):
     def visit_ModuleNode(self, node):
         self.directives = node.directives
         self.in_py_class = False
+        self.in_cppclass = False  # Track if we're inside a cppclass
         self.visitchildren(node)
         return node
 
@@ -3124,6 +3126,13 @@ class AdjustDefByDirectives(CythonTransform, SkipDeclarations):
         if has_cfunc:
             if self.in_py_class:
                 error(node.pos, "cfunc directive is not allowed here")
+            elif getattr(self, 'in_cppclass', False):
+                # Inside a cppclass: use as_cppmethod to skip self argument
+                node = node.as_cppmethod(
+                    modifiers=modifiers, nogil=nogil,
+                    returns=return_type_node, except_val=except_val, has_explicit_exc_clause=has_explicit_exc_clause)
+                node.mb_c_directive = "cfunc"
+                return self.visit(node)
             else:
                 node = node.as_cfunction(
                     overridable=False, modifiers=modifiers, nogil=nogil, with_gil=with_gil,
@@ -3159,6 +3168,12 @@ class AdjustDefByDirectives(CythonTransform, SkipDeclarations):
         return node
 
     def visit_PyClassDefNode(self, node):
+        # Check for cppclass directive first (pure C++ class, no PyObject_HEAD)
+        if (dict.__contains__(self.directives, 'cppclass') and
+                self.directives.get('cppclass') is not False):
+            node = node.as_cppclass()
+            return self.visit(node)
+        # Then check for cclass directives
         if any(dict.__contains__(self.directives, directive) and
                self.directives.get(directive) is not False
                for directive in self.converts_to_cclass):
@@ -3178,12 +3193,37 @@ class AdjustDefByDirectives(CythonTransform, SkipDeclarations):
         self.in_py_class = old_in_pyclass
         return node
 
+    def visit_CppClassNode(self, node):
+        # Visit children to process @cython.cfunc methods
+        # Need to handle directive context for attributes
+        old_in_cppclass = getattr(self, 'in_cppclass', False)
+        self.in_cppclass = True
+        if node.attributes:
+            new_attributes = []
+            for attr in node.attributes:
+                # Process directives on methods
+                if isinstance(attr, Nodes.CompilerDirectivesNode):
+                    old_directives = self.directives
+                    self.directives = attr.directives
+                    result = self.visit(attr.body)
+                    self.directives = old_directives
+                    if hasattr(result, 'stats'):
+                        new_attributes.extend(result.stats)
+                    else:
+                        new_attributes.append(result)
+                else:
+                    result = self.visit(attr)
+                    new_attributes.append(result)
+            node.attributes = new_attributes
+        self.in_cppclass = old_in_cppclass
+        return node
+
 
 class RewritePureCFuncAnnotations(CythonTransform, SkipDeclarations):
     """
     Allow @cython.cfunc/@cython.ccall pure Python declarations to keep using
     idiomatic Python/typing annotations by rewriting them into equivalent
-    Cython-friendly forms (e.g. list[int] -> object, int -> long, None -> void).
+    Cython-friendly forms (e.g. list[int] -> vector[long], dict[str, int] -> map[string, long]).
 
     This runs before AlignFunctionDefinitions so that declaration analysis
     sees the rewritten annotations.
@@ -3219,7 +3259,92 @@ class RewritePureCFuncAnnotations(CythonTransform, SkipDeclarations):
         "builtins.object": "object",
         "None": "void",
         "NoneType": "void",
+        "builtins.str": "string",
+        "str": "string",
     }
+
+    # Map Python generic containers to C++ STL equivalents
+    # Format: python_name -> (cpp_name, num_type_args)
+    generic_container_map = {
+        "list": ("vector", 1),
+        "builtins.list": ("vector", 1),
+        "typing.List": ("vector", 1),
+        "List": ("vector", 1),
+        "dict": ("map", 2),
+        "builtins.dict": ("map", 2),
+        "typing.Dict": ("map", 2),
+        "Dict": ("map", 2),
+        "set": ("set", 1),
+        "builtins.set": ("set", 1),
+        "typing.Set": ("set", 1),
+        "Set": ("set", 1),
+        "frozenset": ("set", 1),
+        "builtins.frozenset": ("set", 1),
+        "typing.FrozenSet": ("set", 1),
+        "FrozenSet": ("set", 1),
+        "typing.Deque": ("deque", 1),
+        "Deque": ("deque", 1),
+        "collections.deque": ("deque", 1),
+        "deque": ("deque", 1),
+    }
+
+    # Types that should unwrap to their inner type (Optional, etc.)
+    unwrap_types = {
+        "typing.Optional",
+        "Optional",
+    }
+
+    def __init__(self, context):
+        super().__init__(context)
+        # Track which C++ containers are needed for cimports
+        self.needed_cimports = set()
+        # Track cppclass names that are valid C++ template arguments
+        self.cppclass_names = set()
+
+    def visit_ModuleNode(self, node):
+        # First pass: collect cppclass names from the tree
+        self._collect_cppclass_names(node)
+
+        # Second pass: rewrite annotations
+        self.visitchildren(node)
+
+        # Inject cimport statements for needed containers
+        if self.needed_cimports:
+            cimport_stats = []
+            for container in sorted(self.needed_cimports):
+                # Create: from libcpp.<container> cimport <container>
+                cimport_node = Nodes.FromCImportStatNode(
+                    node.pos,
+                    module_name=EncodedString(f"libcpp.{container}"),
+                    relative_level=0,
+                    imported_names=[(node.pos, EncodedString(container), None)],
+                )
+                cimport_stats.append(cimport_node)
+
+            # Prepend cimports to the module body
+            if cimport_stats and hasattr(node, 'body') and hasattr(node.body, 'stats'):
+                node.body.stats = cimport_stats + list(node.body.stats)
+
+        return node
+
+    def _collect_cppclass_names(self, node):
+        """Collect names of all CppClassNode types in the tree."""
+        def collect(n):
+            if isinstance(n, Nodes.CppClassNode):
+                if n.name:
+                    self.cppclass_names.add(n.name)
+            # Visit children
+            for attr in getattr(n, 'child_attrs', []):
+                child = getattr(n, attr, None)
+                if child is None:
+                    continue
+                if isinstance(child, list):
+                    for c in child:
+                        if c is not None:
+                            collect(c)
+                else:
+                    collect(child)
+        collect(node)
 
     def _make_name_node(self, name, pos):
         enc = EncodedString(name)
@@ -3250,11 +3375,129 @@ class RewritePureCFuncAnnotations(CythonTransform, SkipDeclarations):
             return None
         if target.endswith("[:]"):
             return self._make_memview_node(target[:-3], pos)
+        # Track string type usage for cimport
+        if target == "string":
+            self.needed_cimports.add("string")
         return self._make_name_node(target, pos)
+
+    def _get_base_name(self, node):
+        """Extract the dotted name from a base node (NameNode or AttributeNode)."""
+        if isinstance(node, ExprNodes.NameNode):
+            return str(node.name)
+        if isinstance(node, ExprNodes.AttributeNode):
+            return self._dotted_name(node)
+        return None
+
+    def _make_cpp_generic_node(self, cpp_name, type_args, pos):
+        """Create a C++ generic type node like vector[long] or map[string, long]."""
+        # Create a simple name node for the container type
+        # The cimport should make 'vector', 'map', etc. available directly
+        cpp_type = ExprNodes.NameNode(pos, name=EncodedString(cpp_name))
+
+        # Create the index with type arguments
+        if len(type_args) == 1:
+            index = type_args[0]
+        else:
+            index = ExprNodes.TupleNode(pos, args=type_args)
+
+        return ExprNodes.IndexNode(pos, base=cpp_type, index=index)
+
+    # Types that are valid as C++ template arguments (primitives that map to C types)
+    cpp_compatible_types = {
+        "int", "long", "float", "double", "bint", "short", "char",
+        "uint", "ulong", "ushort", "uchar", "ulonglong", "longlong",
+        "Py_ssize_t", "size_t", "string",
+        # Also include the Python type names that map to C types
+        "builtins.int", "builtins.float", "builtins.bool", "builtins.str",
+    }
+
+    def _is_cpp_compatible_type(self, annotation):
+        """Check if an annotation represents a C++ compatible type (not a Python object)."""
+        if isinstance(annotation, ExprNodes.NameNode):
+            name = str(annotation.name)
+            # Check if it's a cppclass type
+            if name in self.cppclass_names:
+                return True
+            # Check if it's in our type_map and maps to a C type
+            if name in self.type_map:
+                return self.type_map[name] in self.cpp_compatible_types or name in self.cpp_compatible_types
+            # Direct C type names
+            if name in self.cpp_compatible_types:
+                return True
+            return False
+        if isinstance(annotation, ExprNodes.AttributeNode):
+            dotted = self._dotted_name(annotation)
+            if dotted in self.type_map:
+                return self.type_map[dotted] in self.cpp_compatible_types or dotted in self.cpp_compatible_types
+            return False
+        # For nested generics like list[list[int]], check recursively
+        if isinstance(annotation, ExprNodes.IndexNode):
+            base_name = self._get_base_name(annotation.base)
+            if base_name in self.generic_container_map:
+                # It's a container - check its element types
+                if isinstance(annotation.index, ExprNodes.TupleNode):
+                    return all(self._is_cpp_compatible_type(arg) for arg in annotation.index.args)
+                return self._is_cpp_compatible_type(annotation.index)
+        return False
+
+    def _rewrite_generic(self, annotation):
+        """
+        Rewrite generic type annotations like list[int] -> vector[long].
+        Returns None if not a recognized generic pattern.
+        Only converts to C++ containers if element types are C++ compatible.
+        """
+        if not isinstance(annotation, ExprNodes.IndexNode):
+            return None
+
+        base_name = self._get_base_name(annotation.base)
+        if not base_name:
+            return None
+
+        # Check for unwrap types like Optional[T] -> T
+        if base_name in self.unwrap_types:
+            inner = annotation.index
+            return self._rewrite_annotation(inner)
+
+        # Check for container generics
+        container_info = self.generic_container_map.get(base_name)
+        if not container_info:
+            return None
+
+        cpp_name, expected_args = container_info
+
+        # Extract type arguments
+        if isinstance(annotation.index, ExprNodes.TupleNode):
+            type_args = annotation.index.args
+        else:
+            type_args = [annotation.index]
+
+        # Check if all type arguments are C++ compatible
+        # If any is a Python object type, don't convert to C++ container
+        if not all(self._is_cpp_compatible_type(arg) for arg in type_args):
+            # Keep as Python container - don't rewrite
+            return None
+
+        # Track that we need this container's cimport
+        self.needed_cimports.add(cpp_name)
+
+        # Rewrite each type argument
+        rewritten_args = [self._rewrite_annotation(arg) for arg in type_args]
+
+        return self._make_cpp_generic_node(cpp_name, rewritten_args, annotation.pos)
 
     def _rewrite_annotation(self, annotation):
         if annotation is None:
             return None
+        # Handle AnnotationNode wrapper - rewrite the inner expression
+        if isinstance(annotation, ExprNodes.AnnotationNode):
+            annotation.expr = self._rewrite_annotation(annotation.expr)
+            # Update the string representation too
+            from .AutoDocTransforms import AnnotationWriter
+            annotation.string = ExprNodes.UnicodeNode(
+                annotation.pos,
+                value=StringEncoding.EncodedString(
+                    AnnotationWriter(description="annotation").write(annotation.expr)))
+            return annotation
         if isinstance(annotation, ExprNodes.NameNode):
             mapped = self._map_annotation_name(str(annotation.name), annotation.pos)
             return mapped or annotation
@@ -3264,6 +3507,11 @@ class RewritePureCFuncAnnotations(CythonTransform, SkipDeclarations):
             mapped = self._map_annotation_name(dotted, annotation.pos)
             return mapped or annotation
         if isinstance(annotation, ExprNodes.IndexNode):
+            # First try to rewrite as a generic container
+            generic_rewrite = self._rewrite_generic(annotation)
+            if generic_rewrite:
+                return generic_rewrite
+            # Otherwise, recursively rewrite base and index
             annotation.base = self._rewrite_annotation(annotation.base)
             annotation.index = self._rewrite_annotation(annotation.index)
             return annotation
@@ -3364,6 +3612,17 @@ class RewritePureCFuncAnnotations(CythonTransform, SkipDeclarations):
             for name, typ in range_locals.items():
                 node.directive_locals.setdefault(name, typ)
 
+        self.visitchildren(node)
+        return node
+
+    def visit_CppClassNode(self, node):
+        """Rewrite annotations in CppClassNode attributes (str -> string, list[T] -> vector[T], etc.)"""
+        if node.attributes:
+            for attr in node.attributes:
+                if isinstance(attr, Nodes.CVarDefNode):
+                    # Rewrite the base_type if it's a CAnnotationBaseTypeNode
+                    if isinstance(attr.base_type, Nodes.CAnnotationBaseTypeNode):
+                        attr.base_type.annotation = self._rewrite_annotation(attr.base_type.annotation)
         self.visitchildren(node)
         return node
 
