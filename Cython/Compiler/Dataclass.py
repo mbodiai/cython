@@ -10,27 +10,37 @@ from . import PyrexTypes
 from . import Builtin
 from . import Naming
 from .Errors import error, warning
-from .Code import UtilityCode, TempitaUtilityCode, PyxCodeWriter
+from .Code import UtilityCode, PyxCodeWriter
 from .Visitor import VisitorTransform
 from .StringEncoding import EncodedString
 from .TreeFragment import TreeFragment
 from .ParseTreeTransforms import NormalizeTree, SkipDeclarations
 from .Options import copy_inherited_directives
 
-_dataclass_loader_utilitycode = None
+_NAMEDTUPLE_METHODS = """
+def __iter__(self):
+    return iter({tuple_expr})
+
+def __len__(self):
+    return {tuple_len}
+
+def __getitem__(self, index):
+    return {tuple_expr}[index]
+
+def count(self, value):
+    return {tuple_expr}.count(value)
+
+def index(self, value, start=0, stop=9223372036854775807):
+    return {tuple_expr}.index(value, start, stop)
+"""
 
 def make_dataclasses_module_callnode(pos):
-    global _dataclass_loader_utilitycode
-    if not _dataclass_loader_utilitycode:
-        python_utility_code = UtilityCode.load_cached("Dataclasses_fallback", "Dataclasses.py")
-        python_utility_code = EncodedString(python_utility_code.impl)
-        _dataclass_loader_utilitycode = TempitaUtilityCode.load(
-            "SpecificModuleLoader", "Dataclasses.c",
-            context={'cname': "dataclasses", 'py_code': python_utility_code.as_c_string_literal()})
+    dataclass_loader_utilitycode = UtilityCode.load_cached(
+            "LoadDataclassesModule", "Dataclasses.c")
     return ExprNodes.PythonCapiCallNode(
         pos, "__Pyx_Load_dataclasses_Module",
         PyrexTypes.CFuncType(PyrexTypes.py_object_type, []),
-        utility_code=_dataclass_loader_utilitycode,
+        utility_code=dataclass_loader_utilitycode,
         args=[],
     )
 
@@ -306,13 +316,16 @@ def handle_cclass_dataclass(node, dataclass_args, analyse_decs_transform):
         if dataclass_args[0]:
             error(node.pos, "cython.dataclasses.dataclass takes no positional arguments")
         for k, v in dataclass_args[1].items():
+            if k in kwargs and isinstance(v, ExprNodes.BoolNode):
+                kwargs[k] = v.value
+                continue
+
             if k not in kwargs:
                 error(node.pos,
                       "cython.dataclasses.dataclass() got an unexpected keyword argument '%s'" % k)
             if not isinstance(v, ExprNodes.BoolNode):
                 error(node.pos,
                       "Arguments passed to cython.dataclasses.dataclass must be True or False")
-            kwargs[k] = v.value
 
     kw_only = kwargs['kw_only']
 
@@ -328,10 +341,10 @@ def handle_cclass_dataclass(node, dataclass_args, analyse_decs_transform):
     dataclass_params_keywords = ExprNodes.DictNode.from_pairs(
         node.pos,
         [ (ExprNodes.IdentifierStringNode(node.pos, value=EncodedString(k)),
-           ExprNodes.BoolNode(node.pos, value=v))
+           ExprNodes.BoolNode(node.pos, value=v, type=Builtin.bool_type))
           for k, v in kwargs.items() ] +
         [ (ExprNodes.IdentifierStringNode(node.pos, value=EncodedString(k)),
-           ExprNodes.BoolNode(node.pos, value=v))
+           ExprNodes.BoolNode(node.pos, value=v, type=Builtin.bool_type))
           for k, v in [('kw_only', kw_only),
                        ('slots', False), ('weakref_slot', False)]
         ])
@@ -356,6 +369,11 @@ def handle_cclass_dataclass(node, dataclass_args, analyse_decs_transform):
     generate_hash_code(code, kwargs['unsafe_hash'], kwargs['eq'], kwargs['frozen'], node, fields)
 
     stats.stats += code.generate_tree().stats
+
+    namedtuple_helpers = None
+    if node.scope.directives.get(Nodes.CClassDefNode.DATACLASS_NAMEDTUPLE_DIRECTIVE):
+        namedtuple_helpers = _inject_namedtuple_helpers(node, fields)
+        stats.stats.extend(namedtuple_helpers)
 
     # turn off annotation typing, so all arguments to __init__ are accepted as
     # generic objects and thus can accept _HAS_DEFAULT_FACTORY.
@@ -866,3 +884,22 @@ def _set_up_dataclass_fields(node, fields, dataclass_module):
     return (variables_assignment_stats
             + [dataclass_fields_assignment]
             + dc_fields_namevalue_assignments.stats)
+
+
+def _build_namedtuple_tuple_expr(fields):
+    values = [f"self.{name}" for name, field in fields.items() if not field.private]
+    if not values:
+        return "()"
+    inner = ", ".join(values)
+    if len(values) == 1:
+        inner += ","
+    return f"({inner})"
+
+
+def _inject_namedtuple_helpers(node, fields):
+    tuple_expr = _build_namedtuple_tuple_expr(fields)
+    fragment = TreeFragment(
+        _NAMEDTUPLE_METHODS.format(tuple_expr=tuple_expr, tuple_len=sum(1 for field in fields.values() if not field.private)),
+        pipeline=[NormalizeTree(None)])
+    helpers = fragment.substitute({})
+    return helpers.stats

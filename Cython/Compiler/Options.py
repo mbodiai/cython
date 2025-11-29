@@ -116,7 +116,7 @@ cache_builtins = True
 gcc_branch_hints = True
 
 #: Enable this to allow one to write ``your_module.foo = ...`` to overwrite the
-#: definition if the cpdef function foo, at the cost of an extra dictionary
+#: definition of the cpdef function foo, at the cost of an extra dictionary
 #: lookup on every call.
 #: If this is false it generates only the Python wrapper and no override check.
 lookup_module_cpdef = False
@@ -131,6 +131,10 @@ lookup_module_cpdef = False
 #: this option can also be set to a non-empty string to provide a function name explicitly.
 #: Default is False.
 embed = None
+
+#: When embedding, this allows listing the names of statically linked extension modules
+#: to register with Python's inittab mechanism on startup, so that they can be imported.
+embed_modules = []
 
 # In previous iterations of Cython, globals() gave the first non-Cython module
 # globals in the call stack.  Sage relies on this behavior for variable injection.
@@ -171,7 +175,7 @@ def copy_inherited_directives(outer_directives, **new_directives):
     #  otherwise they can produce very misleading test failures
     new_directives_out = dict(outer_directives)
     for name in ('test_assert_path_exists', 'test_fail_if_path_exists', 'test_assert_c_code_has', 'test_fail_if_c_code_has',
-                 'critical_section'):
+                 'test_body_needs_exception_handling', 'critical_section'):
         new_directives_out.pop(name, None)
     new_directives_out.update(new_directives)
     return new_directives_out
@@ -194,6 +198,7 @@ _directive_defaults = {
     'nonecheck' : False,
     'initializedcheck' : True,
     'freethreading_compatible': False,
+    'subinterpreters_compatible': 'no',
     'embedsignature': False,
     'embedsignature.format': 'c',
     'auto_cpdef': False,
@@ -236,6 +241,7 @@ _directive_defaults = {
     'fast_gil': False,
     'cpp_locals': False,  # uses std::optional for C++ locals, so that they work more like Python locals
     'legacy_implicit_noexcept': False,
+    'c_compile_guard': '',
 
     # set __file__ and/or __path__ to known source/target path at import time (instead of not having them available)
     'set_initial_path' : None,  # SOURCEFILE or "/full/path/to/module"
@@ -268,6 +274,7 @@ _directive_defaults = {
 # test support
     'test_assert_path_exists' : [],
     'test_fail_if_path_exists' : [],
+    'test_body_needs_exception_handling' : None,
     'test_assert_c_code_has' : [],
     'test_fail_if_c_code_has' : [],
 
@@ -365,6 +372,7 @@ directive_types = {
     'inline' : None,
     'staticmethod' : None,
     'cclass' : None,
+    'cppclass' : None,  # decorator to create a C++ class (no PyObject_HEAD, usable in templates)
     'no_gc_clear' : bool,
     'no_gc' : bool,
     'returns' : type,
@@ -378,6 +386,8 @@ directive_types = {
     'dataclasses.dataclass': DEFER_ANALYSIS_OF_ARGUMENTS,
     'dataclasses.field': DEFER_ANALYSIS_OF_ARGUMENTS,
     'embedsignature.format': one_of('c', 'clinic', 'python'),
+    'subinterpreters_compatible': one_of('no', 'shared_gil', 'own_gil'),
+    'test_body_needs_exception_handling': bool,
 }
 
 for key, val in _directive_defaults.items():
@@ -405,6 +415,7 @@ directive_scopes = {  # defaults to available everywhere
     'no_gc' : ('cclass',),
     'internal' : ('cclass',),
     'cclass' : ('class', 'cclass', 'with statement'),
+    'cppclass' : ('class',),
     'autotestdict' : ('module',),
     'autotestdict.all' : ('module',),
     'autotestdict.cdef' : ('module',),
@@ -413,6 +424,7 @@ directive_scopes = {  # defaults to available everywhere
     'test_fail_if_path_exists' : ('function', 'class', 'cclass'),
     'test_assert_c_code_has' : ('module',),
     'test_fail_if_c_code_has' : ('module',),
+    'test_body_needs_exception_handling' : ('with statement',),
     'freelist': ('cclass',),
     'formal_grammar': ('module',),
     'emit_code_comments': ('module',),
@@ -434,9 +446,11 @@ directive_scopes = {  # defaults to available everywhere
     'cpp_locals': ('module', 'function', 'cclass'),  # I don't think they make sense in a with_statement
     'ufunc': ('function',),
     'legacy_implicit_noexcept': ('module', ),
+    'c_compile_guard': ('function',),  # actually C function but this is enforced later
     'control_flow.dot_output': ('module',),
     'control_flow.dot_annotate_defs': ('module',),
-    'freethreading_compatible': ('module',)
+    'freethreading_compatible': ('module',),
+    'subinterpreters_compatible': ('module',),
 }
 
 
@@ -451,6 +465,7 @@ immediate_decorator_directives = {
     'auto_pickle', 'internal', 'collection_type', 'total_ordering',
     # testing directives
     'test_fail_if_path_exists', 'test_assert_path_exists',
+    'test_body_needs_exception_handling',
 }
 
 
@@ -765,13 +780,10 @@ class CompilationOptions:
             elif key in ['cplus', 'language_level', 'compile_time_env', 'np_pythran']:
                 # assorted bits that, e.g., influence the parser
                 data[key] = value
-            elif key == ['capi_reexport_cincludes']:
-                if self.capi_reexport_cincludes:
+            elif key in ['capi_reexport_cincludes', 'common_utility_include_dir']:
+                if value:
                     # our caching implementation does not yet include fingerprints of all the header files
-                    raise NotImplementedError('capi_reexport_cincludes is not compatible with Cython caching')
-            elif key == ['common_utility_include_dir']:
-                if self.common_utility_include_dir:
-                    raise NotImplementedError('common_utility_include_dir is not compatible with Cython caching yet')
+                    raise NotImplementedError(f'{key} is not compatible with Cython caching')
             else:
                 # any unexpected option should go into the fingerprint; it's better
                 # to recompile than to return incorrect results from the cache.
@@ -828,4 +840,9 @@ default_options = dict(
     create_extension=None,
     np_pythran=False,
     legacy_implicit_noexcept=None,
+    shared_c_file_path=None,
+    shared_utility_qualified_name = None,
 )
+
+# Shared default option instance for callers that want a ready-to-use set.
+DEFAULT_COMPILATION_OPTIONS = CompilationOptions()
