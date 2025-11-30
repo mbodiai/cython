@@ -337,28 +337,35 @@ def __invoke({params}):
             pyx_file = Path(lib_dir) / f"{module_name}.pyx"
             with pyx_file.open('w', encoding='utf-8') as f:
                 f.write(module_code)
-            extension = Extension(
-                name=module_name,
-                sources=[str(pyx_file)],
-                include_dirs=c_include_dirs or None,
-                extra_compile_args=cflags or None,
-                define_macros=define_macros or None,
-            )
-            if build_extension is None:
-                build_extension = _get_build_extension()
-            directives_for_cythonize = {
-                key: cython_compiler_directives[key]
-                for key in cython_compiler_directives
-                if key in _ALLOWED_DIRECTIVE_KEYS
-            }
-            build_extension.extensions = cythonize(
-                [extension],
-                include_path=cython_include_dirs or ['.'],
-                compiler_directives=directives_for_cythonize,
-                quiet=quiet)
-            build_extension.build_temp = str(pyx_file.parent)
-            build_extension.build_lib  = str(lib_dir)
-            build_extension.run()
+            # Use relative source path to avoid setuptools _make_relative() creating nested dirs
+            # when it strips the anchor from absolute paths (python/cpython#37775 workaround)
+            orig_cwd = os.getcwd()
+            try:
+                os.chdir(lib_dir)
+                extension = Extension(
+                    name=module_name,
+                    sources=[f"{module_name}.pyx"],  # relative path
+                    include_dirs=c_include_dirs or None,
+                    extra_compile_args=cflags or None,
+                    define_macros=define_macros or None,
+                )
+                if build_extension is None:
+                    build_extension = _get_build_extension()
+                directives_for_cythonize = {
+                    key: cython_compiler_directives[key]
+                    for key in cython_compiler_directives
+                    if key in _ALLOWED_DIRECTIVE_KEYS
+                }
+                build_extension.extensions = cythonize(
+                    [extension],
+                    include_path=cython_include_dirs or ['.'],
+                    compiler_directives=directives_for_cythonize,
+                    quiet=quiet)
+                build_extension.build_temp = "."
+                build_extension.build_lib  = "."
+                build_extension.run()
+            finally:
+                os.chdir(orig_cwd)
 
         if sys.platform == 'win32' and sys.version_info >= (3, 8):
             with os.add_dll_directory(str(Path(lib_dir).resolve())):
@@ -485,31 +492,38 @@ def cython_inline_module(
 
         # Suppress noisy "unused" warnings by default for inline builds (POSIX compilers).
         cflags = ['-Wno-unused-function', '-Wno-unused'] if os.name == 'posix' else None
-        extension = Extension(name=module_name, sources=[str(pyx_file)], extra_compile_args=cflags)
-        build_extension = _get_build_extension()
-        include_path = [*cython_include_dirs, str(artifact_dir)]
-        # Single env var + flag behavior (see cython_inline)
-        if pyx_references is None:
-            v = os.environ.get('CYTHON_INLINE_PYX_REFERENCES')
-            pyx_references = True if v is None else v not in ('0', 'false', 'False')
-        emit_linenums = bool(pyx_references)
-        c_line_in_traceback = not bool(pyx_references)
-        annotate_no_c_link = bool(pyx_references)
+        # Use relative source path to avoid setuptools _make_relative() creating nested dirs
+        # when it strips the anchor from absolute paths (python/cpython#37775 workaround)
+        orig_cwd = os.getcwd()
+        try:
+            os.chdir(artifact_dir)
+            pyx_filename = Path(pyx_file).name
+            extension = Extension(name=module_name, sources=[pyx_filename], extra_compile_args=cflags)
+            build_extension = _get_build_extension()
+            include_path = [*cython_include_dirs, "."]
+            # Single env var + flag behavior (see cython_inline)
+            if pyx_references is None:
+                v = os.environ.get('CYTHON_INLINE_PYX_REFERENCES')
+                pyx_references = True if v is None else v not in ('0', 'false', 'False')
+            emit_linenums = bool(pyx_references)
+            c_line_in_traceback = not bool(pyx_references)
 
-        cythonize_kwargs = {
-            'module_list': [extension],
-            'include_path': include_path,
-            'compiler_directives': directives,
-            'quiet': quiet,
-            'annotate': True,
-            'force': True,
-        }
-        cythonize_kwargs['emit_linenums'] = emit_linenums
-        cythonize_kwargs['c_line_in_traceback'] = c_line_in_traceback
-        build_extension.extensions = cythonize(**cythonize_kwargs)
-        build_extension.build_temp = str(Path(pyx_file).parent)
-        build_extension.build_lib = str(artifact_dir)
-        build_extension.run()
+            cythonize_kwargs = {
+                'module_list': [extension],
+                'include_path': include_path,
+                'compiler_directives': directives,
+                'quiet': quiet,
+                'annotate': True,
+                'force': True,
+            }
+            cythonize_kwargs['emit_linenums'] = emit_linenums
+            cythonize_kwargs['c_line_in_traceback'] = c_line_in_traceback
+            build_extension.extensions = cythonize(**cythonize_kwargs)
+            build_extension.build_temp = "."
+            build_extension.build_lib = "."
+            build_extension.run()
+        finally:
+            os.chdir(orig_cwd)
 
         # Generate .pxd for cimporting extension types
         generate_pxd_file(pyx_file, artifact_dir, module_name)
