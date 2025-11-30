@@ -250,23 +250,30 @@ def __invoke(%(params)s):
                 fh.write(module_code)
             finally:
                 fh.close()
-            extension = Extension(
-                name=module_name,
-                sources=[pyx_file],
-                include_dirs=c_include_dirs or None,
-                extra_compile_args=cflags or None,
-                define_macros=define_macros or None,
-            )
-            if build_extension is None:
-                build_extension = _get_build_extension()
-            build_extension.extensions = cythonize(
-                [extension],
-                include_path=cython_include_dirs or ['.'],
-                compiler_directives=cython_compiler_directives,
-                quiet=quiet)
-            build_extension.build_temp = os.path.dirname(pyx_file)
-            build_extension.build_lib  = lib_dir
-            build_extension.run()
+            # Use relative source path to avoid setuptools _make_relative() creating
+            # nested dirs when it strips the anchor from absolute paths (GH-37775)
+            orig_cwd = os.getcwd()
+            try:
+                os.chdir(lib_dir)
+                extension = Extension(
+                    name=module_name,
+                    sources=[module_name + '.pyx'],  # relative path
+                    include_dirs=c_include_dirs or None,
+                    extra_compile_args=cflags or None,
+                    define_macros=define_macros or None,
+                )
+                if build_extension is None:
+                    build_extension = _get_build_extension()
+                build_extension.extensions = cythonize(
+                    [extension],
+                    include_path=cython_include_dirs or ['.'],
+                    compiler_directives=cython_compiler_directives,
+                    quiet=quiet)
+                build_extension.build_temp = '.'
+                build_extension.build_lib  = '.'
+                build_extension.run()
+            finally:
+                os.chdir(orig_cwd)
 
         if sys.platform == 'win32':
             with os.add_dll_directory(os.path.abspath(lib_dir)):
